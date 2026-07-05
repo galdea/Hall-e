@@ -1,0 +1,7 @@
+.build/
+dist/
+.toolchain-fix/
+.DS_Store
+*.p12
+*.pem
+.swiftpm/
