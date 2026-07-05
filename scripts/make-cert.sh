@@ -41,20 +41,23 @@ openssl pkcs12 -export -legacy -out "$TMP/cert.p12" \
   -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
   -passout pass:halle -name "$CERT_NAME"
 
-security import "$TMP/cert.p12" -k "$KEYCHAIN" -P halle \
+# -A lets any app on THIS machine use the key without a per-build authorization
+# prompt. That's appropriate for a local, self-signed dev cert used only to sign
+# Hall-e (it isn't trusted by anyone else). This is what avoids the endless
+# "codesign wants to access key" dialogs — no login password needed.
+security import "$TMP/cert.p12" -k "$KEYCHAIN" -P halle -A \
   -T /usr/bin/codesign -T /usr/bin/security
 
-# Trust the cert for code signing (may show a GUI authorization prompt).
-if ! security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$TMP/cert.pem" 2>/dev/null; then
-  echo "⚠ Could not set trust automatically."
-  echo "  Open Keychain Access → login → Certificates → '$CERT_NAME' → Get Info →"
-  echo "  Trust → Code Signing: Always Trust."
-fi
+# Trust for code signing is optional: locally built apps carry no quarantine, so
+# Gatekeeper never evaluates them, and TCC keys off the (stable) designated
+# requirement, not trust. Attempt it but don't fail if it needs GUI auth.
+security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$TMP/cert.pem" 2>/dev/null || true
 
-if security find-identity -v -p codesigning | grep -q "$CERT_NAME"; then
-  echo "✓ Created code-signing identity '$CERT_NAME'."
-  echo "  On first build, macOS will ask: codesign wants to use the key → click 'Always Allow'."
+# Signing works even if the cert isn't "valid" (trusted); confirm codesign can
+# find the identity by name.
+if security find-identity -p codesigning | grep -q "$CERT_NAME"; then
+  echo "✓ Code-signing identity '$CERT_NAME' created (allow-all ACL — no build prompts)."
 else
-  echo "✗ Identity not yet valid. See the manual Keychain Access steps in this script's header."
+  echo "✗ Identity not found. See the manual Keychain Access steps in this script's header."
   exit 1
 fi

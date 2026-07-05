@@ -37,18 +37,13 @@ Hall-e signs itself with a stable self-signed certificate so macOS keeps its
 permissions (Notifications, Microphone) and Keychain items valid across rebuilds.
 
 ```sh
-make cert          # creates the "Hall-e Dev" identity (or do it in Keychain Access)
+make cert          # creates the "Hall-e Dev" identity, prompt-free
 ```
 
-Then authorize `codesign` to use the key **once**, so builds don't prompt:
-
-```sh
-security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
-  -k "<your login password>" ~/Library/Keychains/login.keychain-db
-```
-
-(Alternatively, the first build shows a "codesign wants to access key" dialog —
-click **Always Allow**.)
+`make cert` imports the key with an allow-all ACL (`security import -A`), so
+`codesign` never shows a "wants to access key" dialog and no login password is
+needed. The cert is self-signed and used only to sign Hall-e locally; TCC and
+Keychain continuity rely on its stable designated requirement, not on trust.
 
 ### 3. Google Cloud OAuth client
 
