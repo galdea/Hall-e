@@ -42,4 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// Re-opening the app (Finder/Spotlight/`open`) shows the agenda — a reliable
+    /// way in even when the menu-bar icon is hidden behind the notch.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        statusItemController?.showPopover()
+        return true
+    }
 }
