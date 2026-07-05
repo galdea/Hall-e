@@ -20,6 +20,16 @@ struct PopoverRootView: View {
 
     private var cal: Calendar { var c = Calendar.current; c.timeZone = .current; return c }
 
+    /// Week = a rolling 7-day window starting at the anchor's day (default today),
+    /// so it shows the next 7 days rather than the calendar week's past days.
+    private var weekInterval: DateInterval {
+        let start = cal.startOfDay(for: anchor)
+        return DateInterval(start: start, end: cal.date(byAdding: .day, value: 7, to: start)!)
+    }
+    private var visibleInterval: DateInterval {
+        mode == .month ? TimelineBuilder.periodInterval(scope: .month, anchor: anchor) : weekInterval
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -109,8 +119,7 @@ struct PopoverRootView: View {
     }
 
     private var weekView: some View {
-        let interval = TimelineBuilder.periodInterval(scope: .week, anchor: anchor)
-        let days = TimelineBuilder.daySummaries(in: interval, events: appState.agenda).map(\.day)
+        let days = TimelineBuilder.daySummaries(in: weekInterval, events: appState.agenda).map(\.day)
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(days, id: \.timeIntervalSince1970) { day in
@@ -184,14 +193,17 @@ struct PopoverRootView: View {
 
     private var periodLabel: String {
         if mode == .month { return anchor.formatted(.dateTime.month(.wide).year()) }
-        let interval = TimelineBuilder.periodInterval(scope: .week, anchor: anchor)
-        let end = cal.date(byAdding: .day, value: -1, to: interval.end) ?? interval.end
-        return "\(interval.start.formatted(.dateTime.day().month(.abbreviated))) – \(end.formatted(.dateTime.day().month(.abbreviated)))"
+        let start = weekInterval.start
+        let end = cal.date(byAdding: .day, value: 6, to: start)!
+        return "\(start.formatted(.dateTime.day().month(.abbreviated))) – \(end.formatted(.dateTime.day().month(.abbreviated)))"
     }
 
     private func shift(_ direction: Int) {
-        let comp: Calendar.Component = mode == .week ? .weekOfYear : .month
-        if let d = cal.date(byAdding: comp, value: direction, to: anchor) { anchor = d }
+        if mode == .week {
+            if let d = cal.date(byAdding: .day, value: 7 * direction, to: anchor) { anchor = d }
+        } else {
+            if let d = cal.date(byAdding: .month, value: direction, to: anchor) { anchor = d }
+        }
     }
 
     private func goToToday() {
@@ -201,9 +213,8 @@ struct PopoverRootView: View {
 
     private func syncVisiblePeriod() {
         guard mode != .day, !DebugFixtures.isActive else { return }
-        let scope: AgendaScope = mode == .week ? .week : .month
-        let interval = TimelineBuilder.periodInterval(scope: scope, anchor: anchor)
-        let key = "\(scope.rawValue)|\(Int(interval.start.timeIntervalSince1970))"
+        let interval = visibleInterval
+        let key = "\(mode.rawValue)|\(Int(interval.start.timeIntervalSince1970))"
         guard !syncedPeriods.contains(key) else { return }
         syncedPeriods.insert(key)
         Task { await SyncCoordinator.shared.syncRange(interval.start, interval.end) }

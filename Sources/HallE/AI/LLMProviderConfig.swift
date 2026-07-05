@@ -37,7 +37,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable {
         case .ollama: "llama3.1"
         case .lmStudio: "local-model"
         case .anthropic: "claude-3-5-haiku-latest"
-        case .gemini: "gemini-1.5-flash"
+        case .gemini: "gemini-2.5-flash"
         case .custom, .disabled: ""
         }
     }

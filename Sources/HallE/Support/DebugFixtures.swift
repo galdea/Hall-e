@@ -68,5 +68,25 @@ enum DebugFixtures {
             for var a in accounts { try a.save(db) }
             for var e in events { try e.save(db) }
         }
+
+        // Debug recordings so the per-meeting transcript button (+ its colors) show.
+        writeRecording(for: events[1], status: .completed,
+                       text: "Reviewed the director dashboard. Decision: ship the funcionarios panel next sprint. Action item: Gabriel to send the revised prompt to Codex.")
+        writeRecording(for: events[2], status: .inProgress, text: nil)
+        writeRecording(for: events[3], status: .failed, text: nil)
+    }
+
+    private static func writeRecording(for event: UnifiedEvent, status: TranscriptStatus, text: String?) {
+        var s = RecordingSession(event: event, notePath: nil)
+        s.state = .completed
+        s.endedAt = Date()
+        s.transcriptStatus = status
+        s.save()
+        if let text, status == .completed {
+            let t = Transcript(sessionID: s.id, localeUsed: "es-CL",
+                               segments: [TranscriptSegment(start: 0, duration: 5, text: text, track: "mic")],
+                               status: .completed, source: "sfspeech-on-device")
+            TranscriptStore.save(t, to: s)
+        }
     }
 }

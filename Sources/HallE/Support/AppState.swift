@@ -18,6 +18,9 @@ final class AppState {
     var lastSyncError: String?
     var googleClientConfigured = GoogleClientConfig.load() != nil
 
+    /// Latest recording session per event dedupKey (for the transcript button).
+    var recordingsByEvent: [String: RecordingSession] = [:]
+
     private var observers: [AnyDatabaseCancellable] = []
 
     private init() {}
@@ -46,6 +49,20 @@ final class AppState {
         observers.append(agendaObs.start(in: db, scheduling: .async(onQueue: .main),
                                          onError: { Log.db.error("agenda obs: \($0, privacy: .public)") },
                                          onChange: { [weak self] in self?.agenda = $0 }))
+
+        // Recordings live as files on disk; refresh the index at launch and
+        // whenever a recording/transcription changes state.
+        NotificationCenter.default.addObserver(forName: .halleRecordingChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshRecordings()
+        }
+        refreshRecordings()
+    }
+
+    func refreshRecordings() {
+        Task.detached {
+            let map = RecordingStore.latestByEvent()
+            await MainActor.run { AppState.shared.recordingsByEvent = map }
+        }
     }
 
     func refreshClientConfigured() {

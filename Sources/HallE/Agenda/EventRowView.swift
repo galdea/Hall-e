@@ -4,6 +4,7 @@ import AppKit
 struct EventRowView: View {
     let event: UnifiedEvent
     @State private var hovering = false
+    @State private var appState = AppState.shared
 
     private var isCancelled: Bool { event.status == "cancelled" }
     private var isDeclined: Bool { event.effectiveResponse == "declined" }
@@ -84,8 +85,46 @@ struct EventRowView: View {
         Text(text).font(.caption2).foregroundStyle(color)
     }
 
+    // MARK: - Transcript button (colored by status; click copies when done)
+
+    private func transcriptButton(_ session: RecordingSession) -> some View {
+        Button { copyTranscript(session) } label: {
+            Image(systemName: "text.quote")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(transcriptColor(session.transcriptStatus))
+        .help(transcriptHelp(session.transcriptStatus))
+    }
+
+    private func transcriptColor(_ status: TranscriptStatus) -> Color {
+        switch status {
+        case .completed: .green
+        case .failed: .red
+        case .inProgress, .pending: .orange
+        }
+    }
+
+    private func transcriptHelp(_ status: TranscriptStatus) -> String {
+        switch status {
+        case .completed: "Copy transcript"
+        case .failed: "Transcription failed"
+        case .inProgress: "Transcribing…"
+        case .pending: "Transcript pending"
+        }
+    }
+
+    private func copyTranscript(_ session: RecordingSession) {
+        guard session.transcriptStatus == .completed,
+              let text = RecordingStore.transcriptText(for: session), !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     private var actions: some View {
         HStack(spacing: 4) {
+            if let session = appState.recordingsByEvent[event.dedupKey] {
+                transcriptButton(session)
+            }
             if let urlString = event.meetingURL, let url = URL(string: urlString) {
                 Button { NSWorkspace.shared.open(url) } label: {
                     Image(systemName: "video.fill")

@@ -93,11 +93,23 @@ struct AISettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("AI Orchestrator")
         .onChange(of: config) { _, c in c.save() }
-        .onAppear { refreshKeyStatus() }
+        .onAppear {
+            migrateStaleModel()
+            refreshKeyStatus()
+        }
     }
 
     private func refreshKeyStatus() {
         keyIsSet = KeychainStore.exists(account: config.keychainAccount)
+    }
+
+    /// Heal configs pointing at models Google has since retired.
+    private func migrateStaleModel() {
+        let retired = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+        if config.kind == .gemini, retired.contains(config.model) {
+            config.model = config.kind.defaultModel
+            config.save()
+        }
     }
     private func saveKey() {
         let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)

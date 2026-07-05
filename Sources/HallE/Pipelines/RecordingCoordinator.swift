@@ -40,13 +40,15 @@ enum RecordingCoordinator {
     }
 
     /// Runs after recording stops.
-    static func transcribeAndMerge(session: RecordingSession, event: UnifiedEvent) async {
+    static func transcribeAndMerge(session incoming: RecordingSession, event: UnifiedEvent) async {
+        var session = incoming
         guard let service = MeetingNoteService.make(), let notePath = session.notePath else { return }
         let pb = VaultPathBuilder(config: service.config)
         let writer = VaultWriter(vaultURL: service.vaultURL)
 
         try? writer.updateFrontmatter(relativePath: notePath, key: "recording_path",
                                       value: session.folderURL.path, pathBuilder: pb)
+        session.transcriptStatus = .inProgress; session.save(); notifyRecordingChanged()
         try? writer.updateFrontmatter(relativePath: notePath, key: "transcript_status",
                                       value: "inProgress", pathBuilder: pb)
 
@@ -57,12 +59,19 @@ enum RecordingCoordinator {
                 .transcribe(fileURL: session.micURL, sessionID: session.id, track: "mic")
         } catch {
             Log.rec.error("transcription failed: \(error, privacy: .public)")
+            session.transcriptStatus = .failed; session.save(); notifyRecordingChanged()
             try? writer.updateFrontmatter(relativePath: notePath, key: "transcript_status",
                                           value: "failed", pathBuilder: pb)
             return
         }
-        guard let transcript else { return }
+        guard let transcript else {
+            session.transcriptStatus = .failed; session.save(); notifyRecordingChanged()
+            return
+        }
         TranscriptStore.save(transcript, to: session)
+        session.transcriptStatus = .completed
+        session.localeUsed = transcript.localeUsed
+        session.save(); notifyRecordingChanged()
 
         // Merge transcript text into the note (replaces the placeholder).
         try? writer.mergeSection(relativePath: notePath, section: "transcript",
@@ -79,6 +88,10 @@ enum RecordingCoordinator {
             .enrich(transcript: transcript.plainText)
 
         Log.rec.info("recording pipeline complete for \(event.title, privacy: .public)")
+    }
+
+    private static func notifyRecordingChanged() {
+        NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
     }
 
     private static func presentAlert(_ title: String, _ info: String) {
