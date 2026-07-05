@@ -3,9 +3,14 @@ import SwiftUI
 struct AgendaView: View {
     let events: [UnifiedEvent]
     let hasAccounts: Bool
+    var day: Date? = nil
 
+    private var isToday: Bool {
+        guard let day else { return true }
+        return Calendar.current.isDateInToday(day)
+    }
     private var timeline: AgendaTimeline {
-        TimelineBuilder.build(events: events)
+        TimelineBuilder.build(events: events, day: day)
     }
 
     var body: some View {
@@ -18,14 +23,14 @@ struct AgendaView: View {
         } else if timeline.isEmpty {
             emptyState(
                 icon: "sparkles",
-                title: "Nothing scheduled today",
-                message: "Enjoy the open time."
+                title: "Nothing scheduled",
+                message: isToday ? "Enjoy the open time." : "No meetings on this day."
             )
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if !timeline.allDay.isEmpty { allDaySection }
-                    if let next = timeline.next, timeline.inProgress.isEmpty {
+                    if isToday, let next = timeline.next, timeline.inProgress.isEmpty {
                         nextSection(next)
                     }
                     timelineSection
@@ -51,7 +56,7 @@ struct AgendaView: View {
 
     private var timelineSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            sectionHeader("Today")
+            sectionHeader(isToday ? "Today" : "Schedule")
             ForEach(timeline.hourGroups) { group in
                 HStack(alignment: .top, spacing: 8) {
                     Text(group.hour, format: .dateTime.hour())

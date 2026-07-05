@@ -22,8 +22,11 @@ final class StatusItemController: NSObject {
         }
         statusItem.isVisible = true
 
-        popover.contentSize = NSSize(width: 380, height: 540)
-        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 440, height: 600)
+        // Debug runs keep the popover pinned (and floated, below) so it can be
+        // screenshotted without fighting other apps for focus.
+        popover.behavior = ProcessInfo.processInfo.environment["HALLE_DEBUG_SHOW_POPOVER"] == "1"
+            ? .applicationDefined : .transient
         popover.animates = false
         popover.contentViewController = NSHostingController(rootView: PopoverRootView())
 
@@ -70,6 +73,9 @@ final class StatusItemController: NSObject {
         // Agent apps are never frontmost by default; activate so the popover gets key events.
         NSApp.activate(ignoringOtherApps: true)
         popover.contentViewController?.view.window?.makeKey()
+        if ProcessInfo.processInfo.environment["HALLE_DEBUG_SHOW_POPOVER"] == "1" {
+            popover.contentViewController?.view.window?.level = .floating
+        }
     }
 
     private func showMenu() {
@@ -79,7 +85,6 @@ final class StatusItemController: NSObject {
             stop.target = self
             menu.addItem(.separator())
         }
-        menu.addItem(withTitle: "Open Agenda…", action: #selector(openAgenda), keyEquivalent: "a").target = self
         menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
@@ -99,10 +104,6 @@ final class StatusItemController: NSObject {
 
     @objc private func stopRecording() {
         RecordingService.shared.stop()
-    }
-
-    @objc private func openAgenda() {
-        AgendaWindowController.shared.show()
     }
 
     @objc private func openSettings() {

@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.app.info("Hall-e launching, bundle \(Bundle.main.bundleIdentifier ?? "nil", privacy: .public)")
+        installMainMenu()
         DebugFixtures.loadIfRequested()
         AppState.shared.startObserving()
         NotificationScheduler.shared.configure()
@@ -39,12 +40,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if env["HALLE_DEBUG_SHOW_POPOVER"] == "1" {
             statusItemController?.showPopover()
         }
-        if env["HALLE_DEBUG_SHOW_AGENDA"] == "1" {
-            AgendaWindowController.shared.show()
-        }
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// Install a minimal main menu. An LSUIElement app has none by default, so the
+    /// standard text-editing key equivalents (⌘X/⌘C/⌘V/⌘A, undo/redo) never reach
+    /// text fields. The menu isn't shown for an accessory app, but NSApplication
+    /// still uses it to route key equivalents to the focused field.
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Hall-e", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+
+        NSApp.mainMenu = mainMenu
+    }
 
     /// Re-opening the app (Finder/Spotlight/`open`) shows the agenda — a reliable
     /// way in even when the menu-bar icon is hidden behind the notch.

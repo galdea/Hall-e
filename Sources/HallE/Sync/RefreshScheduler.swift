@@ -58,6 +58,7 @@ final class RefreshScheduler {
 
     /// Refresh when the popover opens if the cache is stale (> 60s).
     func refreshIfStale() {
+        guard !DebugFixtures.isActive else { return }
         if let last = AppState.shared.lastSyncAt, Date().timeIntervalSince(last) < 60 { return }
         kick(reason: "popover-open")
     }
