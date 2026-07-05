@@ -34,6 +34,7 @@ enum RulesEngine {
     // Base weights per signal (before alias-strength multiplier).
     private enum W {
         static let projectNameInTitle = 0.80
+        static let attendeeEmailExact = 0.70   // a specific address is strong, precise evidence
         static let aliasInTitle = 0.55
         static let attendeeDomain = 0.50
         static let attendeeNameOrLocal = 0.35
@@ -54,7 +55,22 @@ enum RulesEngine {
 
     /// Score every project against the input.
     static func score(_ input: ClassificationInput, projects: [Project]) -> [Score] {
-        projects.map { project in
+        // Inverse-project-frequency: how many projects use each text keyword.
+        // A keyword shared by K projects is K× less discriminative, so its
+        // contribution is scaled by 1/K. email/domain/person aliases are exempt.
+        var sharedCount: [String: Int] = [:]
+        for project in projects {
+            var seen = Set<String>()
+            for alias in project.aliases where alias.kind.isTextSignal {
+                let key = TextNormalizer.fold(alias.text)
+                if seen.insert(key).inserted { sharedCount[key, default: 0] += 1 }
+            }
+        }
+
+        let emails = input.attendeeEmails.map { TextNormalizer.fold($0) }
+            + (input.organizerEmail.map { [TextNormalizer.fold($0)] } ?? [])
+
+        return projects.map { project in
             var contributions: [Double] = []
             var reasons: [String] = []
             let domains = input.attendeeEmails.compactMap { TextNormalizer.domain(ofEmail: $0) }
@@ -64,11 +80,16 @@ enum RulesEngine {
                 var best = 0.0
                 var why = ""
 
-                if alias.kind == .domain {
+                switch alias.kind {
+                case .email:
+                    if emails.contains(TextNormalizer.fold(alias.text)) {
+                        best = W.attendeeEmailExact; why = "attendee email \(alias.text)"
+                    }
+                case .domain:
                     if domains.contains(where: { $0 == TextNormalizer.fold(alias.text) || $0.hasSuffix(TextNormalizer.fold(alias.text)) }) {
                         best = W.attendeeDomain; why = "attendee domain \(alias.text)"
                     }
-                } else {
+                default:
                     if TextNormalizer.containsPhrase(input.title, alias.text) {
                         let w = alias.kind == .projectName ? W.projectNameInTitle : W.aliasInTitle
                         if w > best { best = w; why = "title: \(alias.text)" }
@@ -88,10 +109,20 @@ enum RulesEngine {
                     }
                 }
 
-                if best > 0 {
-                    contributions.append(best * alias.strength.multiplier)
-                    reasons.append(why + (alias.strength == .weak ? " (weak)" : ""))
+                guard best > 0 else { continue }
+                var weight = best * alias.strength.multiplier
+                var note = why + (alias.strength == .weak ? " (weak)" : "")
+
+                // Downweight keywords shared across multiple projects.
+                if alias.kind.isTextSignal {
+                    let shared = sharedCount[TextNormalizer.fold(alias.text)] ?? 1
+                    if shared > 1 {
+                        weight /= Double(shared)
+                        note += " (shared×\(shared))"
+                    }
                 }
+                contributions.append(weight)
+                reasons.append(note)
             }
 
             let combined = 1.0 - contributions.reduce(1.0) { $0 * (1.0 - $1) }

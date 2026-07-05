@@ -4,8 +4,12 @@ import GRDB
 /// Inserts sample data for headless UI verification. Only runs when
 /// HALLE_DEBUG_FIXTURES=1. Never used in normal operation.
 enum DebugFixtures {
+    /// True when running with directly-inserted sample data; sync is suppressed so
+    /// the fixtures aren't rebuilt away.
+    static var isActive: Bool { ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1" }
+
     static func loadIfRequested() {
-        guard ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1" else { return }
+        guard isActive else { return }
         do { try load() } catch { Log.app.error("fixtures failed: \(error, privacy: .public)") }
     }
 

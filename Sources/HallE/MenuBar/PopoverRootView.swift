@@ -33,6 +33,12 @@ struct PopoverRootView: View {
             }
             Spacer()
             Button {
+                AgendaWindowController.shared.show()
+            } label: {
+                Image(systemName: "calendar")
+            }
+            .buttonStyle(.borderless).help("Browse week / month")
+            Button {
                 Task { await SyncCoordinator.shared.syncAll() }
             } label: {
                 Image(systemName: "arrow.clockwise")

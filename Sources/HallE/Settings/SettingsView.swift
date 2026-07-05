@@ -31,7 +31,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
-    @State private var selection: SettingsSection = .accounts
+    @State private var selection: SettingsSection =
+        ProcessInfo.processInfo.environment["HALLE_DEBUG_SETTINGS_TAB"]
+            .flatMap(SettingsSection.init(rawValue:)) ?? .accounts
 
     var body: some View {
         NavigationSplitView {

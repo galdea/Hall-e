@@ -75,4 +75,30 @@ struct TimelineBuilderTests {
         let t = TimelineBuilder.build(events: [], now: now)
         #expect(t.isEmpty)
     }
+
+    @Test func buildForArbitraryDayFiltersToThatDay() {
+        let today = makeUnified(title: "Today", start: at(9, 0), end: at(9, 30))
+        let tomorrowStart = Calendar.current.date(byAdding: .day, value: 1, to: at(9, 0))!
+        let tomorrow = makeUnified(title: "Tomorrow", start: tomorrowStart,
+                                   end: tomorrowStart.addingTimeInterval(1800))
+        let t = TimelineBuilder.build(events: [today, tomorrow], day: tomorrowStart, now: now)
+        #expect(t.hourGroups.flatMap(\.events).map(\.title) == ["Tomorrow"])
+    }
+
+    @Test func daySummariesCountPerDay() {
+        let interval = TimelineBuilder.periodInterval(scope: .week, anchor: now)
+        let events = [makeUnified(title: "A", start: at(9, 0), end: at(9, 30)),
+                      makeUnified(title: "B", start: at(11, 0), end: at(11, 30))]
+        let sums = TimelineBuilder.daySummaries(in: interval, events: events)
+        #expect(sums.count == 7)
+        let todaySummary = sums.first { Calendar.current.isDate($0.day, inSameDayAs: now) }
+        #expect(todaySummary?.count == 2)
+    }
+
+    @Test func periodIntervalSpansWeekAndMonth() {
+        let week = TimelineBuilder.periodInterval(scope: .week, anchor: now)
+        #expect(Calendar.current.dateComponents([.day], from: week.start, to: week.end).day == 7)
+        let month = TimelineBuilder.periodInterval(scope: .month, anchor: now)  // July → 31 days
+        #expect(Calendar.current.dateComponents([.day], from: month.start, to: month.end).day == 31)
+    }
 }

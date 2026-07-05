@@ -4,16 +4,27 @@ struct ProjectRulesSettingsView: View {
     @State private var projects = AliasStore.shared.projects
     @State private var selection: String?
     @State private var newAlias = ""
+    @State private var newKind: AliasKind = .keyword
+    @State private var newStrength: AliasStrength = .normal
+    @State private var reclassifying = false
 
     private var selected: Project? { projects.first { $0.id == selection } }
 
+    /// folded keyword text → project names that use it (text signals only).
+    private var keywordOwners: [String: [String]] {
+        var map: [String: Set<String>] = [:]
+        for p in projects {
+            for a in p.aliases where a.kind.isTextSignal {
+                map[TextNormalizer.fold(a.text), default: []].insert(p.name)
+            }
+        }
+        return map.mapValues { $0.sorted() }
+    }
+
     var body: some View {
         HSplitView {
-            List(projects, selection: $selection) { project in
-                Text(project.name).tag(project.id)
-            }
-            .frame(minWidth: 160)
-
+            List(projects, selection: $selection) { Text($0.name).tag($0.id) }
+                .frame(minWidth: 150)
             if let project = selected {
                 detail(project)
             } else {
@@ -26,47 +37,100 @@ struct ProjectRulesSettingsView: View {
     }
 
     private func detail(_ project: Project) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(project.name).font(.title3).bold()
-            Text("Keywords and aliases used to classify meetings into this project.")
-                .font(.caption).foregroundStyle(.secondary)
-
-            List {
-                ForEach(project.aliases, id: \.self) { alias in
-                    HStack {
-                        Text(alias.text)
-                        Spacer()
-                        Text(alias.kind.rawValue).font(.caption2).foregroundStyle(.secondary)
-                        Text(alias.strength.rawValue)
-                            .font(.caption2)
-                            .foregroundStyle(alias.strength == .weak ? .orange : .green)
-                    }
-                }
-                .onDelete { idx in removeAlias(project, at: idx) }
+        let keywords = project.aliases.filter { $0.kind.isTextSignal || $0.kind == .personName }
+        let contacts = project.aliases.filter { $0.kind == .email || $0.kind == .domain }
+        return Form {
+            Section {
+                Text("Signals used to classify meetings into \(project.name). Keywords shared with other projects are automatically down-weighted.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
-            HStack {
-                TextField("Add keyword…", text: $newAlias)
+            Section("Keywords") {
+                if keywords.isEmpty { Text("None").foregroundStyle(.secondary).font(.caption) }
+                ForEach(keywords, id: \.self) { aliasRow(project, $0) }
+            }
+
+            Section("Emails & domains") {
+                if contacts.isEmpty {
+                    Text("None — add an attendee email (e.g. ana@getaccurate.cl) or a domain (getaccurate.cl) to pin those meetings here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(contacts, id: \.self) { aliasRow(project, $0) }
+            }
+
+            Section("Add rule") {
+                TextField("keyword, email, or domain…", text: $newAlias)
+                    .onChange(of: newAlias) { _, t in newKind = Self.detectKind(t) }
                     .onSubmit { addAlias(project) }
+                Picker("Type", selection: $newKind) {
+                    ForEach([AliasKind.keyword, .email, .domain, .personName], id: \.self) {
+                        Text($0.displayLabel).tag($0)
+                    }
+                }
+                Picker("Strength", selection: $newStrength) {
+                    Text("Normal").tag(AliasStrength.normal)
+                    Text("Strong").tag(AliasStrength.strong)
+                    Text("Weak").tag(AliasStrength.weak)
+                }
                 Button("Add") { addAlias(project) }
                     .disabled(newAlias.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+
+            Section {
+                Button {
+                    Task { reclassifying = true; await SyncCoordinator.shared.syncAll(); reclassifying = false }
+                } label: {
+                    if reclassifying { HStack { ProgressView().controlSize(.small); Text("Re-classifying…") } }
+                    else { Label("Re-run classification now", systemImage: "arrow.triangle.2.circlepath") }
+                }
+                .disabled(reclassifying)
+                Text("Changes apply on the next sync; use this to reclassify your agenda immediately.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func aliasRow(_ project: Project, _ alias: ProjectAlias) -> some View {
+        let others = alias.kind.isTextSignal
+            ? (keywordOwners[TextNormalizer.fold(alias.text)] ?? []).filter { $0 != project.name }
+            : []
+        return HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(alias.text)
+                if !others.isEmpty {
+                    Label("also in: \(others.joined(separator: ", "))", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            Text(alias.strength.rawValue)
+                .font(.caption2)
+                .foregroundStyle(alias.strength == .weak ? .orange : .secondary)
+            Button { remove(project, alias) } label: { Image(systemName: "minus.circle") }
+                .buttonStyle(.borderless).foregroundStyle(.secondary)
+        }
+    }
+
+    static func detectKind(_ text: String) -> AliasKind {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        if t.contains("@") { return .email }
+        if t.contains("."), !t.contains(" ") { return .domain }
+        return .keyword
     }
 
     private func addAlias(_ project: Project) {
         let text = newAlias.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, var p = projects.first(where: { $0.id == project.id }) else { return }
-        p.aliases.append(ProjectAlias(text, .keyword, .normal))
+        p.aliases.append(ProjectAlias(text, newKind, newStrength))
         persist(p)
-        newAlias = ""
+        newAlias = ""; newKind = .keyword; newStrength = .normal
     }
 
-    private func removeAlias(_ project: Project, at offsets: IndexSet) {
+    private func remove(_ project: Project, _ alias: ProjectAlias) {
         guard var p = projects.first(where: { $0.id == project.id }) else { return }
-        p.aliases.remove(atOffsets: offsets)
+        p.aliases.removeAll { $0 == alias }
         persist(p)
     }
 

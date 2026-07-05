@@ -1,6 +1,22 @@
 import Foundation
 
-enum AliasKind: String, Codable { case keyword, domain, personName, projectName }
+enum AliasKind: String, Codable {
+    case keyword, domain, email, personName, projectName
+
+    var displayLabel: String {
+        switch self {
+        case .keyword: "Keyword"
+        case .domain: "Domain"
+        case .email: "Email"
+        case .personName: "Person"
+        case .projectName: "Project name"
+        }
+    }
+
+    /// keyword/projectName are text signals subject to shared-keyword downweighting;
+    /// email/domain/personName are inherently specific and exempt.
+    var isTextSignal: Bool { self == .keyword || self == .projectName }
+}
 enum AliasStrength: String, Codable {
     case strong, normal, weak
     var multiplier: Double {

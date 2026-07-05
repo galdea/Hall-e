@@ -32,7 +32,7 @@ struct AppPreferences {
     }
 
     static var windowFutureDays: Int {
-        get { d.object(forKey: Key.windowFutureDays) as? Int ?? 7 }
+        get { d.object(forKey: Key.windowFutureDays) as? Int ?? 21 }
         set { d.set(newValue, forKey: Key.windowFutureDays) }
     }
 

@@ -10,18 +10,25 @@ actor SyncCoordinator {
     private var running = false
     private var rerunRequested = false
 
-    /// Sync all accounts. Safe to call concurrently — coalesces.
+    /// Sync all accounts over the default near-term window. Coalesces.
     func syncAll() async {
         if running { rerunRequested = true; return }
         running = true
         defer { running = false }
         repeat {
             rerunRequested = false
-            await performSync()
+            let (min, max) = Self.window()
+            await performSync(timeMin: min, timeMax: max, isPrimaryWindow: true)
         } while rerunRequested
     }
 
-    private func performSync() async {
+    /// Fetch + rebuild an arbitrary range for the week/month browser. Does not run
+    /// AI classification or notification reconciliation (near-term concerns only).
+    func syncRange(_ min: Date, _ max: Date) async {
+        await performSync(timeMin: min, timeMax: max, isPrimaryWindow: false)
+    }
+
+    private func performSync(timeMin: Date, timeMax: Date, isPrimaryWindow: Bool) async {
         let db = AppDatabase.shared.dbQueue
         let accounts: [ConnectedAccount]
         let sources: [CalendarSource]
@@ -39,7 +46,6 @@ actor SyncCoordinator {
         await MainActor.run { AppState.shared.isSyncing = true }
         defer { Task { @MainActor in AppState.shared.isSyncing = false } }
 
-        let (timeMin, timeMax) = Self.window()
         let fetchedAt = Date()
 
         // Per-account isolation via a task group; one failure never blocks others.
@@ -64,6 +70,10 @@ actor SyncCoordinator {
         }
 
         await rebuildUnifiedEvents(timeMin: timeMin, timeMax: timeMax)
+
+        // AI classification + notifications are near-term concerns — only the
+        // primary window triggers them; browsing far weeks/months does not.
+        guard isPrimaryWindow else { return }
 
         await MainActor.run {
             AppState.shared.lastSyncAt = fetchedAt
@@ -166,7 +176,11 @@ actor SyncCoordinator {
                 }
                 // Classify each event (user pins → deterministic rules).
                 let classifier = MeetingClassifier()
-                try UnifiedEvent.deleteAll(db)
+                // Range-additive: only replace unified events in this window, so
+                // other browsed periods (week/month navigation) stay cached.
+                try UnifiedEvent
+                    .filter(UnifiedEvent.Columns.startTs >= timeMin && UnifiedEvent.Columns.startTs < timeMax)
+                    .deleteAll(db)
                 for var u in unified {
                     let result = classifier.classify(u)
                     // Only confidently-classified events get a project (chip + filed

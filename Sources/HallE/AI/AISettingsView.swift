@@ -1,9 +1,11 @@
 import SwiftUI
+import AppKit
 
 struct AISettingsView: View {
     @State private var config = LLMProviderConfig.load()
     @State private var apiKeyInput = ""
     @State private var keyIsSet = false
+    @State private var revealKey = false
     @State private var testResult: String?
     @State private var testing = false
 
@@ -29,9 +31,27 @@ struct AISettingsView: View {
 
             if config.kind != .disabled && config.kind.needsAPIKey {
                 Section("API Key") {
-                    HStack {
-                        SecureField("Paste API key…", text: $apiKeyInput)
-                        Button("Save") { saveKey() }.disabled(apiKeyInput.isEmpty)
+                    HStack(spacing: 6) {
+                        // Reveal toggle: paste works reliably in a plain TextField,
+                        // and the explicit Paste button is a guaranteed path
+                        // regardless of the macOS SecureField paste quirk.
+                        if revealKey {
+                            TextField("API key…", text: $apiKeyInput)
+                        } else {
+                            SecureField("API key…", text: $apiKeyInput)
+                        }
+                        Button {
+                            revealKey.toggle()
+                        } label: {
+                            Image(systemName: revealKey ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless).help(revealKey ? "Hide" : "Show")
+                        Button("Paste") {
+                            if let s = NSPasteboard.general.string(forType: .string) { apiKeyInput = s }
+                        }
+                        .help("Paste from clipboard")
+                        Button("Save") { saveKey() }
+                            .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     HStack {
                         Image(systemName: keyIsSet ? "checkmark.circle.fill" : "circle")
@@ -80,8 +100,11 @@ struct AISettingsView: View {
         keyIsSet = KeychainStore.exists(account: config.keychainAccount)
     }
     private func saveKey() {
-        try? KeychainStore.set(apiKeyInput, account: config.keychainAccount)
+        let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? KeychainStore.set(trimmed, account: config.keychainAccount)
         apiKeyInput = ""
+        revealKey = false
         refreshKeyStatus()
     }
     private func clearKey() {

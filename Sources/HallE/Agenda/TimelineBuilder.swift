@@ -17,25 +17,33 @@ struct AgendaTimeline {
     }
 }
 
+enum AgendaScope: String, CaseIterable, Identifiable {
+    case week, month
+    var id: String { rawValue }
+    var label: String { self == .week ? "Week" : "Month" }
+}
+
 enum TimelineBuilder {
-    static func build(events: [UnifiedEvent], now: Date = Date(),
+    /// Build the agenda sections for a specific day (defaults to `now`'s day).
+    /// `now` is used only for the in-progress / next highlighting.
+    static func build(events: [UnifiedEvent], day: Date? = nil, now: Date = Date(),
                       calendar: Calendar = .current, includeCancelled: Bool = false) -> AgendaTimeline {
         var cal = calendar
         cal.timeZone = .current
-        let dayStart = cal.startOfDay(for: now)
+        let refDay = day ?? now
+        let dayStart = cal.startOfDay(for: refDay)
         let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
 
-        let today = events.filter { e in
+        let dayEvents = events.filter { e in
             guard includeCancelled || e.status != "cancelled" else { return false }
             if e.isAllDay {
-                // All-day events overlap the day if their start is on this day.
-                return cal.isDate(e.startTs, inSameDayAs: now)
+                return cal.isDate(e.startTs, inSameDayAs: refDay)
             }
             return e.startTs < dayEnd && e.endTs > dayStart
         }
 
-        let allDay = today.filter { $0.isAllDay }.sorted { $0.title < $1.title }
-        let timed = today.filter { !$0.isAllDay }.sorted { $0.startTs < $1.startTs }
+        let allDay = dayEvents.filter { $0.isAllDay }.sorted { $0.title < $1.title }
+        let timed = dayEvents.filter { !$0.isAllDay }.sorted { $0.startTs < $1.startTs }
 
         let inProgress = timed.filter { $0.startTs <= now && now < $0.endTs }
         let next = timed.first { $0.startTs > now }
@@ -51,5 +59,40 @@ enum TimelineBuilder {
 
         return AgendaTimeline(day: dayStart, allDay: allDay, inProgress: inProgress,
                               next: next, hourGroups: hourGroups)
+    }
+
+    /// The calendar interval (week or month) that contains `anchor`.
+    static func periodInterval(scope: AgendaScope, anchor: Date, calendar: Calendar = .current) -> DateInterval {
+        var cal = calendar
+        cal.timeZone = .current
+        let component: Calendar.Component = scope == .week ? .weekOfYear : .month
+        return cal.dateInterval(of: component, for: anchor)
+            ?? DateInterval(start: cal.startOfDay(for: anchor), duration: 86_400)
+    }
+
+    struct DaySummary: Identifiable, Equatable {
+        let day: Date
+        let count: Int
+        var id: TimeInterval { day.timeIntervalSince1970 }
+    }
+
+    /// One entry per day in `interval`, with its (non-cancelled) meeting count.
+    static func daySummaries(in interval: DateInterval, events: [UnifiedEvent],
+                             calendar: Calendar = .current) -> [DaySummary] {
+        var cal = calendar
+        cal.timeZone = .current
+        var result: [DaySummary] = []
+        var day = cal.startOfDay(for: interval.start)
+        while day < interval.end {
+            let dayEnd = cal.date(byAdding: .day, value: 1, to: day)!
+            let count = events.filter { e in
+                guard e.status != "cancelled" else { return false }
+                if e.isAllDay { return cal.isDate(e.startTs, inSameDayAs: day) }
+                return e.startTs < dayEnd && e.endTs > day
+            }.count
+            result.append(DaySummary(day: day, count: count))
+            day = dayEnd
+        }
+        return result
     }
 }

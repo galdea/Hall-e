@@ -79,6 +79,7 @@ final class StatusItemController: NSObject {
             stop.target = self
             menu.addItem(.separator())
         }
+        menu.addItem(withTitle: "Open Agenda…", action: #selector(openAgenda), keyEquivalent: "a").target = self
         menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
@@ -98,6 +99,10 @@ final class StatusItemController: NSObject {
 
     @objc private func stopRecording() {
         RecordingService.shared.stop()
+    }
+
+    @objc private func openAgenda() {
+        AgendaWindowController.shared.show()
     }
 
     @objc private func openSettings() {

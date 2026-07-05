@@ -39,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if env["HALLE_DEBUG_SHOW_POPOVER"] == "1" {
             statusItemController?.showPopover()
         }
+        if env["HALLE_DEBUG_SHOW_AGENDA"] == "1" {
+            AgendaWindowController.shared.show()
+        }
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }

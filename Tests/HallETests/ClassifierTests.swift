@@ -77,4 +77,45 @@ struct ClassifierTests {
         #expect(r.project == "El Mundialero")
         #expect(r.confidence >= 0.7)
     }
+
+    @Test func exactEmailAliasClassifies() {
+        var projects = AliasStore.seed
+        let i = projects.firstIndex { $0.name == "Accurate" }!
+        projects[i].aliases.append(ProjectAlias("ceo@acmecorp.com", .email, .strong))
+        // A generic title, but the attendee email is pinned to Accurate.
+        let event = makeEvent(ClassificationInput(title: "Weekly sync", attendeeEmails: ["ceo@acmecorp.com"]))
+        let r = MeetingClassifier(projects: projects, rules: UserRuleStore()).classify(event)
+        #expect(r.project == "Accurate")
+        #expect(r.confidence >= 0.7)
+    }
+
+    @Test func sharedKeywordIsDownweightedToInbox() {
+        var projects = AliasStore.seed
+        // Same keyword added to two projects (the "Cloudflare in several projects" case).
+        for name in ["Accurate", "Rumbo"] {
+            let i = projects.firstIndex { $0.name == name }!
+            projects[i].aliases.append(ProjectAlias("cloudflare", .keyword, .normal))
+        }
+        let event = makeEvent(ClassificationInput(title: "Discuss cloudflare setup"))
+        let scores = RulesEngine.score(ClassificationInput(from: event), projects: projects)
+        // 0.55 (alias in title) / 2 shared = 0.275, below the 0.40 inbox threshold.
+        #expect((scores.first?.value ?? 1) < 0.40)
+        let r = MeetingClassifier(projects: projects, rules: UserRuleStore()).classify(event)
+        #expect(r.project == nil)  // not confidently any single project
+    }
+
+    @Test func uniqueKeywordStillWinsOverSharedOne() {
+        var projects = AliasStore.seed
+        for name in ["Accurate", "Rumbo", "Oasis"] {
+            let i = projects.firstIndex { $0.name == name }!
+            projects[i].aliases.append(ProjectAlias("workshop", .keyword, .normal))
+        }
+        // "sociograma" is unique+strong to Accurate; "workshop" is shared 3 ways.
+        let r = classifyWith(projects, ClassificationInput(title: "Sociograma workshop"))
+        #expect(r.project == "Accurate")
+    }
+
+    private func classifyWith(_ projects: [Project], _ input: ClassificationInput) -> MeetingClassificationResult {
+        MeetingClassifier(projects: projects, rules: UserRuleStore()).classify(makeEvent(input))
+    }
 }
