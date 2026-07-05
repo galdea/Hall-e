@@ -10,17 +10,34 @@ struct GoogleCalendarAPI {
     enum APIError: Error, LocalizedError {
         case http(Int, String)
         case rateLimited(retryAfter: TimeInterval?)
+        case apiNotEnabled(String)
+        case forbidden(String)
         case decoding(String)
         case network(String)
 
         var errorDescription: String? {
             switch self {
             case .http(let c, let m): "Calendar API HTTP \(c): \(m)"
-            case .rateLimited: "Calendar API rate limited."
+            case .rateLimited: "Calendar API rate limited — try again in a moment."
+            case .apiNotEnabled:
+                "Google Calendar API isn't enabled on this OAuth client's project. Enable it in Google Cloud Console (APIs & Services → Library → Google Calendar API → Enable), wait ~1 minute, then Add Account again."
+            case .forbidden(let m): "Access denied by Google: \(m)"
             case .decoding(let m): "Failed to decode calendar response: \(m)"
             case .network(let m): "Network error: \(m)"
             }
         }
+    }
+
+    /// Extract Google's `error.message` and first `error.errors[].reason`.
+    private static func parseError(_ data: Data) -> (message: String, reason: String?) {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let err = obj["error"] as? [String: Any] else {
+            return (String(data: data, encoding: .utf8)?.prefix(200).description ?? "unknown", nil)
+        }
+        let message = err["message"] as? String ?? "unknown"
+        let reason = (err["errors"] as? [[String: Any]])?.first?["reason"] as? String
+            ?? (err["status"] as? String)
+        return (message, reason)
     }
 
     private let base = "https://www.googleapis.com/calendar/v3"
@@ -88,12 +105,25 @@ struct GoogleCalendarAPI {
         case 401 where retryOn401:
             await tokenStore.invalidate(email)
             return try await get(url, retryOn401: false)
-        case 403, 429:
+        case 429:
             let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap { TimeInterval($0) }
             throw APIError.rateLimited(retryAfter: retryAfter)
+        case 403:
+            // 403 is usually "API not enabled" or a permission issue — NOT a rate
+            // limit. Only treat the genuine rate-limit reasons as such.
+            let (message, reason) = Self.parseError(data)
+            switch reason {
+            case "rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded":
+                let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap { TimeInterval($0) }
+                throw APIError.rateLimited(retryAfter: retryAfter)
+            case "accessNotConfigured", "SERVICE_DISABLED":
+                throw APIError.apiNotEnabled(message)
+            default:
+                throw APIError.forbidden(message)
+            }
         default:
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw APIError.http(http.statusCode, String(body.prefix(200)))
+            let (message, _) = Self.parseError(data)
+            throw APIError.http(http.statusCode, message)
         }
     }
 }
