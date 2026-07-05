@@ -34,9 +34,13 @@ final class SystemAudioRecorder {
     /// Start capturing `targetBundleID`'s output to `url`. Falls back to a global
     /// tap (excluding our own process) if the target process can't be resolved.
     func start(targetBundleID: String, to url: URL) throws {
+        // Mix down EVERY process object in the app's bundle family (main app +
+        // any helper/renderer), not just the first match — an outgoing or video
+        // call can route its audio through a different process than a voice call.
+        let procs = Self.processObjects(forBundleID: targetBundleID)
         let desc: CATapDescription
-        if let proc = Self.processObject(forBundleID: targetBundleID) {
-            desc = CATapDescription(stereoMixdownOfProcesses: [proc])
+        if !procs.isEmpty {
+            desc = CATapDescription(stereoMixdownOfProcesses: procs)
         } else {
             // Fallback: capture everything except ourselves.
             let selfProc = Self.processObject(forPID: ProcessInfo.processInfo.processIdentifier)
@@ -123,6 +127,34 @@ final class SystemAudioRecorder {
             if stringProperty(proc, kAudioProcessPropertyBundleID) == bundleID { return proc }
         }
         return nil
+    }
+
+    /// Every audio process object in an app's bundle family: the exact bundle id
+    /// plus any sub-bundle (e.g. `net.whatsapp.WhatsApp.*` helpers/extensions).
+    /// Used for both the tap and mic-in-use detection so we don't miss the one
+    /// process that happens to carry the call audio on a given build.
+    static func processObjects(forBundleID bundleID: String) -> [AudioObjectID] {
+        allProcessObjects().filter { proc in
+            guard let bid = stringProperty(proc, kAudioProcessPropertyBundleID) else { return false }
+            return bid == bundleID || bid.hasPrefix(bundleID + ".")
+        }
+    }
+
+    /// Human-readable dump of active-audio / WhatsApp process objects. Reads only
+    /// public properties (no capture) so it needs NO permission. Used by the
+    /// `HALLE_DEBUG_AUDIO_PROCESSES=1` diagnostic to confirm, during a live call,
+    /// which WhatsApp process is producing input/output.
+    static func diagnostics() -> String {
+        var lines: [String] = []
+        for proc in allProcessObjects() {
+            let bid = stringProperty(proc, kAudioProcessPropertyBundleID) ?? "(no bundle id)"
+            let inp = isRunningInput(proc), out = isRunningOutput(proc)
+            if inp || out || bid.lowercased().contains("whatsapp") {
+                lines.append("obj \(proc)  in:\(inp ? "YES" : "no")  out:\(out ? "YES" : "no")  \(bid)")
+            }
+        }
+        if lines.isEmpty { lines.append("(no active-audio or WhatsApp process objects found)") }
+        return lines.joined(separator: "\n")
     }
 
     static func processObject(forPID pid: pid_t) -> AudioObjectID? {

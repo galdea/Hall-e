@@ -28,11 +28,15 @@ final class WhatsAppCallDetector {
         // Don't prompt while a recording is already in progress.
         if RecordingService.shared.isRecording { wasUsingMic = true; return }
 
-        let usingMic = SystemAudioRecorder.processObject(forBundleID: "net.whatsapp.WhatsApp")
-            .map { SystemAudioRecorder.isRunningInput($0) } ?? false
+        // Any process in the WhatsApp family using the mic → a call (outgoing or
+        // incoming, voice or video) is under way. Checking the whole family (not
+        // just the first match) is what makes outgoing/video calls fire reliably.
+        let procs = SystemAudioRecorder.processObjects(forBundleID: "net.whatsapp.WhatsApp")
+        let usingMic = procs.contains { SystemAudioRecorder.isRunningInput($0) }
 
         if usingMic && !wasUsingMic {
             // Rising edge → offer to record (consent handled inside the hook).
+            Log.app.info("WhatsApp mic-in-use detected → offering to record call")
             Features.current.startCallRecording()
         }
         wasUsingMic = usingMic
