@@ -50,7 +50,7 @@ struct GoogleOAuthClient {
         let server = LoopbackServer()
         defer { server.stop() }
 
-        let port = try server.start()
+        let port = try await server.start()
         let redirectURI = LoopbackServer.redirectURI(port: port)
 
         // Bridge the one-shot callback to async/await, with a 3-minute timeout.

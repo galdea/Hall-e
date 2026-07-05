@@ -18,9 +18,11 @@ final class LoopbackServer {
         let error: String?
     }
 
-    /// Binds a loopback listener on an ephemeral port and returns it.
+    /// Binds a loopback listener on an ephemeral port and returns it once the
+    /// listener is actually `.ready`. Before `.ready`, `listener.port` reports
+    /// `.any` (raw value 0), which must NOT be used as the redirect port.
     /// Set `onCallback` before triggering the redirect.
-    func start() throws -> UInt16 {
+    func start() async throws -> UInt16 {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         let listener = try NWListener(using: params, on: .any)
@@ -32,18 +34,28 @@ final class LoopbackServer {
             conn.start(queue: self.queue)
             self.receive(on: conn)
         }
-        listener.start(queue: queue)
 
-        // Wait briefly for the OS to assign a port.
-        var waited = 0
-        while listener.port == nil && waited < 200 {
-            usleep(5_000); waited += 1
+        return try await withCheckedThrowingContinuation { cont in
+            let guardOnce = ResumeGuard()
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    if let port = listener.port?.rawValue, port != 0 {
+                        if guardOnce.tryResume() { cont.resume(returning: port) }
+                    }
+                case .failed(let error):
+                    if guardOnce.tryResume() { cont.resume(throwing: error) }
+                case .cancelled:
+                    if guardOnce.tryResume() {
+                        cont.resume(throwing: NSError(domain: "LoopbackServer", code: 2,
+                            userInfo: [NSLocalizedDescriptionKey: "Loopback listener cancelled before ready."]))
+                    }
+                default:
+                    break
+                }
+            }
+            listener.start(queue: self.queue)
         }
-        guard let port = listener.port else {
-            throw NSError(domain: "LoopbackServer", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Could not bind a loopback port."])
-        }
-        return port.rawValue
     }
 
     static func redirectURI(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
