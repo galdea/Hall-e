@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // fixtures so directly-inserted sample data isn't rebuilt away.
         if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
             RefreshScheduler.shared.start()
+            if #available(macOS 14.2, *) { WhatsAppCallDetector.shared.start() }
         }
 
         // Debug hooks for headless verification (no effect unless env var set):

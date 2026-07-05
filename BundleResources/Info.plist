@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>__BUILD__</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>14.4</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
@@ -32,6 +32,8 @@
 	<string>NSApplication</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hall-e records meeting audio only when you explicitly start a recording.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Hall-e records the audio of a WhatsApp call only when you start a recording and consent.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Hall-e transcribes your meeting recordings on-device.</string>
 </dict>

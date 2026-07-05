@@ -26,6 +26,7 @@ struct RecordingSession: Codable, Identifiable {
     /// …/Application Support/Hall-e/Recordings/<slug>/
     var folderURL: URL { AppPaths.recordingsDir.appendingPathComponent(slug, isDirectory: true) }
     var micURL: URL { folderURL.appendingPathComponent(micFileName) }
+    var systemAudioURL: URL { folderURL.appendingPathComponent(systemAudioFileName ?? "system.m4a") }
     var sessionFileURL: URL { folderURL.appendingPathComponent("session.json") }
     var transcriptFileURL: URL { folderURL.appendingPathComponent("transcript.json") }
 

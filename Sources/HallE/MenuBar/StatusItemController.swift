@@ -84,6 +84,9 @@ final class StatusItemController: NSObject {
             let stop = menu.addItem(withTitle: "■ Stop recording", action: #selector(stopRecording), keyEquivalent: "")
             stop.target = self
             menu.addItem(.separator())
+        } else {
+            menu.addItem(withTitle: "Record WhatsApp call…", action: #selector(recordWhatsAppCall), keyEquivalent: "").target = self
+            menu.addItem(.separator())
         }
         menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
         menu.addItem(.separator())
@@ -104,6 +107,10 @@ final class StatusItemController: NSObject {
 
     @objc private func stopRecording() {
         RecordingService.shared.stop()
+    }
+
+    @objc private func recordWhatsAppCall() {
+        Features.current.startCallRecording()
     }
 
     @objc private func openSettings() {

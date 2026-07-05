@@ -16,6 +16,7 @@ final class RecordingService: NSObject {
     private(set) var elapsed: TimeInterval = 0
 
     private var recorder: AVAudioRecorder?
+    private var systemRecorder: AnyObject?   // SystemAudioRecorder (macOS 14.2+)
     private var timer: Timer?
     private var onFinish: ((RecordingSession) -> Void)?
 
@@ -68,11 +69,37 @@ final class RecordingService: NSObject {
         }
     }
 
+    /// Record a WhatsApp call: mic (always) + a best-effort Core Audio tap on
+    /// WhatsApp's output (the remote party). If the tap fails, recording continues
+    /// mic-only and the note is still produced.
+    func startCall(for event: UnifiedEvent, notePath: String?, onFinish: @escaping (RecordingSession) -> Void) async {
+        await start(for: event, notePath: notePath, onFinish: onFinish)
+        guard isRecording, let session = currentSession else { return }
+        if #available(macOS 14.2, *) {
+            let rec = SystemAudioRecorder()
+            do {
+                try rec.start(targetBundleID: "net.whatsapp.WhatsApp", to: session.systemAudioURL)
+                systemRecorder = rec
+                currentSession?.systemAudioFileName = "system.m4a"
+                currentSession?.save()
+                Log.rec.info("system-audio tap started (WhatsApp)")
+            } catch {
+                Log.rec.error("system-audio tap failed, recording mic only: \(error, privacy: .public)")
+            }
+        }
+    }
+
     func stop() {
         guard isRecording else { return }
         state = .stopping
+        stopSystemRecorder()
         recorder?.stop()
         timer?.invalidate(); timer = nil
+    }
+
+    private func stopSystemRecorder() {
+        if #available(macOS 14.2, *) { (systemRecorder as? SystemAudioRecorder)?.stop() }
+        systemRecorder = nil
     }
 
     // MARK: - Internals
@@ -91,6 +118,7 @@ final class RecordingService: NSObject {
 
     private func finalize(success: Bool) {
         timer?.invalidate(); timer = nil
+        stopSystemRecorder()
         guard var session = currentSession else { state = .idle; return }
         session.endedAt = Date()
         session.state = success ? .completed : .failed("Recorder finished unsuccessfully")

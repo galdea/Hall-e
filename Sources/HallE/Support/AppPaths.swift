@@ -27,6 +27,11 @@ enum AppPaths {
         appSupport.appendingPathComponent("aliases.json")
     }
 
+    /// People directory (name → projects, emails, phones).
+    static var peopleFile: URL {
+        appSupport.appendingPathComponent("people.json")
+    }
+
     /// User classification pins (event-id / recurring-series → project).
     static var userRulesFile: URL {
         appSupport.appendingPathComponent("user-rules.json")

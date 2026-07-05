@@ -5,6 +5,7 @@ import Speech
 struct RecordingSettingsView: View {
     @State private var micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var speechStatus = SFSpeechRecognizer.authorizationStatus()
+    @State private var autoPromptCalls = AppPreferences.autoPromptWhatsAppCalls
 
     var body: some View {
         Form {
@@ -27,8 +28,10 @@ struct RecordingSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section {
-                Text("System-audio capture (the other side of a call) is planned via macOS Core Audio taps and will require its own permission. Today Hall-e records the microphone only.")
+            Section("WhatsApp calls") {
+                Toggle("Prompt me to record when a WhatsApp call starts", isOn: $autoPromptCalls)
+                    .onChange(of: autoPromptCalls) { _, v in AppPreferences.autoPromptWhatsAppCalls = v }
+                Text("You can always start one from the menu bar → “Record WhatsApp call…”. Auto-detection is best-effort: it may also prompt on a voice message (just dismiss it) and can't see WhatsApp Web. Recording a call captures your mic + WhatsApp's audio (the other party) and needs the one-time “System Audio Recording” permission; the project is chosen from the transcript afterward.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

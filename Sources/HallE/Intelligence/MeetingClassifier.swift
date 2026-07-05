@@ -23,7 +23,7 @@ struct MeetingClassifier {
     var projects: [Project]
     var rules: UserRuleStore
 
-    init(projects: [Project] = AliasStore.shared.projects, rules: UserRuleStore = .load()) {
+    init(projects: [Project] = AliasStore.shared.classificationProjects(), rules: UserRuleStore = .load()) {
         self.projects = projects
         self.rules = rules
     }
@@ -36,9 +36,17 @@ struct MeetingClassifier {
                 suggested_obsidian_path: path(for: pinned),
                 requires_user_confirmation: false, source: "userRule")
         }
+        return classifyInput(ClassificationInput(from: event))
+    }
 
-        // 2. Deterministic rules.
-        let scores = RulesEngine.score(ClassificationInput(from: event), projects: projects)
+    /// Classify a WhatsApp-call transcript by its content (no calendar event / pin).
+    func classifyTranscript(text: String) -> MeetingClassificationResult {
+        classifyInput(ClassificationInput(title: "WhatsApp call", description: text))
+    }
+
+    /// Deterministic rules + thresholds over a classification input.
+    private func classifyInput(_ input: ClassificationInput) -> MeetingClassificationResult {
+        let scores = RulesEngine.score(input, projects: projects)
         let top = scores.first
         let s1 = top?.value ?? 0
         let s2 = scores.dropFirst().first?.value ?? 0

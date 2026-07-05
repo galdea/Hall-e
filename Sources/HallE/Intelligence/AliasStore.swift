@@ -41,6 +41,31 @@ final class AliasStore: @unchecked Sendable {
         save()
     }
 
+    /// Projects with people-derived aliases folded in, for classification only
+    /// (the editor still reads raw `projects`). Each tagged person contributes
+    /// their emails as strong `.email` aliases and their full name as a weak
+    /// `.personName` alias to every project they're assigned to.
+    func classificationProjects(people: [Person] = PeopleStore.shared.people) -> [Project] {
+        var byId = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        for person in people where !person.isArchived {
+            for pid in person.projectIds {
+                guard byId[pid] != nil else { continue }
+                for email in person.emails where !email.isEmpty {
+                    byId[pid]!.aliases.append(ProjectAlias(email, .email, .strong))
+                }
+                let name = person.name.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty {
+                    byId[pid]!.aliases.append(ProjectAlias(name, .personName, .weak))
+                }
+            }
+        }
+        return projects.map { p in
+            var merged = byId[p.id]!
+            merged.aliases = Array(Set(merged.aliases))
+            return merged
+        }
+    }
+
     func project(named name: String) -> Project? {
         projects.first { $0.name == name }
     }

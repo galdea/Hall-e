@@ -8,6 +8,7 @@ protocol FeatureHooks: AnyObject {
     func prepareNote(for event: UnifiedEvent)
     func openInObsidian(_ event: UnifiedEvent)
     func startRecording(for event: UnifiedEvent)
+    func startCallRecording()
     var canOpenObsidian: Bool { get }
 }
 
@@ -16,6 +17,7 @@ final class NoopFeatureHooks: FeatureHooks {
     func prepareNote(for event: UnifiedEvent) { Log.app.info("prepareNote (noop)") }
     func openInObsidian(_ event: UnifiedEvent) { Log.app.info("openInObsidian (noop)") }
     func startRecording(for event: UnifiedEvent) { Log.app.info("startRecording (noop)") }
+    func startCallRecording() { Log.app.info("startCallRecording (noop)") }
     var canOpenObsidian: Bool { false }
 }
 

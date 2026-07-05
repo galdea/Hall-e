@@ -90,6 +90,106 @@ enum RecordingCoordinator {
         Log.rec.info("recording pipeline complete for \(event.title, privacy: .public)")
     }
 
+    // MARK: - WhatsApp call recording
+
+    /// Manual "Record WhatsApp call" entry (also used by the auto-prompt). Records
+    /// (mic now; + system audio in Phase C), then transcribes → classifies the
+    /// transcript → files a Calls note into the resolved project.
+    static func startCallRecording() {
+        guard RecordingService.shared.isRecording == false else { return }
+        let consent = NSAlert()
+        consent.messageText = "¿Grabar esta llamada de WhatsApp?"
+        consent.informativeText = "Hall-e grabará el audio localmente y lo transcribirá. Avísale a la otra persona que la llamada está siendo grabada."
+        consent.addButton(withTitle: "Grabar")
+        consent.addButton(withTitle: "Cancelar")
+        guard consent.runModal() == .alertFirstButtonReturn else { return }
+
+        let event = CallEvent.makeWhatsAppCall()
+        Task {
+            await RecordingService.shared.startCall(for: event, notePath: nil) { session in
+                Task { await finishCall(session: session, event: event) }
+            }
+        }
+    }
+
+    /// After a call recording stops: transcribe → classify by transcript → create
+    /// the Calls note in the resolved project → merge transcript → enrich.
+    static func finishCall(session incoming: RecordingSession, event: UnifiedEvent) async {
+        var session = incoming
+        session.transcriptStatus = .inProgress; session.save(); notifyRecordingChanged()
+
+        // Transcribe both tracks that exist (mic always; system if captured).
+        var segments: [TranscriptSegment] = []
+        var localeUsed = "en-US"
+        func transcribe(_ url: URL, track: String) async {
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let t = try? await LocalTranscriptionProvider().transcribe(fileURL: url, sessionID: session.id, track: track)
+            else { return }
+            segments.append(contentsOf: t.segments)
+            localeUsed = t.localeUsed
+        }
+        await transcribe(session.micURL, track: "mic")
+        if session.systemAudioFileName != nil { await transcribe(session.systemAudioURL, track: "them") }
+
+        guard !segments.isEmpty else {
+            session.transcriptStatus = .failed; session.save(); notifyRecordingChanged(); return
+        }
+        segments.sort { $0.start < $1.start }
+        let transcript = Transcript(sessionID: session.id, localeUsed: localeUsed,
+                                    segments: segments, status: .completed, source: "sfspeech-on-device")
+        TranscriptStore.save(transcript, to: session)
+        session.transcriptStatus = .completed; session.localeUsed = localeUsed
+        session.save(); notifyRecordingChanged()
+
+        // Classify by transcript content (deterministic; AI fallback if enabled).
+        var classified = event
+        classified.descriptionText = transcript.plainText
+        let classifier = MeetingClassifier()
+        var result = classifier.classifyTranscript(text: transcript.plainText)
+        let provider = LLMProviderFactory.make()
+        if !(provider is DisabledLLMProvider), !classifier.isConfident(result),
+           let ai = await classifier.aiClassify(classified, provider: provider) {
+            result = ai
+        }
+        let projectName = result.requires_user_confirmation ? nil : result.project
+        classified.projectId = projectName
+        classified.projectConfidence = result.confidence
+
+        // Create the Calls note in the resolved project (or Calls/Inbox).
+        guard let svc = MeetingNoteService.make() else {
+            Log.rec.error("no vault; call transcript saved to \(session.folderURL.path, privacy: .public)")
+            return
+        }
+        do {
+            let descriptor = try svc.createOrFindMeetingNote(for: classified, projectName: projectName, kind: .call)
+            session.notePath = descriptor.vaultRelativePath; session.save()
+            let pb = VaultPathBuilder(config: svc.config)
+            let writer = VaultWriter(vaultURL: svc.vaultURL)
+            try? writer.updateFrontmatter(relativePath: descriptor.vaultRelativePath, key: "recording_path",
+                                          value: session.folderURL.path, pathBuilder: pb)
+            try? writer.mergeSection(relativePath: descriptor.vaultRelativePath, section: "transcript",
+                                     newContent: callTranscriptBody(transcript),
+                                     headingAnchor: "Transcript", mode: .replace, pathBuilder: pb)
+            let ctx = MeetingContext(title: classified.title, project: projectName,
+                                     date: HalleDate.day(classified.startTs), attendees: [])
+            await TranscriptPostProcessor(service: svc, notePath: descriptor.vaultRelativePath, context: ctx)
+                .enrich(transcript: transcript.plainText)
+            Log.rec.info("WhatsApp call filed → \(projectName ?? "Inbox", privacy: .public)")
+        } catch {
+            Log.rec.error("call note creation failed: \(error, privacy: .public)")
+        }
+    }
+
+    /// Label each track's text ("Yo:" mic / "Ellos:" system) in speaking order.
+    private static func callTranscriptBody(_ t: Transcript) -> String {
+        let hasThem = t.segments.contains { $0.track == "them" }
+        guard hasThem else { return t.plainText.isEmpty ? "_(no speech recognized)_" : t.plainText }
+        return t.segments.map { seg in
+            let who = seg.track == "mic" ? "**Yo:**" : "**Ellos:**"
+            return "\(who) \(seg.text)"
+        }.joined(separator: "\n\n")
+    }
+
     private static func notifyRecordingChanged() {
         NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
     }

@@ -95,4 +95,26 @@ struct ObsidianIntegrationTests {
         let inbox = try String(contentsOf: dir.appendingPathComponent("Hall-e/Inbox/Unclassified Meetings.md"))
         #expect(inbox.contains("Director Dashboard Review"))
     }
+
+    @Test func whatsAppCallFilesUnderCallsAsCallType() throws {
+        let (config, dir) = tempVault()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let service = MeetingNoteService(config: config, vaultURL: dir)
+        var ev = CallEvent.makeWhatsAppCall(at: Date(timeIntervalSince1970: 1_800_000_000))
+        ev.projectId = "Accurate"
+        let d = try service.createOrFindMeetingNote(for: ev, projectName: "Accurate", kind: .call)
+        #expect(d.vaultRelativePath.hasPrefix("Hall-e/Calls/"))
+        #expect(d.vaultRelativePath.contains("Accurate"))
+        let content = try String(contentsOf: d.absoluteURL, encoding: .utf8)
+        #expect(content.contains("type: call"))
+        #expect(content.contains("<!-- hall-e:transcript:start -->"))
+    }
+
+    @Test func unclassifiedCallGoesToCallsInbox() throws {
+        let (config, dir) = tempVault()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let service = MeetingNoteService(config: config, vaultURL: dir)
+        let d = try service.createOrFindMeetingNote(for: CallEvent.makeWhatsAppCall(), projectName: nil, kind: .call)
+        #expect(d.vaultRelativePath.contains("Hall-e/Calls/Inbox/"))
+    }
 }

@@ -23,6 +23,21 @@ struct VaultPathBuilder {
         return "\(root)/Inbox/\(day) - \(safeTitle).md"
     }
 
+    /// e.g. Hall-e/Calls/2026/2026-07/2026-07-05 - Accurate - Llamada de WhatsApp.md
+    func callNote(date: Date, projectName: String?, title: String) -> String {
+        let day = HalleDate.day(date)
+        let proj = projectName.map { FilenameSanitizer.sanitize($0, maxBytes: 40) } ?? "Unclassified"
+        let safeTitle = FilenameSanitizer.sanitize(title, maxBytes: 100)
+        let file = "\(day) - \(proj) - \(safeTitle).md"
+        return "\(root)/Calls/\(HalleDate.year(date))/\(HalleDate.yearMonth(date))/\(file)"
+    }
+
+    func inboxCallNote(date: Date, title: String) -> String {
+        let day = HalleDate.day(date)
+        let safeTitle = FilenameSanitizer.sanitize(title, maxBytes: 100)
+        return "\(root)/Calls/Inbox/\(day) - \(safeTitle).md"
+    }
+
     func projectFolder(_ projectName: String) -> String {
         "\(root)/Projects/\(FilenameSanitizer.sanitize(projectName, maxBytes: 60))"
     }

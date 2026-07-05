@@ -11,6 +11,7 @@ struct AppPreferences {
         static let windowPastDays = "windowPastDays"
         static let windowFutureDays = "windowFutureDays"
         static let showDeclinedEvents = "showDeclinedEvents"
+        static let autoPromptWhatsAppCalls = "autoPromptWhatsAppCalls"
         static let primaryAccountEmail = "primaryAccountEmail"
         static let obsidianVaultConfig = "obsidianVaultConfig"
         static let llmProviderConfig = "llmProviderConfig"
@@ -39,6 +40,11 @@ struct AppPreferences {
     static var showDeclinedEvents: Bool {
         get { d.bool(forKey: Key.showDeclinedEvents) }
         set { d.set(newValue, forKey: Key.showDeclinedEvents) }
+    }
+
+    static var autoPromptWhatsAppCalls: Bool {
+        get { d.object(forKey: Key.autoPromptWhatsAppCalls) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.autoPromptWhatsAppCalls) }
     }
 
     static var primaryAccountEmail: String? {

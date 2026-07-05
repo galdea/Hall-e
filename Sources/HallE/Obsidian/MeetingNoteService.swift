@@ -6,6 +6,8 @@ struct ObsidianNoteDescriptor {
     var wasCreated: Bool
 }
 
+enum NoteKind { case meeting, call }
+
 /// Creates and maintains meeting notes, project notes, indexes, and daily notes
 /// non-destructively. Classification (project) is provided by the caller; nil →
 /// the note lands in the Inbox.
@@ -23,10 +25,19 @@ struct MeetingNoteService {
 
     /// Idempotently create (or find) the meeting note for `event`.
     @discardableResult
-    func createOrFindMeetingNote(for event: UnifiedEvent, projectName: String?) throws -> ObsidianNoteDescriptor {
-        let relPath = projectName != nil
-            ? pathBuilder.meetingNote(date: event.startTs, projectName: projectName, title: event.title)
-            : pathBuilder.inboxMeetingNote(date: event.startTs, title: event.title)
+    func createOrFindMeetingNote(for event: UnifiedEvent, projectName: String?,
+                                 kind: NoteKind = .meeting) throws -> ObsidianNoteDescriptor {
+        let relPath: String
+        switch kind {
+        case .meeting:
+            relPath = projectName != nil
+                ? pathBuilder.meetingNote(date: event.startTs, projectName: projectName, title: event.title)
+                : pathBuilder.inboxMeetingNote(date: event.startTs, title: event.title)
+        case .call:
+            relPath = projectName != nil
+                ? pathBuilder.callNote(date: event.startTs, projectName: projectName, title: event.title)
+                : pathBuilder.inboxCallNote(date: event.startTs, title: event.title)
+        }
         let url = pathBuilder.absoluteURL(relPath, vaultURL: vaultURL)
 
         // Dedupe: if the expected file already carries this event id, reuse it.
@@ -36,7 +47,7 @@ struct MeetingNoteService {
             return ObsidianNoteDescriptor(vaultRelativePath: relPath, absoluteURL: url, wasCreated: false)
         }
 
-        let content = renderMeeting(event: event, projectName: projectName)
+        let content = renderMeeting(event: event, projectName: projectName, kind: kind)
         let (finalURL, created) = try writer.createIfMissing(relativePath: relPath, content: content, pathBuilder: pathBuilder)
 
         // Maintain project scaffolding + indexes.
@@ -53,7 +64,8 @@ struct MeetingNoteService {
 
     // MARK: - Rendering
 
-    private func renderMeeting(event: UnifiedEvent, projectName: String?) -> String {
+    private func renderMeeting(event: UnifiedEvent, projectName: String?, kind: NoteKind = .meeting) -> String {
+        let template = kind == .call ? NoteTemplates.call : NoteTemplates.meeting
         let day = HalleDate.day(event.startTs)
         let attendees = event.attendees
         let attendeesYAML = attendees.isEmpty ? " []" : "\n" + attendees.map {
@@ -66,7 +78,7 @@ struct MeetingNoteService {
             links = "- [[\(config.subfolderName)/Projects/\(FilenameSanitizer.sanitize(projectName, maxBytes: 60))/\(FilenameSanitizer.sanitize(projectName, maxBytes: 60))|\(projectName)]]\n" + links
         }
 
-        return MarkdownTemplateEngine.render(NoteTemplates.meeting, [
+        return MarkdownTemplateEngine.render(template, [
             "date": day,
             "start": HalleDate.time(event.startTs),
             "end": HalleDate.time(event.endTs),

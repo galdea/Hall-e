@@ -7,6 +7,8 @@ struct ProjectRulesSettingsView: View {
     @State private var newKind: AliasKind = .keyword
     @State private var newStrength: AliasStrength = .normal
     @State private var reclassifying = false
+    @State private var showNewProject = false
+    @State private var newProjectName = ""
 
     private var selected: Project? { projects.first { $0.id == selection } }
 
@@ -23,8 +25,18 @@ struct ProjectRulesSettingsView: View {
 
     var body: some View {
         HSplitView {
-            List(projects, selection: $selection) { Text($0.name).tag($0.id) }
-                .frame(minWidth: 150)
+            VStack(spacing: 0) {
+                List(projects, selection: $selection) { Text($0.name).tag($0.id) }
+                Divider()
+                HStack {
+                    Button { newProjectName = ""; showNewProject = true } label: {
+                        Label("New Project", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                }.padding(6)
+            }
+            .frame(minWidth: 150)
             if let project = selected {
                 detail(project)
             } else {
@@ -34,6 +46,26 @@ struct ProjectRulesSettingsView: View {
         }
         .navigationTitle("Project Rules")
         .onAppear { if selection == nil { selection = projects.first?.id } }
+        .alert("New Project", isPresented: $showNewProject) {
+            TextField("Project name (e.g. IMBA)", text: $newProjectName)
+            Button("Create") { createProject() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Creates a project you can then tag people and keywords to.")
+        }
+    }
+
+    private func createProject() {
+        let name = newProjectName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let slug = TextNormalizer.fold(name).replacingOccurrences(of: " ", with: "-")
+        guard !projects.contains(where: { $0.id == slug || $0.name == name }) else {
+            selection = projects.first { $0.name == name }?.id; return
+        }
+        AliasStore.shared.update(Project(id: slug, name: name,
+                                         aliases: [ProjectAlias(name, .projectName, .strong)]))
+        projects = AliasStore.shared.projects
+        selection = slug
     }
 
     private func detail(_ project: Project) -> some View {

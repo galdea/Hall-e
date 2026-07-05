@@ -60,6 +60,57 @@ enum NoteTemplates {
     <!-- hall-e:links:end -->
     """
 
+    /// WhatsApp call note — same structure/markers as `meeting` (so the same
+    /// transcript/summary/action merges work) but typed as a call.
+    static let call = """
+    ---
+    type: call
+    date: {{date}}
+    start: "{{start}}"
+    end: "{{end}}"
+    project: {{project}}
+    source: "WhatsApp"
+    recording_path: "{{recording_path}}"
+    transcript_status: "{{transcript_status}}"
+    classification_confidence: {{classification_confidence}}
+    hall_e_event_id: "{{hall_e_event_id}}"
+    tags:
+      - call{{project_tag}}
+    ---
+
+    # {{title}}
+
+    ## Context
+    - Project: {{project}}
+    - Source: WhatsApp call
+
+    ## Transcript
+    <!-- hall-e:transcript:start -->
+    <!-- transcript goes here -->
+    <!-- hall-e:transcript:end -->
+
+    ## Summary
+    <!-- hall-e:summary:start -->
+    <!-- hall-e:summary:end -->
+
+    ## Decisions
+    <!-- hall-e:decisions:start -->
+    <!-- hall-e:decisions:end -->
+
+    ## Action items
+    <!-- hall-e:actions:start -->
+    <!-- hall-e:actions:end -->
+
+    ## Follow-ups
+    <!-- hall-e:followups:start -->
+    <!-- hall-e:followups:end -->
+
+    ## Links
+    <!-- hall-e:links:start -->
+    {{links}}
+    <!-- hall-e:links:end -->
+    """
+
     static let project = """
     ---
     type: project

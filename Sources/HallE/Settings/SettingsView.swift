@@ -9,6 +9,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case recording = "Recording"
     case transcription = "Transcription"
     case projectRules = "Project Rules"
+    case people = "People"
     case privacy = "Privacy"
     case advanced = "Advanced"
 
@@ -24,6 +25,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .recording: "record.circle"
         case .transcription: "waveform"
         case .projectRules: "folder.badge.gearshape"
+        case .people: "person.2"
         case .privacy: "hand.raised"
         case .advanced: "wrench.and.screwdriver"
         }
@@ -60,6 +62,7 @@ struct SettingsView: View {
         case .recording: RecordingSettingsView()
         case .transcription: TranscriptionSettingsView()
         case .projectRules: ProjectRulesSettingsView()
+        case .people: PeopleSettingsView()
         case .privacy: PrivacySettingsView()
         case .advanced: AdvancedSettingsView()
         }

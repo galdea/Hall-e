@@ -18,6 +18,10 @@ final class ObsidianFeatureHooks: FeatureHooks {
         RecordingCoordinator.startRecording(for: event)
     }
 
+    func startCallRecording() {
+        RecordingCoordinator.startCallRecording()
+    }
+
     private func makeNote(for event: UnifiedEvent, open: Bool) {
         guard VaultAccess.isReachable() else {
             notifyVaultUnreachable(); return
