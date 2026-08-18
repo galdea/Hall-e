@@ -5,6 +5,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Operator driver for the Deepgram migration gates. Runs one step and
+        // exits without installing the status item or starting a calendar sync:
+        // `HALLE_DEEPGRAM_OP=status /Applications/Hall-e.app/Contents/MacOS/Hall-e`
+        if let operation = DeepgramMigrationOps.requestedOperation {
+            Task { @MainActor in
+                await DeepgramMigrationOps.run(operation)
+                exit(0)
+            }
+            return
+        }
+
         // Diagnostic: print WhatsApp/active audio process objects and exit. Reads
         // public properties only (no capture, no permission). Run during a live
         // call: `HALLE_DEBUG_AUDIO_PROCESSES=1 /Applications/Hall-e.app/Contents/MacOS/Hall-e`
@@ -55,10 +66,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugFixtures.loadIfRequested()
         AppState.shared.startObserving()
         NotificationScheduler.shared.configure()
+        if AppPreferences.notificationsEnabled && AppPreferences.onboardingCompleted {
+            Task { await NotificationScheduler.shared.requestAuthorizationIfNeeded() }
+        }
+        // Runs before the recovery passes so those see each recording at its
+        // final path and re-save it there.
+        RecordingLibrary.migrateFlatLayoutOnce()
+        RecordingStore.reconcileStaleTranscripts()
+        RecordingStore.enqueueLegacyFailuresForRetryOnce()
+        RecordingStore.enqueueAppleSpeechFallbacksForRetryOnce()
+        Log.rec.info("transcription recovery startup: \(RecordingStore.queuedSessions().count, privacy: .public) queued job(s)")
+        // Automatic/WhisperKit transcription must be prepared before queued
+        // jobs resume. Starting recovery first used to make a missing model
+        // look like a successful Apple Speech fallback.
+        Task { @MainActor in
+            Log.rec.info("transcription recovery task started")
+            await WhisperKitModelManager.shared.prepareIfNeeded()
+            Log.rec.info("transcription engine preparation finished")
+            await RecordingCoordinator.resumeQueuedJobsWhenIdle()
+            Log.rec.info("transcription recovery task finished")
+            await MeetingBriefingPipeline.resumeQueuedWhenIdle()
+        }
         if ObsidianVaultConfig.load() != nil {
             Features.current = ObsidianFeatureHooks()
+            Task { await VaultIndex.shared.reindex() }
         }
+        Task { await ProjectSourceImportCoordinator.shared.refreshLinkedCodexSources() }
         statusItemController = StatusItemController()
+
+        if !AppPreferences.onboardingCompleted,
+           ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
+            OnboardingWindowController.shared.show()
+        }
 
         NotificationCenter.default.addObserver(
             forName: .halleManualRefresh, object: nil, queue: .main
@@ -70,12 +109,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.statusItemController?.showPopover()
         }
+        NotificationCenter.default.addObserver(
+            forName: .halleProjectKnowledgeChanged, object: nil, queue: .main
+        ) { note in
+            if let projectId = note.userInfo?["projectId"] as? String {
+                Task { await ProjectIntelligenceService.shared.scheduleRefresh(projectId: projectId) }
+            } else {
+                Task { await ProjectIntelligenceService.shared.scheduleRefreshAll() }
+            }
+        }
 
         // Periodic + event-based syncing (timer, wake, network). Skipped under
         // fixtures so directly-inserted sample data isn't rebuilt away.
         if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
             RefreshScheduler.shared.start()
-            if #available(macOS 14.2, *) { WhatsAppCallDetector.shared.start() }
+            CallDetectionCoordinator.shared.start()
+            DeepgramCreditWatchdog.shared.start()
         }
 
         // Debug hooks for headless verification (no effect unless env var set):
@@ -86,6 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if env["HALLE_DEBUG_SHOW_POPOVER"] == "1" {
             statusItemController?.showPopover()
+        }
+        if env["HALLE_DEBUG_SHOW_WORKSPACE"] == "1" {
+            WorkspaceWindowController.shared.show()
         }
     }
 

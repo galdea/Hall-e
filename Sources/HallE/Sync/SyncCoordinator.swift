@@ -28,6 +28,17 @@ actor SyncCoordinator {
         await performSync(timeMin: min, timeMax: max, isPrimaryWindow: false)
     }
 
+    /// Rebuild local derived state immediately after an account/calendar toggle,
+    /// without requiring a network request.
+    func rebuildAfterSourceChange() async {
+        let (min, max) = Self.window()
+        await rebuildUnifiedEvents(timeMin: min, timeMax: max)
+        let agenda = (try? await AppDatabase.shared.dbQueue.read { try UnifiedEvent.fetchAll($0) }) ?? []
+        await NotificationScheduler.shared.reconcile(events: agenda) { $0.winnerAccountEmail }
+        await ProjectSourceImportCoordinator.shared.refreshLinkedCodexSources()
+        await ProjectIntelligenceService.shared.scheduleRefreshAll()
+    }
+
     private func performSync(timeMin: Date, timeMax: Date, isPrimaryWindow: Bool) async {
         let db = AppDatabase.shared.dbQueue
         let accounts: [ConnectedAccount]
@@ -43,12 +54,13 @@ actor SyncCoordinator {
         }
         guard !accounts.isEmpty else { return }
 
-        await MainActor.run { AppState.shared.isSyncing = true }
-        defer { Task { @MainActor in AppState.shared.isSyncing = false } }
+        await MainActor.run { AppState.shared.updateSyncStatus(isSyncing: true, error: nil) }
+        defer { Task { @MainActor in AppState.shared.updateSyncStatus(isSyncing: false) } }
 
         let fetchedAt = Date()
 
         // Per-account isolation via a task group; one failure never blocks others.
+        var accountErrors: [String: String] = [:]
         await withTaskGroup(of: (String, String?).self) { group in
             for account in accounts {
                 let accountCalendars = sources.filter { $0.accountEmail == account.email }
@@ -58,6 +70,7 @@ actor SyncCoordinator {
                 }
             }
             for await (email, errorMessage) in group {
+                if let errorMessage { accountErrors[email] = errorMessage }
                 try? await db.write { db in
                     if var acct = try ConnectedAccount.fetchOne(db, key: email) {
                         acct.lastSyncAt = fetchedAt
@@ -76,7 +89,9 @@ actor SyncCoordinator {
         guard isPrimaryWindow else { return }
 
         await MainActor.run {
-            AppState.shared.lastSyncAt = fetchedAt
+            AppState.shared.updateSyncStatus(isSyncing: false, lastSyncAt: fetchedAt,
+                                              error: accountErrors.values.first,
+                                              accountErrors: accountErrors)
         }
 
         // Optional LLM classification for events the rules left unclassified.
@@ -98,6 +113,7 @@ actor SyncCoordinator {
             try UnifiedEvent
                 .filter(UnifiedEvent.Columns.startTs > Date())
                 .filter(sql: "projectId IS NULL")
+                .filter(sql: "dedupKey NOT IN (SELECT dedupKey FROM event_project_assignment)")
                 .order(UnifiedEvent.Columns.startTs)
                 .limit(8)
                 .fetchAll(db)
@@ -134,10 +150,10 @@ actor SyncCoordinator {
                     try CalendarEvent
                         .filter(CalendarEvent.Columns.accountEmail == account.email
                                 && CalendarEvent.Columns.calendarId == cal.calendarId
-                                && CalendarEvent.Columns.startTs >= timeMin
+                                && CalendarEvent.Columns.endTs > timeMin
                                 && CalendarEvent.Columns.startTs < timeMax)
                         .deleteAll(db)
-                    for var event in mapped { try event.insert(db) }
+                    for var event in mapped { try event.insert(db, onConflict: .replace) }
                 }
             } catch let GoogleOAuthClient.OAuthError.invalidGrant {
                 try? await AppDatabase.shared.dbQueue.write { db in
@@ -169,25 +185,33 @@ actor SyncCoordinator {
 
             try await db.write { db in
                 let raw = try CalendarEvent
-                    .filter(CalendarEvent.Columns.startTs >= timeMin && CalendarEvent.Columns.startTs < timeMax)
+                    .filter(CalendarEvent.Columns.endTs > timeMin && CalendarEvent.Columns.startTs < timeMax)
                     .fetchAll(db)
                 let unified = EventDeduplicator.deduplicate(raw, primaryEmail: primary) { email, calId in
                     colorMap["\(email)\u{1F}\(calId)"].flatMap { $0 } ?? accountColor[email]
                 }
                 // Classify each event (user pins → deterministic rules).
                 let classifier = MeetingClassifier()
+                let assignments = Dictionary(uniqueKeysWithValues: try EventProjectAssignment.fetchAll(db).map {
+                    ($0.dedupKey, $0.projectId)
+                })
                 // Range-additive: only replace unified events in this window, so
                 // other browsed periods (week/month navigation) stay cached.
                 try UnifiedEvent
                     .filter(UnifiedEvent.Columns.startTs >= timeMin && UnifiedEvent.Columns.startTs < timeMax)
                     .deleteAll(db)
                 for var u in unified {
-                    let result = classifier.classify(u)
-                    // Only confidently-classified events get a project (chip + filed
-                    // to the project folder); the rest stay unclassified → Inbox.
-                    u.projectId = result.requires_user_confirmation ? nil : result.project
-                    u.projectConfidence = result.confidence
-                    try u.insert(db)
+                    if let pinned = assignments[u.dedupKey] {
+                        u.projectId = pinned
+                        u.projectConfidence = pinned == nil ? nil : 1
+                    } else {
+                        let result = classifier.classify(u)
+                        // Only confidently-classified events get a project (chip + filed
+                        // to the project folder); the rest stay unclassified → Inbox.
+                        u.projectId = result.requires_user_confirmation ? nil : result.project
+                        u.projectConfidence = result.confidence
+                    }
+                    try u.insert(db, onConflict: .replace)
                 }
             }
         } catch {

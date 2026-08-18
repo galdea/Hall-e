@@ -9,7 +9,7 @@ enum NoteTemplates {
     date: {{date}}
     start: "{{start}}"
     end: "{{end}}"
-    project: {{project}}
+    project: "{{project}}"
     source_account: "{{source_account}}"
     calendar: "{{calendar}}"
     attendees:{{attendees_yaml}}
@@ -68,7 +68,7 @@ enum NoteTemplates {
     date: {{date}}
     start: "{{start}}"
     end: "{{end}}"
-    project: {{project}}
+    project: "{{project}}"
     source: "WhatsApp"
     recording_path: "{{recording_path}}"
     transcript_status: "{{transcript_status}}"
@@ -123,6 +123,11 @@ enum NoteTemplates {
 
     ## Overview
     -
+
+    ## Hall-e Assistant
+    <!-- hall-e:assistant-brief:start -->
+    _No generated project brief yet._
+    <!-- hall-e:assistant-brief:end -->
 
     ## Meetings
     See [[{{project}}/Meetings|Meetings index]].

@@ -9,6 +9,7 @@ enum AppPaths {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("Hall-e", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         return dir
     }
 
@@ -41,6 +42,69 @@ enum AppPaths {
     static var recordingsDir: URL {
         let dir = appSupport.appendingPathComponent("Recordings", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    /// WhisperKit/Hugging Face models. This stays inside Application Support so
+    /// the first download does not trigger a Documents TCC prompt.
+    static var whisperKitModelsDir: URL {
+        let dir = appSupport.appendingPathComponent("Models", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    static var vaultIndexFile: URL {
+        appSupport.appendingPathComponent("vault-index.json")
+    }
+
+    static var deepgramSpendLedgerFile: URL {
+        appSupport.appendingPathComponent("deepgram-spend-ledger.json")
+    }
+
+    /// Successful Deepgram responses, keyed by audio digest + request options.
+    /// ADR 0001 requires raw responses to be reusable so normalization can be
+    /// repeated without paying for a second transcription. The A/B gate and the
+    /// full backfill therefore transcribe the same audio only once.
+    static var deepgramResponseCacheDir: URL {
+        let dir = backfillDirectory.appendingPathComponent("RawResponses", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    /// Non-promoting A/B sample output. Nothing here is an active artifact.
+    static var deepgramSampleDirectory: URL {
+        let dir = backfillDirectory.appendingPathComponent("Samples", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    static var backfillDirectory: URL {
+        let dir = appSupport.appendingPathComponent("Backfill", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    /// One JSON file per native-message payload. Per-message files avoid a
+    /// shared append race between Chrome's short-lived native hosts.
+    static var callMessageQueueDirectory: URL {
+        let dir = appSupport.appendingPathComponent("CallCapture/Incoming", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    /// A stable, user-loadable copy of the bundled Chrome extension. Keeping it
+    /// in Application Support avoids Chrome losing the extension whenever a
+    /// signed Hall-e app bundle is replaced during an upgrade.
+    static var browserExtensionDirectory: URL {
+        let dir = appSupport.appendingPathComponent("BrowserExtension", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         return dir
     }
 }

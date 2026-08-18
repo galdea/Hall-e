@@ -9,7 +9,8 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async
     -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        await markDelivered(notification)
+        return [.banner, .sound]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -18,10 +19,22 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         let dedupKey = info["dedupKey"] as? String ?? ""
         let meetingURL = (info["meetingURL"] as? String).flatMap { $0.isEmpty ? nil : URL(string: $0) }
         let htmlLink = (info["htmlLink"] as? String).flatMap { $0.isEmpty ? nil : URL(string: $0) }
+        await markDelivered(response.notification)
 
         switch response.actionIdentifier {
+        case "RECORDING_STOP":
+            let reason: RecordingStopReason = (info["recordingPrompt"] as? String) == "scheduledEnd"
+                ? .scheduledEnd : .silencePrompt
+            await MainActor.run { RecordingService.shared.stop(reason: reason) }
+        case "RECORDING_KEEP":
+            await MainActor.run { RecordingService.shared.keepRecordingAfterSilence() }
+        case "RECORDING_EXTEND":
+            await MainActor.run { RecordingService.shared.extendScheduledEnd() }
         case "JOIN":
-            if let url = meetingURL ?? htmlLink { await MainActor.run { NSWorkspace.shared.open(url) } }
+            await MainActor.run {
+                if let event = Self.event(forDedupKey: dedupKey), MeetingLauncher.join(event) { return }
+                if let url = meetingURL ?? htmlLink { NSWorkspace.shared.open(url) }
+            }
         case "OPEN_AGENDA", UNNotificationDefaultActionIdentifier:
             await MainActor.run { NotificationCenter.default.post(name: .halleShowPopover, object: nil) }
         case "PREPARE_NOTE":
@@ -42,6 +55,13 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         let request = UNNotificationRequest(identifier: notification.request.identifier + "|snooze",
                                             content: content, trigger: trigger)
         try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    private func markDelivered(_ notification: UNNotification) async {
+        let info = notification.request.content.userInfo
+        guard let key = info["dedupKey"] as? String,
+              let event = await MainActor.run(body: { Self.event(forDedupKey: key) }) else { return }
+        await NotificationScheduler.shared.markDelivered(dedupKey: key, startTs: event.startTs)
     }
 
     @MainActor

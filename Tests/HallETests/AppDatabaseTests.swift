@@ -57,4 +57,15 @@ struct AppDatabaseTests {
         let remaining = try db.dbQueue.read { try CalendarSource.fetchCount($0) }
         #expect(remaining == 0)
     }
+
+    @Test func manualProjectAssignmentsPersistIndependentlyOfEvents() throws {
+        let database = try AppDatabase(inMemory: true)
+        let assignment = EventProjectAssignment(dedupKey: "event-1", projectId: nil, updatedAt: Date())
+        try database.dbQueue.write { db in try assignment.insert(db) }
+        let fetched = try database.dbQueue.read { db in
+            try EventProjectAssignment.fetchOne(db, key: "event-1")
+        }
+        #expect(fetched != nil)
+        #expect(fetched?.projectId == nil)
+    }
 }

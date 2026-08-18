@@ -82,4 +82,9 @@ enum KeychainStore {
 
     static func googleRefreshAccount(email: String) -> String { "google-refresh:\(email)" }
     static func llmKeyAccount(providerKind: String, host: String) -> String { "\(providerKind)#\(host)" }
+    static let deepgramTranscriptionAccount = "deepgram#prerecorded-transcription"
+    /// A second Deepgram account, used only after the primary reports no credit.
+    /// It is a different account with independent credit, not a second key on the
+    /// same one, so it survives the primary's free grant being used up.
+    static let deepgramFallbackTranscriptionAccount = "deepgram#prerecorded-transcription-fallback"
 }

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hall-e Browser Calls</title>
+  <style>
+    body { font: 14px -apple-system, BlinkMacSystemFont, sans-serif; color: #1d1d1f; margin: 32px; max-width: 620px; }
+    input { width: min(420px, 100%); padding: 8px; } button { padding: 8px 12px; margin-left: 6px; }
+    li { margin: 8px 0; } .muted { color: #666; line-height: 1.45; } #status { min-height: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Hall-e Browser Calls</h1>
+  <p class="muted">This extension only sends a minimal local signal (URL, title, tab ID, and time) to Hall-e when an approved call page opens or closes. It never uploads browsing data or audio.</p>
+  <h2>Custom domains</h2>
+  <p class="muted">Add the same exact call domain you approved in Hall-e. Chrome will ask for permission for that domain before it is watched.</p>
+  <input id="domain" autocomplete="off" placeholder="call.example.com">
+  <button id="add">Approve domain</button>
+  <p id="status" role="status"></p>
+  <ul id="domains"></ul>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -117,4 +117,64 @@ struct ObsidianIntegrationTests {
         let d = try service.createOrFindMeetingNote(for: CallEvent.makeWhatsAppCall(), projectName: nil, kind: .call)
         #expect(d.vaultRelativePath.contains("Hall-e/Calls/Inbox/"))
     }
+
+    @Test func projectAssistantUpdatePreservesUserOverviewAndIsIdempotent() throws {
+        let (config, dir) = tempVault()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let service = MeetingNoteService(config: config, vaultURL: dir)
+        try service.updateProjectAssistantSnapshot(projectName: "Accurate", markdown: "### Status\nOn track")
+        let projectURL = dir.appendingPathComponent("Hall-e/Projects/Accurate/Accurate.md")
+        var content = try String(contentsOf: projectURL, encoding: .utf8)
+        content = content.replacingOccurrences(of: "## Overview\n-", with: "## Overview\n- User objective")
+        try content.write(to: projectURL, atomically: true, encoding: .utf8)
+        try service.updateProjectAssistantSnapshot(projectName: "Accurate", markdown: "### Status\nAt risk")
+        try service.updateProjectAssistantSnapshot(projectName: "Accurate", markdown: "### Status\nAt risk")
+        let updated = try String(contentsOf: projectURL, encoding: .utf8)
+        #expect(updated.contains("User objective"))
+        #expect(updated.contains("At risk"))
+        #expect(updated.components(separatedBy: "### Status").count == 2)
+    }
+}
+
+@Suite("Obsidian scaffolding backfill")
+struct ObsidianBackfillTests {
+    private func tempVault() -> (ObsidianVaultConfig, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("halle-test-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return (ObsidianVaultConfig(vaultPath: dir.path, bookmarkData: nil, subfolderName: "Hall-e"), dir)
+    }
+
+    private func event() -> UnifiedEvent {
+        UnifiedEvent(dedupKey: "ical:UID-888@2000", title: "Backfill Check",
+                     startTs: Date(timeIntervalSince1970: 1_800_100_000),
+                     endTs: Date(timeIntervalSince1970: 1_800_103_600), isAllDay: false,
+                     status: "confirmed", effectiveResponse: "accepted",
+                     meetingURL: nil, location: nil, descriptionText: nil,
+                     htmlLink: nil, organizerEmail: nil, attendeesJSON: nil,
+                     iCalUID: "UID-888", winnerAccountEmail: "gabriel@getaccurate.cl",
+                     projectId: "Accurate", projectConfidence: 0.9, sourcesJSON: "[]")
+    }
+
+    /// Simulates a transient failure after the note file was written (index or
+    /// daily-note append failed): a later run must complete the missing links.
+    @Test func rerunBackfillsMissingIndexAndDailyNote() throws {
+        let (config, dir) = tempVault()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let service = MeetingNoteService(config: config, vaultURL: dir)
+
+        _ = try service.createOrFindMeetingNote(for: event(), projectName: "Accurate")
+        let base = dir.appendingPathComponent("Hall-e")
+        let index = base.appendingPathComponent("Projects/Accurate/Meetings.md")
+        let daily = base.appendingPathComponent("Daily")
+        try FileManager.default.removeItem(at: index)
+        try FileManager.default.removeItem(at: daily)
+
+        let second = try service.createOrFindMeetingNote(for: event(), projectName: "Accurate")
+        #expect(!second.wasCreated)
+        #expect(FileManager.default.fileExists(atPath: index.path))
+        let idx = try String(contentsOf: index, encoding: .utf8)
+        #expect(idx.contains("Backfill Check"))
+        #expect(FileManager.default.fileExists(atPath: daily.path))
+    }
 }

@@ -37,25 +37,37 @@ enum GoogleAccountManager {
         try KeychainStore.set(refresh, account: KeychainStore.googleRefreshAccount(email: email))
         await TokenStore.shared.seed(email: email, accessToken: tokens.accessToken, expiresIn: tokens.expiresIn)
 
-        try persistAccount(email: email)
+        try await persistAccount(email: email)
         Log.oauth.info("Connected Google account \(email, privacy: .private)")
         return email
     }
 
     static func removeAccount(_ email: String) {
         KeychainStore.delete(account: KeychainStore.googleRefreshAccount(email: email))
-        try? AppDatabase.shared.dbQueue.write { db in
-            _ = try ConnectedAccount.deleteOne(db, key: email)
-            // calendar_source rows cascade via FK.
-            try CalendarEvent.filter(CalendarEvent.Columns.accountEmail == email).deleteAll(db)
+        Task {
+            try? await AppDatabase.shared.dbQueue.write { db in
+                _ = try ConnectedAccount.deleteOne(db, key: email)
+                // calendar_source rows cascade via FK.
+                try CalendarEvent.filter(CalendarEvent.Columns.accountEmail == email).deleteAll(db)
+            }
+            await TokenStore.shared.invalidate(email)
+            await SyncCoordinator.shared.rebuildAfterSourceChange()
         }
-        Task { await TokenStore.shared.invalidate(email) }
     }
 
     static func toggleCalendar(accountEmail: String, calendarId: String, selected: Bool) {
-        try? AppDatabase.shared.dbQueue.write { db in
-            try db.execute(sql: "UPDATE calendar_source SET isSelected = ? WHERE accountEmail = ? AND calendarId = ?",
-                           arguments: [selected, accountEmail, calendarId])
+        Task {
+            try? await AppDatabase.shared.dbQueue.write { db in
+                try db.execute(sql: "UPDATE calendar_source SET isSelected = ? WHERE accountEmail = ? AND calendarId = ?",
+                               arguments: [selected, accountEmail, calendarId])
+                if !selected {
+                    try CalendarEvent
+                        .filter(CalendarEvent.Columns.accountEmail == accountEmail
+                                && CalendarEvent.Columns.calendarId == calendarId)
+                        .deleteAll(db)
+                }
+            }
+            await SyncCoordinator.shared.rebuildAfterSourceChange()
         }
     }
 
@@ -81,17 +93,21 @@ enum GoogleAccountManager {
 
     private static var pendingCalendars: [String: [CalendarListEntry]] = [:]
 
-    private static func persistAccount(email: String) throws {
-        let existing = try AppDatabase.shared.dbQueue.read { try ConnectedAccount.fetchCount($0) }
+    private static func persistAccount(email: String) async throws {
+        // Always drop the stash, even when a write below throws — otherwise a
+        // failed connect leaks the entry until the next successful one.
+        defer { pendingCalendars[email] = nil }
+        let existing = try await AppDatabase.shared.dbQueue.read { try ConnectedAccount.fetchCount($0) }
         let color = palette[existing % palette.count]
-        try AppDatabase.shared.dbQueue.write { db in
+        let calendars = pendingCalendars[email] ?? []
+        try await AppDatabase.shared.dbQueue.write { db in
             var account = try ConnectedAccount.fetchOne(db, key: email)
                 ?? ConnectedAccount(email: email, displayName: nil, colorHex: color,
                                     addedAt: Date(), needsReauth: false, lastSyncAt: nil, lastSyncError: nil)
             account.needsReauth = false
             try account.save(db)
 
-            for entry in pendingCalendars[email] ?? [] {
+            for entry in calendars {
                 let isPrimary = entry.primary == true
                 var source = try CalendarSource.fetchOne(db, key: ["accountEmail": email, "calendarId": entry.id])
                     ?? CalendarSource(accountEmail: email, calendarId: entry.id,
@@ -106,6 +122,5 @@ enum GoogleAccountManager {
                 try source.save(db)
             }
         }
-        pendingCalendars[email] = nil
     }
 }

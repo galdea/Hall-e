@@ -17,6 +17,34 @@ struct ActionItem: Codable, Hashable {
     var confidence: Double?
 }
 
+struct MeetingInsights: Codable, Hashable {
+    var cleanedTranscript: String?
+    var summary: String
+    var decisions: [String]
+    var actionItems: [ActionItem]
+    var followUps: [String]
+    var risks: [String]
+    var confidence: Double?
+    var source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case cleanedTranscript = "cleaned_transcript"
+        case summary, decisions
+        case actionItems = "action_items"
+        case followUps = "follow_ups"
+        case risks, confidence, source
+    }
+
+    init(cleanedTranscript: String? = nil, summary: String = "", decisions: [String] = [],
+         actionItems: [ActionItem] = [], followUps: [String] = [], risks: [String] = [],
+         confidence: Double? = nil, source: String? = nil) {
+        self.cleanedTranscript = cleanedTranscript; self.summary = summary
+        self.decisions = decisions; self.actionItems = actionItems
+        self.followUps = followUps; self.risks = risks
+        self.confidence = confidence; self.source = source
+    }
+}
+
 struct BriefEventInput {
     var time: String
     var title: String
@@ -56,4 +84,34 @@ protocol LLMProvider: Sendable {
     func summarizeTranscript(_ transcript: String, context: MeetingContext) async throws -> String
     func extractActionItems(_ transcript: String, context: MeetingContext) async throws -> [ActionItem]
     func generateDailyBrief(_ events: [BriefEventInput]) async throws -> String
+    func extractMeetingInsights(_ transcript: String, context: MeetingContext) async throws -> MeetingInsights
+    /// One short subject line for naming a recording, or nil when the transcript
+    /// does not support one. Never throws its way into a made-up title.
+    func describeMeetingTopic(_ transcript: String, context: MeetingContext) async throws -> String?
+    func generateProjectSnapshot(context: ProjectAssistantContext) async throws -> ProjectSnapshotPayload
+    func answerProjectQuestion(_ question: String, context: ProjectAssistantContext) async throws -> ProjectAssistantAnswer
+}
+
+extension LLMProvider {
+    /// Compatibility fallback for providers that have not implemented a single
+    /// structured request yet. Chat-style providers override this with one call.
+    func extractMeetingInsights(_ transcript: String, context: MeetingContext) async throws -> MeetingInsights {
+        let summary = try await summarizeTranscript(transcript, context: context)
+        let actions = try await extractActionItems(transcript, context: context)
+        return MeetingInsights(summary: summary, actionItems: actions, source: providerName)
+    }
+
+    /// Providers that cannot name a recording simply do not; the caller keeps
+    /// the calendar title rather than failing the recording.
+    func describeMeetingTopic(_ transcript: String, context: MeetingContext) async throws -> String? {
+        nil
+    }
+
+    func generateProjectSnapshot(context: ProjectAssistantContext) async throws -> ProjectSnapshotPayload {
+        throw LLMError.featureDisabled
+    }
+
+    func answerProjectQuestion(_ question: String, context: ProjectAssistantContext) async throws -> ProjectAssistantAnswer {
+        throw LLMError.featureDisabled
+    }
 }

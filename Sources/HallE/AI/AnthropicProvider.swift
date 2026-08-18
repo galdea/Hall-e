@@ -68,6 +68,9 @@ struct GeminiProvider: ChatCompletionProvider {
 /// Default when AI is off or unconfigured: every call fails with .featureDisabled,
 /// which callers treat as "skip enrichment".
 struct DisabledLLMProvider: LLMProvider {
+    /// Non-nil when AI is ON but misconfigured (missing key/model) — lets the
+    /// settings UI say why instead of silently doing nothing.
+    var reason: String? = nil
     var providerName: String { "Disabled" }
     func testConnection() async throws -> ConnectionTestResult { throw LLMError.featureDisabled }
     func classifyMeeting(_ input: ClassificationInput, candidates: [String]) async throws -> MeetingClassificationResult { throw LLMError.featureDisabled }

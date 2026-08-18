@@ -2,16 +2,46 @@ import Foundation
 
 /// Reads recording sessions from disk (there's no DB table for them) so the UI
 /// can show a per-meeting transcript button keyed by the event's dedupKey.
+///
+/// Recordings are kept indefinitely. Nothing in Hall-e expires, rotates, or
+/// prunes them: the only removal path is `RecordingDeletionService`, driven by
+/// an explicit user action. Anything added here that deletes audio on the
+/// app's own initiative breaks that guarantee.
 enum RecordingStore {
-    static func allSessions() -> [RecordingSession] {
-        let dir = AppPaths.recordingsDir
-        guard let subs = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil) else { return [] }
-        return subs.compactMap { sub in
-            let file = sub.appendingPathComponent("session.json")
-            guard let data = try? Data(contentsOf: file) else { return nil }
-            return try? JSONDecoder().decode(RecordingSession.self, from: data)
+    enum DeletionError: LocalizedError {
+        case invalidRecordingFolder
+
+        var errorDescription: String? {
+            "Hall-e refused to delete a folder outside its recordings directory."
         }
+    }
+
+    static func allSessions() -> [RecordingSession] {
+        sessions(in: AppPaths.recordingsDir)
+    }
+
+    /// Recordings sit one level deep, inside their thematic project folder.
+    /// The root is still read directly so recordings from the flat layout — or
+    /// from a migration that was interrupted halfway — stay visible instead of
+    /// silently disappearing from the UI.
+    static func sessions(in root: URL) -> [RecordingSession] {
+        directories(in: root).flatMap { entry -> [RecordingSession] in
+            if let session = session(inFolder: entry) { return [session] }
+            return directories(in: entry).compactMap(session(inFolder:))
+        }
+    }
+
+    private static func directories(in url: URL) -> [URL] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        return contents.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        }
+    }
+
+    private static func session(inFolder folder: URL) -> RecordingSession? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("session.json")) else { return nil }
+        return try? JSONDecoder().decode(RecordingSession.self, from: data)
     }
 
     /// Latest session per event (by start time).
@@ -24,7 +54,151 @@ enum RecordingStore {
         return map
     }
 
+    static func allSessions(for eventDedupKey: String) -> [RecordingSession] {
+        allSessions().filter { $0.eventDedupKey == eventDedupKey }
+            .sorted { $0.startedAt > $1.startedAt }
+    }
+
     static func transcriptText(for session: RecordingSession) -> String? {
         TranscriptStore.load(session)?.plainText
+    }
+
+    static func delete(_ session: RecordingSession) throws {
+        try deleteSessionFolder(relativePath: session.folderPath ?? session.slug,
+                                recordingsDirectory: AppPaths.recordingsDir)
+    }
+
+    /// Deletes exactly one recording folder. Now that recordings are nested a
+    /// level deeper, the old "parent must be the root" guard would have to be
+    /// relaxed — so the check is instead that the target sits one or two levels
+    /// under the root *and* holds a `session.json`. Without the second half, a
+    /// bad relative path could take out a whole project folder.
+    static func deleteSessionFolder(relativePath: String, recordingsDirectory: URL) throws {
+        let root = recordingsDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        var candidate = root
+        for part in relativePath.split(separator: "/") { candidate.appendPathComponent(String(part)) }
+        let target = candidate.standardizedFileURL.resolvingSymlinksInPath()
+
+        let rootParts = root.pathComponents
+        let targetParts = target.pathComponents
+        let depth = targetParts.count - rootParts.count
+        guard depth == 1 || depth == 2, Array(targetParts.prefix(rootParts.count)) == rootParts else {
+            throw DeletionError.invalidRecordingFolder
+        }
+        guard FileManager.default.fileExists(atPath: target.path) else { return }
+        guard FileManager.default.fileExists(
+            atPath: target.appendingPathComponent("session.json").path) else {
+            throw DeletionError.invalidRecordingFolder
+        }
+        try FileManager.default.removeItem(at: target)
+    }
+
+    /// Called once at launch: an in-flight transcription cannot still own the
+    /// Speech request after Hall-e quits. Queue it for resume, retaining all
+    /// completed chunk checkpoints rather than turning it into a generic error.
+    static func reconcileStaleTranscripts() {
+        for var session in allSessions() {
+            var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+            guard job.status == .running || session.transcriptStatus == .inProgress else { continue }
+            job.status = .queued
+            job.startedAt = nil
+            job.lastError = nil
+            for index in job.tracks.indices where job.tracks[index].status == .running {
+                job.tracks[index].status = .queued
+            }
+            session.transcriptionJob = job
+            session.transcriptStatus = .pending
+            session.save()
+            Log.rec.info("queued interrupted transcription for resume: \(session.slug, privacy: .public)")
+        }
+    }
+
+    /// Migration for recordings created before durable jobs. Failed recordings
+    /// get exactly one idle retry after upgrade; later retries remain user-led.
+    static func enqueueLegacyFailuresForRetryOnce() {
+        guard AppPreferences.transcriptionRecoveryMigration < 1 else { return }
+        for var session in allSessions() where session.transcriptStatus == .failed {
+            var job = session.transcriptionJob ?? .legacy(status: .failed)
+            job.queueForRetry()
+            session.transcriptionJob = job
+            session.transcriptStatus = .pending
+            session.save()
+        }
+        AppPreferences.transcriptionRecoveryMigration = 1
+    }
+
+    /// Older builds could complete a job with Apple's recognizer when the
+    /// intended local Whisper engine was not installed. Those sessions have no
+    /// durable job field, so migrate them once when the primary engine is in
+    /// use. Keep the old JSON beside the recording until the replacement is
+    /// successfully written; the audio remains the source of truth.
+    static func enqueueAppleSpeechFallbacksForRetryOnce() {
+        guard AppPreferences.transcriptionRecoveryMigration < 2 else { return }
+        guard AppPreferences.transcriptionEngine != .sfSpeech else {
+            AppPreferences.transcriptionRecoveryMigration = 2
+            return
+        }
+
+        for var session in allSessions() {
+            guard session.transcriptStatus == .completed,
+                  session.transcriptionJob == nil,
+                  let transcript = TranscriptStore.load(session),
+                  transcript.source == "sfspeech-on-device" else { continue }
+
+            let backup = session.folderURL.appendingPathComponent("transcript.json.bak-auto-sfspeech")
+            do {
+                if FileManager.default.fileExists(atPath: backup.path) {
+                    try FileManager.default.removeItem(at: backup)
+                }
+                try FileManager.default.moveItem(at: session.transcriptFileURL, to: backup)
+            } catch {
+                Log.rec.error("could not preserve fallback transcript for retry: \(error, privacy: .public)")
+                continue
+            }
+
+            var job = TranscriptionJob()
+            job.resetForRetranscription()
+            session.transcriptionJob = job
+            session.transcriptStatus = .pending
+            session.localeUsed = nil
+            session.save()
+            Log.rec.info("queued Apple Speech fallback for Whisper recovery: \(session.slug, privacy: .public)")
+        }
+        AppPreferences.transcriptionRecoveryMigration = 2
+    }
+
+    static func queuedSessions() -> [RecordingSession] {
+        allSessions().filter {
+            let job = $0.transcriptionJob ?? .legacy(status: $0.transcriptStatus)
+            return job.status == .queued
+        // Recover the newest meeting first so a just-finished call is not
+        // hidden behind an older, potentially hours-long recording.
+        }.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    @discardableResult
+    static func queueRetry(slug: String) -> RecordingSession? {
+        guard var session = allSessions().first(where: { $0.slug == slug }) else { return nil }
+        var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+        job.queueForRetry()
+        session.transcriptionJob = job
+        session.transcriptStatus = .pending
+        session.save()
+        return session
+    }
+
+    @discardableResult
+    static func queueRetranscription(slug: String) -> RecordingSession? {
+        guard var session = allSessions().first(where: { $0.slug == slug }) else { return nil }
+        var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+        job.resetForRetranscription()
+        session.transcriptionJob = job
+        session.transcriptStatus = .pending
+        session.localeUsed = nil
+        // Keep the active transcript until a replacement validates and is
+        // atomically promoted. A failed cloud request must never erase the last
+        // usable local result.
+        session.save()
+        return session
     }
 }

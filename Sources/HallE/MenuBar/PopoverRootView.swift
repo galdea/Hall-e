@@ -3,7 +3,43 @@ import SwiftUI
 enum PopoverMode: String, CaseIterable, Identifiable {
     case day, week, month
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String { L10n.text("popover.\(rawValue)") }
+}
+
+/// Which period the week/month tabs point at. Hall-e lives in the menu bar for
+/// days at a time and the popover keeps one hosting controller for the whole
+/// run, so this has to be reset deliberately — otherwise the month grid keeps
+/// selecting whichever day was current at launch.
+struct PopoverPeriodSelection: Equatable {
+    var anchor: Date
+    var selectedDay: Date
+
+    init(now: Date = Date(), calendar: Calendar = .current) {
+        anchor = now
+        selectedDay = calendar.startOfDay(for: now)
+    }
+
+    /// Idempotent: already showing today writes nothing, so reopening the
+    /// popover on the same day does not churn SwiftUI state.
+    mutating func resetToToday(now: Date = Date(), calendar: Calendar = .current) {
+        let today = calendar.startOfDay(for: now)
+        if !calendar.isDate(anchor, inSameDayAs: today) { anchor = now }
+        if selectedDay != today { selectedDay = today }
+    }
+
+    mutating func shiftMonth(_ direction: Int, calendar: Calendar = .current) {
+        guard let shifted = calendar.date(byAdding: .month, value: direction, to: anchor) else { return }
+        anchor = shifted
+        // Land on the month's first day: the previously selected day number may
+        // not exist in the new month, and it is never "current" there anyway.
+        selectedDay = calendar.date(from: calendar.dateComponents([.year, .month], from: shifted))
+            ?? calendar.startOfDay(for: shifted)
+    }
+
+    mutating func shiftWeek(_ direction: Int, calendar: Calendar = .current) {
+        guard let shifted = calendar.date(byAdding: .day, value: 7 * direction, to: anchor) else { return }
+        anchor = shifted
+    }
 }
 
 /// Root of the menu-bar popover: header, a Day / Week / Month switcher, and the
@@ -14,11 +50,13 @@ struct PopoverRootView: View {
         ProcessInfo.processInfo.environment["HALLE_DEBUG_POPOVER_MODE"]
             .flatMap(PopoverMode.init(rawValue:)) ?? .day
     }()
-    @State private var anchor = Date()                                   // reference date for week/month
-    @State private var selectedDay = Calendar.current.startOfDay(for: Date())
+    @State private var selection = PopoverPeriodSelection()
     @State private var syncedPeriods = Set<String>()
+    @State private var language = AppLanguageStore.shared
 
     private var cal: Calendar { var c = Calendar.current; c.timeZone = .current; return c }
+
+    private var anchor: Date { selection.anchor }                        // reference date for week/month
 
     /// Week = a rolling 7-day window starting at the anchor's day (default today),
     /// so it shows the next 7 days rather than the calendar week's past days.
@@ -36,44 +74,51 @@ struct PopoverRootView: View {
             Divider()
             modeBar
             Divider()
+            if let error = appState.lastSyncError { syncError(error) }
+            RecordingPromptBanner()
             content
                 .frame(maxHeight: .infinity)
             Divider()
             footer
         }
-        .frame(width: 440, height: 600)
-        .onChange(of: mode) { _, _ in syncVisiblePeriod() }
-        .onChange(of: anchor) { _, _ in syncVisiblePeriod() }
+        .frame(width: 460, height: 620)
+        .environment(\.locale, language.locale)
+        .id(language.language)
+        .onChange(of: mode) { _, newMode in
+            // Re-entering Month should present the current day, not the day that
+            // happened to be selected when the tab was last left.
+            if newMode == .month { goToToday() }
+            syncVisiblePeriod()
+        }
+        .onChange(of: selection.anchor) { _, _ in syncVisiblePeriod() }
+        .onReceive(NotificationCenter.default.publisher(for: .hallePopoverWillShow)) { _ in
+            goToToday()
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(Date.now, format: .dateTime.weekday(.wide).day().month(.wide))
-                    .font(.headline)
-                HStack(spacing: 5) {
-                    Text(Date.now, style: .time)
-                    if appState.isSyncing {
-                        ProgressView().controlSize(.mini)
-                    } else if let last = appState.lastSyncAt {
-                        Text("· synced \(last.formatted(date: .omitted, time: .shortened))")
-                    }
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(context.date, format: .dateTime.weekday(.wide).day().month(.wide)).font(.headline)
+                    HStack(spacing: 5) {
+                        Text(context.date, style: .time)
+                        if appState.isSyncing {
+                            ProgressView().controlSize(.mini)
+                        } else if let last = appState.lastSyncAt {
+                            Text("· " + L10n.format("popover.synced", last.formatted(date: .omitted, time: .shortened)))
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                SyncHealthButton()
+                Button { SettingsWindowController.shared.show() } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(.borderless).help(L10n.text("common.settings"))
             }
-            Spacer()
-            Button { Task { await SyncCoordinator.shared.syncAll() } } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless).help("Refresh now").disabled(appState.isSyncing)
-            Button { SettingsWindowController.shared.show() } label: {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(.borderless).help("Settings")
+            .padding(.horizontal, 14).padding(.vertical, 10)
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
     // MARK: - Mode switcher + period nav
@@ -96,7 +141,7 @@ struct PopoverRootView: View {
                         .buttonStyle(.borderless)
                 }
                 HStack {
-                    Button("Today") { goToToday() }.buttonStyle(.link).font(.caption)
+                    Button(L10n.text("workspace.today")) { goToToday() }.buttonStyle(.link).font(.caption)
                     Spacer()
                 }
             }
@@ -147,9 +192,10 @@ struct PopoverRootView: View {
     }
 
     private var monthView: some View {
+        let selectedDay = selection.selectedDay
         let dayTimeline = TimelineBuilder.build(events: appState.agenda, day: selectedDay)
         return VStack(spacing: 0) {
-            MonthGridView(events: appState.agenda, anchor: anchor, selectedDay: $selectedDay)
+            MonthGridView(events: appState.agenda, anchor: anchor, selectedDay: $selection.selectedDay)
                 .padding(.vertical, 8)
             Divider()
             HStack {
@@ -159,7 +205,7 @@ struct PopoverRootView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
             if dayTimeline.isEmpty {
-                Text("No meetings").font(.callout).foregroundStyle(.secondary)
+                Text(L10n.text("popover.noMeetings")).font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -178,13 +224,10 @@ struct PopoverRootView: View {
 
     private var footer: some View {
         HStack {
-            Text("Hall-e").font(.caption2).foregroundStyle(.tertiary)
-            if let err = appState.lastSyncError {
-                Label(err, systemImage: "exclamationmark.triangle")
-                    .font(.caption2).foregroundStyle(.orange).lineLimit(1)
-            }
+            Text(L10n.text("app.name")).font(.caption2).foregroundStyle(.tertiary)
             Spacer()
-            Button("Quit") { NSApp.terminate(nil) }.buttonStyle(.borderless).font(.caption)
+            Button(L10n.text("common.workspace")) { WorkspaceWindowController.shared.show() }.buttonStyle(.borderless).font(.caption)
+            Button(L10n.text("common.quit")) { NSApp.terminate(nil) }.buttonStyle(.borderless).font(.caption)
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
     }
@@ -199,16 +242,12 @@ struct PopoverRootView: View {
     }
 
     private func shift(_ direction: Int) {
-        if mode == .week {
-            if let d = cal.date(byAdding: .day, value: 7 * direction, to: anchor) { anchor = d }
-        } else {
-            if let d = cal.date(byAdding: .month, value: direction, to: anchor) { anchor = d }
-        }
+        if mode == .week { selection.shiftWeek(direction, calendar: cal) }
+        else { selection.shiftMonth(direction, calendar: cal) }
     }
 
     private func goToToday() {
-        anchor = Date()
-        selectedDay = cal.startOfDay(for: Date())
+        selection.resetToToday(calendar: cal)
     }
 
     private func syncVisiblePeriod() {
@@ -218,5 +257,16 @@ struct PopoverRootView: View {
         guard !syncedPeriods.contains(key) else { return }
         syncedPeriods.insert(key)
         Task { await SyncCoordinator.shared.syncRange(interval.start, interval.end) }
+    }
+
+    private func syncError(_ error: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text(error).font(.caption).lineLimit(2)
+            Spacer()
+            Button(L10n.text("common.retry")) { Task { await SyncCoordinator.shared.syncAll() } }.controlSize(.small)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(Color.orange.opacity(0.08))
     }
 }

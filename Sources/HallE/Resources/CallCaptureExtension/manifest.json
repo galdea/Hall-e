@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Hall-e Browser Calls",
+  "version": "1.0.0",
+  "description": "Locally notifies Hall-e when an approved call page opens. No browsing or audio data is uploaded.",
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "permissions": ["tabs", "storage", "nativeMessaging"],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://*.zoom.us/*",
+    "https://teams.microsoft.com/*",
+    "https://web.whatsapp.com/*",
+    "https://meet.jit.si/*",
+    "https://*.jitsi.org/*",
+    "https://whereby.com/*",
+    "https://*.whereby.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "action": { "default_title": "Hall-e Browser Calls" },
+  "options_ui": { "page": "options.html", "open_in_tab": true }
+}

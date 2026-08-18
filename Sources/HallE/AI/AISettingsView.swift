@@ -83,10 +83,11 @@ struct AISettingsView: View {
 
             Section("Privacy") {
                 Toggle("Use AI features", isOn: $config.useAI)
-                Toggle("Allow cloud processing of transcripts", isOn: $config.allowCloudTranscriptProcessing)
+                Toggle("Allow cloud processing of transcripts and imported conversations",
+                       isOn: $config.allowCloudTranscriptProcessing)
                     .disabled(!config.useAI)
                 Toggle("Prefer local processing when available", isOn: $config.preferLocal)
-                Text("Off by default. Deterministic classification, calendar sync, notifications, and Obsidian notes all work with AI disabled.")
+                Text("Off by default. When disabled, remote providers receive project notes with raw transcript sections removed, but not imported ChatGPT, Codex, or WhatsApp conversation text. Local Ollama and LM Studio providers can use that local context without uploading it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -100,7 +101,9 @@ struct AISettingsView: View {
     }
 
     private func refreshKeyStatus() {
-        keyIsSet = KeychainStore.exists(account: config.keychainAccount)
+        // resolveAPIKey also migrates keys stored by older builds under the
+        // host-derived account.
+        keyIsSet = config.resolveAPIKey() != nil
     }
 
     /// Heal configs pointing at models Google has since retired.
@@ -121,6 +124,9 @@ struct AISettingsView: View {
     }
     private func clearKey() {
         KeychainStore.delete(account: config.keychainAccount)
+        if config.legacyKeychainAccount != config.keychainAccount {
+            KeychainStore.delete(account: config.legacyKeychainAccount)
+        }
         refreshKeyStatus()
     }
 
@@ -128,7 +134,7 @@ struct AISettingsView: View {
         testing = true; testResult = nil
         defer { testing = false }
         config.save()
-        let key = config.kind.needsAPIKey ? KeychainStore.get(account: config.keychainAccount) : nil
+        let key = config.kind.needsAPIKey ? config.resolveAPIKey() : nil
         let provider = LLMProviderFactory.makeForTest(config: config, apiKey: key)
         do {
             let r = try await provider.testConnection()

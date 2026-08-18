@@ -57,29 +57,51 @@ struct VaultWriter {
     func updateFrontmatter(relativePath: String, key: String, value: String, pathBuilder: VaultPathBuilder) throws {
         let url = pathBuilder.absoluteURL(relativePath, vaultURL: vaultURL)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let (content, mtime) = try readWithMTime(url)
-        let updated = FrontmatterCodec.updateValue(content, key: key, value: value)
-        if updated == content { return }
-        try writeCheckingMTime(updated, to: url, expected: mtime)
+        try withConflictRetry(url) {
+            let (content, mtime) = try readWithMTime(url)
+            let updated = FrontmatterCodec.updateValue(content, key: key, value: value)
+            if updated == content { return }
+            try writeCheckingMTime(updated, to: url, expected: mtime)
+        }
     }
 
     // MARK: - Internals
 
+    /// How many times a merge is re-read and re-applied when the note changes
+    /// on disk between our read and write (e.g. an Obsidian edit landing).
+    private static let conflictRetries = 3
+
+    private func withConflictRetry<T>(_ url: URL, _ body: () throws -> T) throws -> T {
+        for attempt in 1...Self.conflictRetries {
+            do {
+                return try body()
+            } catch WriteError.conflict where attempt < Self.conflictRetries {
+                // Someone else just wrote the file; re-read and re-merge on top
+                // of their version instead of dropping our update.
+                usleep(50_000)
+            }
+        }
+        throw WriteError.conflict(url.lastPathComponent)
+    }
+
     private func applyMerge(url: URL, section: String, newContent: String,
                             headingAnchor: String, mode: MarkerBlockMerger.Mode,
                             sortDescending: Bool) throws -> URL {
-        let (content, mtime) = try readWithMTime(url)
-        let (merged, outcome) = MarkerBlockMerger.merge(
-            note: content, section: section, newContent: newContent,
-            headingAnchor: headingAnchor, mode: mode, sortDescending: sortDescending)
-        if outcome == .unchanged { return url }
-        try writeCheckingMTime(merged, to: url, expected: mtime)
-        return url
+        try withConflictRetry(url) {
+            let (content, mtime) = try readWithMTime(url)
+            let (merged, outcome) = MarkerBlockMerger.merge(
+                note: content, section: section, newContent: newContent,
+                headingAnchor: headingAnchor, mode: mode, sortDescending: sortDescending)
+            if outcome == .unchanged { return url }
+            try writeCheckingMTime(merged, to: url, expected: mtime)
+            return url
+        }
     }
 
     private func readWithMTime(_ url: URL) throws -> (String, Date?) {
-        let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+        let content = try String(contentsOf: url, encoding: .utf8)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let mtime = attributes[.modificationDate] as? Date
         return (content, mtime)
     }
 
@@ -104,10 +126,15 @@ struct VaultWriter {
         let dir = url.deletingLastPathComponent()
         let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).hall-e-tmp-\(UUID().uuidString)")
         try content.data(using: .utf8)!.write(to: tmp, options: [.atomic])
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-        } else {
-            try FileManager.default.moveItem(at: tmp, to: url)
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            } else {
+                try FileManager.default.moveItem(at: tmp, to: url)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
         }
     }
 }

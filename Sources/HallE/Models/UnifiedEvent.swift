@@ -32,6 +32,7 @@ struct UnifiedEvent: Codable, Identifiable, Hashable, FetchableRecord, Persistab
         static let startTs = Column(CodingKeys.startTs)
         static let endTs = Column(CodingKeys.endTs)
         static let status = Column(CodingKeys.status)
+        static let projectId = Column(CodingKeys.projectId)
     }
 
     var sources: [EventSource] {

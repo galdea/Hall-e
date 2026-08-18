@@ -9,12 +9,12 @@ final class SettingsWindowController: NSWindowController {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Hall-e Settings"
+        window.title = L10n.text("common.settings")
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: SettingsView())
         window.center()

@@ -12,9 +12,20 @@ enum JSONExtractor {
     }
 
     /// Decode a Codable type from an LLM reply, with repair + validation.
+    /// If the first balanced `{…}` doesn't decode (e.g. a stray `{}` in the
+    /// model's prose before the real payload), later objects are tried.
     static func decode<T: Decodable>(_ type: T.Type, from raw: String) -> T? {
-        guard let data = extractObject(raw) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
+        let decoder = JSONDecoder()
+        var remaining = Substring(stripFences(raw))
+        while let start = remaining.firstIndex(of: "{") {
+            if let object = firstBalancedObject(String(remaining[start...])),
+               let data = repair(object).data(using: .utf8),
+               let value = try? decoder.decode(T.self, from: data) {
+                return value
+            }
+            remaining = remaining[remaining.index(after: start)...]
+        }
+        return nil
     }
 
     // MARK: - Steps
@@ -59,15 +70,62 @@ enum JSONExtractor {
         return nil
     }
 
-    /// Light repairs: trailing commas, smart quotes.
+    /// Light repairs: smart quotes used as delimiters, trailing commas.
+    /// String-aware: characters inside proper `"…"` literals are left alone so
+    /// a summary containing “quotes” or a literal `,]` isn't corrupted.
     static func repair(_ s: String) -> String {
-        var t = s
-            .replacingOccurrences(of: "\u{201C}", with: "\"")  // “
-            .replacingOccurrences(of: "\u{201D}", with: "\"")  // ”
-            .replacingOccurrences(of: "\u{2018}", with: "'")   // ‘
-            .replacingOccurrences(of: "\u{2019}", with: "'")   // ’
-        // Remove trailing commas before } or ]
-        t = t.replacingOccurrences(of: ",\\s*([}\\]])", with: "$1", options: .regularExpression)
-        return t
+        // Pass 1: normalize smart quotes acting as string delimiters.
+        var normalized = ""
+        normalized.reserveCapacity(s.count)
+        var inString = false
+        var smartOpened = false
+        var escaped = false
+        for c in s {
+            if inString {
+                if escaped { escaped = false; normalized.append(c); continue }
+                if c == "\\" { escaped = true; normalized.append(c); continue }
+                if c == "\"" || (smartOpened && c == "\u{201D}") {
+                    inString = false; smartOpened = false
+                    normalized.append("\"")
+                    continue
+                }
+                normalized.append(c)
+            } else {
+                switch c {
+                case "\"": inString = true; smartOpened = false; normalized.append("\"")
+                case "\u{201C}", "\u{201D}": inString = true; smartOpened = true; normalized.append("\"")
+                case "\u{2018}", "\u{2019}": normalized.append("'")
+                default: normalized.append(c)
+                }
+            }
+        }
+        // Pass 2: drop trailing commas before } or ], outside strings only.
+        var out = ""
+        out.reserveCapacity(normalized.count)
+        inString = false
+        escaped = false
+        var i = normalized.startIndex
+        while i < normalized.endIndex {
+            let c = normalized[i]
+            if inString {
+                if escaped { escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == "\"" { inString = false }
+                out.append(c)
+            } else if c == "\"" {
+                inString = true
+                out.append(c)
+            } else if c == "," {
+                var j = normalized.index(after: i)
+                while j < normalized.endIndex, normalized[j].isWhitespace { j = normalized.index(after: j) }
+                if !(j < normalized.endIndex && (normalized[j] == "}" || normalized[j] == "]")) {
+                    out.append(c)
+                }
+            } else {
+                out.append(c)
+            }
+            i = normalized.index(after: i)
+        }
+        return out
     }
 }

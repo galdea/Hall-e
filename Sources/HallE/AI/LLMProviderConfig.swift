@@ -69,9 +69,27 @@ struct LLMProviderConfig: Codable, Equatable {
     var allowCloudTranscriptProcessing: Bool = false
     var preferLocal: Bool = true
 
+    /// Stable per-provider account. Independent of `baseURL` so editing the URL
+    /// (local/custom providers) can't orphan a stored key.
     var keychainAccount: String {
+        KeychainStore.llmKeyAccount(providerKind: kind.rawValue, host: kind.rawValue)
+    }
+
+    /// Account used by older builds (derived from the editable base-URL host).
+    var legacyKeychainAccount: String {
         let host = URL(string: baseURL)?.host ?? kind.rawValue
         return KeychainStore.llmKeyAccount(providerKind: kind.rawValue, host: host)
+    }
+
+    /// Reads the API key, migrating a legacy host-keyed entry to the stable
+    /// account the first time it's seen.
+    func resolveAPIKey() -> String? {
+        if let key = KeychainStore.get(account: keychainAccount), !key.isEmpty { return key }
+        guard legacyKeychainAccount != keychainAccount,
+              let legacy = KeychainStore.get(account: legacyKeychainAccount), !legacy.isEmpty
+        else { return nil }
+        try? KeychainStore.set(legacy, account: keychainAccount)
+        return legacy
     }
 
     static func load() -> LLMProviderConfig {

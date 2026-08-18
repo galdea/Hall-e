@@ -62,4 +62,9 @@ enum FrontmatterCodec {
     private static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "\"", with: "\\\"")
     }
+
+    static func escapedScalar(_ s: String) -> String {
+        escape(s.replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " "))
+    }
 }

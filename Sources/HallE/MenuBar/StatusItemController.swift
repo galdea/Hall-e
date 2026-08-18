@@ -22,7 +22,7 @@ final class StatusItemController: NSObject {
         }
         statusItem.isVisible = true
 
-        popover.contentSize = NSSize(width: 440, height: 600)
+        popover.contentSize = NSSize(width: 460, height: 620)
         // Debug runs keep the popover pinned (and floated, below) so it can be
         // screenshotted without fighting other apps for focus.
         popover.behavior = ProcessInfo.processInfo.environment["HALLE_DEBUG_SHOW_POPOVER"] == "1"
@@ -69,6 +69,11 @@ final class StatusItemController: NSObject {
     func showPopover() {
         guard let button = statusItem.button else { return }
         RefreshScheduler.shared.refreshIfStale()
+        // The popover keeps one hosting controller for the app's lifetime, so
+        // its SwiftUI state survives every close. Announce the reopen so the
+        // period views can land on today again instead of on whichever day was
+        // current when Hall-e last launched.
+        NotificationCenter.default.post(name: .hallePopoverWillShow, object: nil)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         // Agent apps are never frontmost by default; activate so the popover gets key events.
         NSApp.activate(ignoringOtherApps: true)
@@ -89,6 +94,7 @@ final class StatusItemController: NSObject {
             menu.addItem(.separator())
         }
         menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
+        menu.addItem(withTitle: "Open Workspace…", action: #selector(openWorkspace), keyEquivalent: "w").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
@@ -117,6 +123,8 @@ final class StatusItemController: NSObject {
         SettingsWindowController.shared.show()
     }
 
+    @objc private func openWorkspace() { WorkspaceWindowController.shared.show() }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -124,4 +132,5 @@ final class StatusItemController: NSObject {
 
 extension Notification.Name {
     static let halleManualRefresh = Notification.Name("cl.gabriel.hall-e.manualRefresh")
+    static let hallePopoverWillShow = Notification.Name("cl.gabriel.hall-e.popoverWillShow")
 }

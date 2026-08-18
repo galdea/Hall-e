@@ -30,6 +30,9 @@ final class SystemAudioRecorder {
     private var ioProcID: AudioDeviceIOProcID?
     private var file: AVAudioFile?
     private let ioQueue = DispatchQueue(label: "cl.gabriel.hall-e.systemaudio")
+    private let powerLock = NSLock()
+    private var latestPowerDB: Float = -160
+    private var latestPowerAt = Date.distantPast
 
     /// Start capturing `targetBundleID`'s output to `url`. Falls back to a global
     /// tap (excluding our own process) if the target process can't be resolved.
@@ -39,18 +42,14 @@ final class SystemAudioRecorder {
         // call can route its audio through a different process than a voice call.
         let procs = Self.processObjects(forBundleID: targetBundleID)
         let desc: CATapDescription
-        if !procs.isEmpty {
-            desc = CATapDescription(stereoMixdownOfProcesses: procs)
-        } else {
-            // Fallback: capture everything except ourselves.
-            let selfProc = Self.processObject(forPID: ProcessInfo.processInfo.processIdentifier)
-            desc = CATapDescription(stereoGlobalTapButExcludeProcesses: selfProc.map { [$0] } ?? [])
-        }
+        guard !procs.isEmpty else { throw CaptureError.processNotFound }
+        desc = CATapDescription(stereoMixdownOfProcesses: procs)
         desc.uuid = UUID()
         desc.name = "Hall-e capture"
         desc.muteBehavior = .unmuted
         desc.isPrivate = true
 
+        do {
         var tap = AudioObjectID(kAudioObjectUnknown)
         try check("AudioHardwareCreateProcessTap", AudioHardwareCreateProcessTap(desc, &tap))
         guard tap != kAudioObjectUnknown else { throw CaptureError.processNotFound }
@@ -94,11 +93,16 @@ final class SystemAudioRecorder {
             guard let self, let file = self.file,
                   let buffer = AVAudioPCMBuffer(pcmFormat: fmt, bufferListNoCopy: inInputData, deallocator: nil)
             else { return }
+            self.updatePower(from: buffer)
             try? file.write(from: buffer)
         }
         try check("AudioDeviceCreateIOProcIDWithBlock", st)
         ioProcID = newProcID
         try check("AudioDeviceStart", AudioDeviceStart(aggregateID, newProcID))
+        } catch {
+            stop()
+            throw error
+        }
     }
 
     func stop() {
@@ -113,8 +117,33 @@ final class SystemAudioRecorder {
         if tapID != kAudioObjectUnknown {
             AudioHardwareDestroyProcessTap(tapID); tapID = AudioObjectID(kAudioObjectUnknown)
         }
-        file = nil
+        // The IOProc block reads `file` on `ioQueue`; clear it there so any
+        // in-flight callback finishes its write before the file closes.
+        ioQueue.sync { file = nil }
+        powerLock.lock(); latestPowerDB = -160; powerLock.unlock()
     }
+
+    func currentPowerDB() -> Float {
+        powerLock.lock(); defer { powerLock.unlock() }
+        return Date().timeIntervalSince(latestPowerAt) > 1.5 ? -160 : latestPowerDB
+    }
+
+    private func updatePower(from buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        let frames = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frames > 0, channelCount > 0 else { return }
+        var sum: Float = 0
+        for channel in 0..<channelCount {
+            let samples = channels[channel]
+            for index in 0..<frames { sum += samples[index] * samples[index] }
+        }
+        let rms = sqrt(sum / Float(frames * channelCount))
+        let db = rms > 0 ? 20 * log10(rms) : -160
+        powerLock.lock(); latestPowerDB = db; latestPowerAt = Date(); powerLock.unlock()
+    }
+
+    deinit { stop() }
 
     // MARK: - Lookups
 

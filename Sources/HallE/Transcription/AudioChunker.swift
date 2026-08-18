@@ -4,7 +4,11 @@ import AVFoundation
 /// Splits a long audio file into overlapping windows so on-device recognition
 /// stays reliable. Returns temp files with their start offsets.
 enum AudioChunker {
-    struct Chunk { let url: URL; let offset: TimeInterval }
+    struct Chunk {
+        let index: Int
+        let url: URL
+        let offset: TimeInterval
+    }
 
     static let windowSeconds: TimeInterval = 240   // 4 min
     static let overlapSeconds: TimeInterval = 2
@@ -15,7 +19,7 @@ enum AudioChunker {
         let asset = AVURLAsset(url: fileURL)
         let duration = try await asset.load(.duration).seconds
         guard duration.isFinite, duration > windowSeconds else {
-            return [Chunk(url: fileURL, offset: 0)]
+            return [Chunk(index: 0, url: fileURL, offset: 0)]
         }
 
         var chunks: [Chunk] = []
@@ -24,6 +28,9 @@ enum AudioChunker {
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("halle-chunks-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        var exported = false
+        // A throw mid-loop would otherwise strand already-exported chunk files.
+        defer { if !exported { try? FileManager.default.removeItem(at: tmpDir) } }
 
         while start < duration {
             let end = min(start + windowSeconds, duration)
@@ -37,13 +44,15 @@ enum AudioChunker {
                 start: CMTime(seconds: start, preferredTimescale: 600),
                 duration: CMTime(seconds: end - start, preferredTimescale: 600))
             await export.export()
-            if export.status == .completed {
-                chunks.append(Chunk(url: out, offset: start))
+            guard export.status == .completed else {
+                throw TranscriptionError.failed(export.error?.localizedDescription ?? "audio chunk export failed")
             }
+            chunks.append(Chunk(index: index, url: out, offset: start))
             if end >= duration { break }
             start = end - overlapSeconds
             index += 1
         }
+        exported = true
         return chunks
     }
 

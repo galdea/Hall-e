@@ -45,3 +45,26 @@ struct JSONExtractorTests {
         #expect(r?.project == "X")
     }
 }
+
+@Suite("JSONExtractor hardening")
+struct JSONExtractorHardeningTests {
+    struct Sample: Codable, Equatable { let project: String?; let confidence: Double }
+
+    @Test func skipsStrayObjectBeforePayload() {
+        let raw = #"Reasoning: {} and also {"note":"irrelevant"} → {"project":"X","confidence":0.6}"#
+        let r = JSONExtractor.decode(Sample.self, from: raw)
+        #expect(r?.project == "X")
+    }
+
+    @Test func preservesCommaBracketInsideStrings() {
+        let raw = #"{"project":"weird ,] name","confidence":0.2,}"#
+        let r = JSONExtractor.decode(Sample.self, from: raw)
+        #expect(r?.project == "weird ,] name")
+    }
+
+    @Test func preservesSmartQuotesInsideStringValues() {
+        let raw = "{\"project\":\"a \u{201C}quoted\u{201D} word\",\"confidence\":0.3}"
+        let r = JSONExtractor.decode(Sample.self, from: raw)
+        #expect(r?.project == "a \u{201C}quoted\u{201D} word")
+    }
+}

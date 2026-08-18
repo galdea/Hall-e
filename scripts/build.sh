@@ -14,12 +14,14 @@ SIGN_ID="${SIGN_ID:-Hall-e Dev}"
 CONFIG="${CONFIG:-release}"
 
 swift build -c "$CONFIG" --product HallE
+swift build -c "$CONFIG" --product CallCaptureNativeHost
 
 APP="dist/Hall-e.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp ".build/$CONFIG/HallE" "$APP/Contents/MacOS/Hall-e"
+cp ".build/$CONFIG/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" \
     BundleResources/Info.plist > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
@@ -32,6 +34,7 @@ if [ -d ".build/$CONFIG/HallE_HallE.bundle" ]; then
   cp -R ".build/$CONFIG/HallE_HallE.bundle" "$APP/Contents/Resources/"
 fi
 
+codesign --force --sign "$SIGN_ID" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"
 codesign --force --sign "$SIGN_ID" --identifier cl.gabriel.hall-e "$APP"
 codesign --verify --verbose=2 "$APP"
 echo "✓ Built $APP ($VERSION build $BUILD_NUM)"

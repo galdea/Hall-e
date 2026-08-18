@@ -1,200 +1,656 @@
 import Foundation
 import AppKit
+import AVFoundation
 
-/// End-to-end recording flow: ensure note → consent → record → transcribe →
-/// merge transcript into the note → (AI-gated) enrich. Each step is idempotent
-/// and failures are isolated (a transcription failure still leaves a usable note
-/// and audio file).
+/// End-to-end local recording pipeline. A completed audio file is never treated
+/// as disposable merely because Speech, a vault, or one of two audio tracks
+/// fails: the durable job can always be retried from its own folder.
 @MainActor
 enum RecordingCoordinator {
-    static func startRecording(for event: UnifiedEvent) {
-        guard VaultAccess.isReachable(), let service = MeetingNoteService.make() else {
-            presentAlert("Choose an Obsidian vault first", "Settings → Obsidian.")
-            return
-        }
-        guard RecordingService.shared.isRecording == false else { return }
+    private static var recovering = false
 
-        // Consent reminder before any capture.
+    static func startRecording(for event: UnifiedEvent) {
+        guard RecordingService.shared.isRecording == false else { return }
         let consent = NSAlert()
         consent.messageText = "Record this meeting?"
-        consent.informativeText = "Hall-e will record your microphone locally and attach the audio to the meeting note. Let participants know they're being recorded."
+        consent.informativeText = "Hall-e records locally. Tell every participant before recording."
         consent.addButton(withTitle: "Start Recording")
         consent.addButton(withTitle: "Cancel")
         guard consent.runModal() == .alertFirstButtonReturn else { return }
+        startMeetingRecording(event, sourceKind: .calendarMeeting)
+    }
 
-        // Ensure the note exists so the recording has somewhere to attach.
-        let notePath: String?
-        do {
-            let descriptor = try service.createOrFindMeetingNote(for: event, projectName: event.projectId)
-            notePath = descriptor.vaultRelativePath
-        } catch {
-            notePath = nil
-            Log.rec.error("note ensure failed: \(error, privacy: .public)")
-        }
+    static func startAutomaticRecording(for event: UnifiedEvent) {
+        guard AppPreferences.autoRecordCalendarMeetings,
+              event.meetingURL != nil,
+              RecordingService.shared.isRecording == false else { return }
+        startMeetingRecording(event, sourceKind: .calendarMeeting)
+    }
 
+    /// Called after the explicit browser/call prompt. The prompt itself is the
+    /// consent action, so do not show a second competing dialog here.
+    static func startDetectedCall(for event: UnifiedEvent, identity: CallIdentity,
+                                  localEvent: LocalCaptureEvent? = nil) {
+        guard RecordingService.shared.isRecording == false else { return }
+        let notePath = ensureNote(for: event, kind: localEvent == nil ? .meeting : .call)
+        let source = identity.provider.recordingSource
         Task {
-            await RecordingService.shared.start(for: event, notePath: notePath) { session in
+            await RecordingService.shared.startCall(for: event, notePath: notePath, sourceKind: source) { session in
+                Task {
+                    if let localID = session.localCaptureEventID {
+                        await LocalCaptureEventStore.shared.finish(id: localID)
+                    }
+                    if localEvent == nil {
+                        await transcribeAndMerge(session: session, event: event)
+                    } else {
+                        await finishCall(session: session, event: event)
+                    }
+                }
+            }
+            RecordingService.shared.attachCall(identityKey: identity.key, localCaptureEventID: localEvent?.id)
+        }
+    }
+
+    private static func startMeetingRecording(_ event: UnifiedEvent, sourceKind: RecordingSourceKind) {
+        let notePath = ensureNote(for: event, kind: .meeting)
+        Task {
+            await RecordingService.shared.start(for: event, notePath: notePath, sourceKind: sourceKind) { session in
                 Task { await transcribeAndMerge(session: session, event: event) }
             }
         }
     }
 
-    /// Runs after recording stops.
-    static func transcribeAndMerge(session incoming: RecordingSession, event: UnifiedEvent) async {
-        var session = incoming
-        guard let service = MeetingNoteService.make(), let notePath = session.notePath else { return }
-        let pb = VaultPathBuilder(config: service.config)
-        let writer = VaultWriter(vaultURL: service.vaultURL)
-
-        try? writer.updateFrontmatter(relativePath: notePath, key: "recording_path",
-                                      value: session.folderURL.path, pathBuilder: pb)
-        session.transcriptStatus = .inProgress; session.save(); notifyRecordingChanged()
-        try? writer.updateFrontmatter(relativePath: notePath, key: "transcript_status",
-                                      value: "inProgress", pathBuilder: pb)
-
-        // Transcribe off the main actor.
-        let transcript: Transcript?
+    private static func ensureNote(for event: UnifiedEvent, kind: NoteKind) -> String? {
+        guard let service = MeetingNoteService.make() else { return nil }
         do {
-            transcript = try await LocalTranscriptionProvider()
-                .transcribe(fileURL: session.micURL, sessionID: session.id, track: "mic")
+            return try service.createOrFindMeetingNote(for: event, projectName: event.projectId, kind: kind).vaultRelativePath
         } catch {
-            Log.rec.error("transcription failed: \(error, privacy: .public)")
-            session.transcriptStatus = .failed; session.save(); notifyRecordingChanged()
-            try? writer.updateFrontmatter(relativePath: notePath, key: "transcript_status",
-                                          value: "failed", pathBuilder: pb)
-            return
+            Log.rec.error("note ensure failed: \(error, privacy: .public)")
+            return nil
         }
-        guard let transcript else {
-            session.transcriptStatus = .failed; session.save(); notifyRecordingChanged()
-            return
-        }
-        TranscriptStore.save(transcript, to: session)
-        session.transcriptStatus = .completed
-        session.localeUsed = transcript.localeUsed
-        session.save(); notifyRecordingChanged()
-
-        // Merge transcript text into the note (replaces the placeholder).
-        try? writer.mergeSection(relativePath: notePath, section: "transcript",
-                                 newContent: transcript.plainText.isEmpty ? "_(no speech recognized)_" : transcript.plainText,
-                                 headingAnchor: "Transcript", mode: .replace, pathBuilder: pb)
-        try? writer.updateFrontmatter(relativePath: notePath, key: "transcript_status",
-                                      value: "completed", pathBuilder: pb)
-
-        // AI enrichment (gated on cloud-processing toggle).
-        let context = MeetingContext(title: event.title, project: event.projectId,
-                                     date: HalleDate.day(event.startTs),
-                                     attendees: event.attendees.compactMap { $0.email })
-        await TranscriptPostProcessor(service: service, notePath: notePath, context: context)
-            .enrich(transcript: transcript.plainText)
-
-        Log.rec.info("recording pipeline complete for \(event.title, privacy: .public)")
     }
 
-    // MARK: - WhatsApp call recording
+    // MARK: - Durable transcription
 
-    /// Manual "Record WhatsApp call" entry (also used by the auto-prompt). Records
-    /// (mic now; + system audio in Phase C), then transcribes → classifies the
-    /// transcript → files a Calls note into the resolved project.
+    /// Runs after a meeting recording stops, and also for a retry after relaunch.
+    static func transcribeAndMerge(session incoming: RecordingSession, event: UnifiedEvent) async {
+        var session = incoming
+        if let playback = await RecordingMixdownService.makePlaybackMix(for: session) {
+            session.playbackFileName = playback
+            session.save(); notifyRecordingChanged()
+        }
+        guard let result = await transcribeTracks(session: session) else {
+            let latest = RecordingStore.allSessions().first(where: { $0.id == session.id })
+            updateVaultTranscriptStatus(session: latest ?? session,
+                                        value: latest?.transcriptionJob?.status.rawValue ?? "retryable-failed")
+            return
+        }
+        session = result.session
+        let transcript = result.transcript
+
+        let service = MeetingNoteService.make()
+        var notePath = session.notePath
+        if notePath == nil, let available = service {
+            do {
+                let descriptor = try available.createOrFindMeetingNote(for: event, projectName: event.projectId)
+                notePath = descriptor.vaultRelativePath
+                session.notePath = notePath
+                session.save()
+            } catch { Log.obsidian.error("late note creation failed: \(error, privacy: .public)") }
+        }
+        // Name and file the recording before the note is pointed at it: the
+        // transcript is already durable on disk, and doing it here means
+        // `recording_path` is written once, at the final location.
+        session = await RecordingLibrary.fileByContent(session: session, event: event,
+                                                       transcript: transcript.plainText)
+        notifyRecordingChanged()
+
+        if let service, let notePath {
+            let pb = VaultPathBuilder(config: service.config)
+            let writer = VaultWriter(vaultURL: service.vaultURL)
+            attemptVaultUpdate("recording_path frontmatter") {
+                try writer.updateFrontmatter(relativePath: notePath, key: "recording_path",
+                                              value: session.folderURL.path, pathBuilder: pb)
+            }
+            attemptVaultUpdate("transcript merge") {
+                try writer.mergeSection(relativePath: notePath, section: "transcript",
+                                        newContent: transcriptBody(transcript),
+                                        headingAnchor: "Transcript", mode: .replace, pathBuilder: pb)
+            }
+            attemptVaultUpdate("transcript_status frontmatter") {
+                try writer.updateFrontmatter(relativePath: notePath, key: "transcript_status",
+                                              value: "completed", pathBuilder: pb)
+            }
+            let context = MeetingContext(title: event.title, project: event.projectId,
+                                         date: HalleDate.day(event.startTs),
+                                         attendees: event.attendees.compactMap { $0.email })
+            if AppPreferences.allowCloudTranscriptReports {
+                session = await MeetingBriefingPipeline.run(session: session, transcript: transcript,
+                                                            context: context, service: service, notePath: notePath)
+            } else {
+                await TranscriptPostProcessor(service: service, notePath: notePath, context: context)
+                    .enrich(transcript: transcript.plainText)
+            }
+        }
+        await VaultIndex.shared.reindex()
+    }
+
+    /// Manual WhatsApp entry remains available; all provider calls now use the
+    /// same persisted multi-track transcriber.
     static func startCallRecording() {
         guard RecordingService.shared.isRecording == false else { return }
         let consent = NSAlert()
-        consent.messageText = "¿Grabar esta llamada de WhatsApp?"
-        consent.informativeText = "Hall-e grabará el audio localmente y lo transcribirá. Avísale a la otra persona que la llamada está siendo grabada."
-        consent.addButton(withTitle: "Grabar")
-        consent.addButton(withTitle: "Cancelar")
+        consent.messageText = "Record this WhatsApp call?"
+        consent.informativeText = "Hall-e records locally. Tell the other participant before recording."
+        consent.addButton(withTitle: "Record")
+        consent.addButton(withTitle: "Cancel")
         guard consent.runModal() == .alertFirstButtonReturn else { return }
-
         let event = CallEvent.makeWhatsAppCall()
         Task {
-            await RecordingService.shared.startCall(for: event, notePath: nil) { session in
+            await RecordingService.shared.startCall(for: event, notePath: nil, sourceKind: .whatsAppCall) { session in
                 Task { await finishCall(session: session, event: event) }
             }
         }
     }
 
-    /// After a call recording stops: transcribe → classify by transcript → create
-    /// the Calls note in the resolved project → merge transcript → enrich.
     static func finishCall(session incoming: RecordingSession, event: UnifiedEvent) async {
         var session = incoming
-        session.transcriptStatus = .inProgress; session.save(); notifyRecordingChanged()
-
-        // Transcribe both tracks that exist (mic always; system if captured).
-        var segments: [TranscriptSegment] = []
-        var localeUsed = "en-US"
-        func transcribe(_ url: URL, track: String) async {
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let t = try? await LocalTranscriptionProvider().transcribe(fileURL: url, sessionID: session.id, track: track)
-            else { return }
-            segments.append(contentsOf: t.segments)
-            localeUsed = t.localeUsed
+        if let playback = await RecordingMixdownService.makePlaybackMix(for: session) {
+            session.playbackFileName = playback
+            session.save(); notifyRecordingChanged()
         }
-        await transcribe(session.micURL, track: "mic")
-        if session.systemAudioFileName != nil { await transcribe(session.systemAudioURL, track: "them") }
+        guard let result = await transcribeTracks(session: session) else { return }
+        session = result.session
+        let transcript = result.transcript
 
-        guard !segments.isEmpty else {
-            session.transcriptStatus = .failed; session.save(); notifyRecordingChanged(); return
-        }
-        segments.sort { $0.start < $1.start }
-        let transcript = Transcript(sessionID: session.id, localeUsed: localeUsed,
-                                    segments: segments, status: .completed, source: "sfspeech-on-device")
-        TranscriptStore.save(transcript, to: session)
-        session.transcriptStatus = .completed; session.localeUsed = localeUsed
-        session.save(); notifyRecordingChanged()
-
-        // Classify by transcript content (deterministic; AI fallback if enabled).
         var classified = event
         classified.descriptionText = transcript.plainText
         let classifier = MeetingClassifier()
-        var result = classifier.classifyTranscript(text: transcript.plainText)
+        var classification = classifier.classifyTranscript(text: transcript.plainText)
         let provider = LLMProviderFactory.make()
-        if !(provider is DisabledLLMProvider), !classifier.isConfident(result),
+        if !(provider is DisabledLLMProvider), !classifier.isConfident(classification),
            let ai = await classifier.aiClassify(classified, provider: provider) {
-            result = ai
+            classification = ai
         }
-        let projectName = result.requires_user_confirmation ? nil : result.project
+        let projectName = classification.requires_user_confirmation ? nil : classification.project
         classified.projectId = projectName
-        classified.projectConfidence = result.confidence
+        classified.projectConfidence = classification.confidence
 
-        // Create the Calls note in the resolved project (or Calls/Inbox).
-        guard let svc = MeetingNoteService.make() else {
-            Log.rec.error("no vault; call transcript saved to \(session.folderURL.path, privacy: .public)")
+        guard let service = MeetingNoteService.make() else { return }
+        do {
+            let descriptor = try service.createOrFindMeetingNote(for: classified, projectName: projectName, kind: .call)
+            session.notePath = descriptor.vaultRelativePath
+            session.save()
+            if let localID = session.localCaptureEventID {
+                await LocalCaptureEventStore.shared.updateNote(id: localID, notePath: descriptor.vaultRelativePath)
+            }
+            // File the call now that the transcript has told us which project it
+            // belongs to — a call starts out unclassified by definition.
+            session = await RecordingLibrary.fileByContent(session: session, event: classified,
+                                                           transcript: transcript.plainText)
+            notifyRecordingChanged()
+            let pb = VaultPathBuilder(config: service.config)
+            let writer = VaultWriter(vaultURL: service.vaultURL)
+            attemptVaultUpdate("call recording_path frontmatter") {
+                try writer.updateFrontmatter(relativePath: descriptor.vaultRelativePath, key: "recording_path",
+                                              value: session.folderURL.path, pathBuilder: pb)
+            }
+            attemptVaultUpdate("call transcript merge") {
+                try writer.mergeSection(relativePath: descriptor.vaultRelativePath, section: "transcript",
+                                        newContent: transcriptBody(transcript), headingAnchor: "Transcript",
+                                        mode: .replace, pathBuilder: pb)
+            }
+            attemptVaultUpdate("call transcript_status frontmatter") {
+                try writer.updateFrontmatter(relativePath: descriptor.vaultRelativePath, key: "transcript_status",
+                                              value: "completed", pathBuilder: pb)
+            }
+            let context = MeetingContext(title: classified.title, project: projectName,
+                                         date: HalleDate.day(classified.startTs), attendees: [])
+            if AppPreferences.allowCloudTranscriptReports {
+                session = await MeetingBriefingPipeline.run(session: session, transcript: transcript,
+                                                            context: context, service: service,
+                                                            notePath: descriptor.vaultRelativePath)
+            } else {
+                await TranscriptPostProcessor(service: service, notePath: descriptor.vaultRelativePath, context: context)
+                    .enrich(transcript: transcript.plainText)
+            }
+            await VaultIndex.shared.reindex()
+        } catch { Log.rec.error("call note creation failed: \(error, privacy: .public)") }
+    }
+
+    static func retry(session: RecordingSession) {
+        guard let queued = RecordingStore.queueRetry(slug: session.slug) else { return }
+        notifyRecordingChanged()
+        Task { await resume(queued) }
+    }
+
+    static func retryAll() {
+        let sessions = RecordingStore.allSessions().filter {
+            ($0.transcriptionJob ?? .legacy(status: $0.transcriptStatus)).status == .retryableFailed
+        }
+        for session in sessions { _ = RecordingStore.queueRetry(slug: session.slug) }
+        notifyRecordingChanged()
+        Task { await resumeQueuedJobsWhenIdle() }
+    }
+
+    /// Re-runs a completed session from its original audio. This clears the
+    /// completed-job short circuit and transcript file so a new engine/language
+    /// cannot accidentally reuse the old result.
+    static func retranscribe(session: RecordingSession) {
+        guard let queued = RecordingStore.queueRetranscription(slug: session.slug) else { return }
+        notifyRecordingChanged()
+        Task { await resume(queued) }
+    }
+
+    static func resumeQueuedJobsWhenIdle() async {
+        guard !recovering else {
+            Log.rec.info("transcription recovery skipped: another recovery is active")
             return
         }
-        do {
-            let descriptor = try svc.createOrFindMeetingNote(for: classified, projectName: projectName, kind: .call)
-            session.notePath = descriptor.vaultRelativePath; session.save()
-            let pb = VaultPathBuilder(config: svc.config)
-            let writer = VaultWriter(vaultURL: svc.vaultURL)
-            try? writer.updateFrontmatter(relativePath: descriptor.vaultRelativePath, key: "recording_path",
-                                          value: session.folderURL.path, pathBuilder: pb)
-            try? writer.mergeSection(relativePath: descriptor.vaultRelativePath, section: "transcript",
-                                     newContent: callTranscriptBody(transcript),
-                                     headingAnchor: "Transcript", mode: .replace, pathBuilder: pb)
-            let ctx = MeetingContext(title: classified.title, project: projectName,
-                                     date: HalleDate.day(classified.startTs), attendees: [])
-            await TranscriptPostProcessor(service: svc, notePath: descriptor.vaultRelativePath, context: ctx)
-                .enrich(transcript: transcript.plainText)
-            Log.rec.info("WhatsApp call filed → \(projectName ?? "Inbox", privacy: .public)")
-        } catch {
-            Log.rec.error("call note creation failed: \(error, privacy: .public)")
+        guard !RecordingService.shared.isRecording else {
+            Log.rec.info("transcription recovery skipped: recorder is active")
+            return
+        }
+        recovering = true
+        defer { recovering = false }
+        let sessions = RecordingStore.queuedSessions()
+        Log.rec.info("transcription recovery beginning for \(sessions.count, privacy: .public) queued job(s)")
+        for session in sessions {
+            guard !RecordingService.shared.isRecording else { return }
+            Log.rec.info("transcription recovery starting \(session.slug, privacy: .public)")
+            await resume(session)
         }
     }
 
-    /// Label each track's text ("Yo:" mic / "Ellos:" system) in speaking order.
-    private static func callTranscriptBody(_ t: Transcript) -> String {
-        let hasThem = t.segments.contains { $0.track == "them" }
-        guard hasThem else { return t.plainText.isEmpty ? "_(no speech recognized)_" : t.plainText }
-        return t.segments.map { seg in
-            let who = seg.track == "mic" ? "**Yo:**" : "**Ellos:**"
-            return "\(who) \(seg.text)"
-        }.joined(separator: "\n\n")
+    private static func resume(_ session: RecordingSession) async {
+        let event = session.eventSnapshot ?? recoveryEvent(for: session)
+        if session.localCaptureEventID != nil || session.sourceKind == .whatsAppCall || session.eventDedupKey.hasPrefix("whatsapp:") {
+            await finishCall(session: session, event: event)
+        } else {
+            await transcribeAndMerge(session: session, event: event)
+        }
+    }
+
+    private static func recoveryEvent(for session: RecordingSession) -> UnifiedEvent {
+        UnifiedEvent(dedupKey: session.eventDedupKey, title: session.eventTitle,
+                     startTs: session.eventStartAt ?? session.startedAt,
+                     endTs: session.endedAt ?? session.startedAt, isAllDay: false,
+                     status: "confirmed", effectiveResponse: nil, meetingURL: nil, location: nil,
+                     descriptionText: nil, htmlLink: nil, organizerEmail: nil, attendeesJSON: nil,
+                     iCalUID: nil, winnerAccountEmail: AppPreferences.primaryAccountEmail ?? "",
+                     projectId: nil, projectConfidence: nil, sourcesJSON: "[]")
+    }
+
+    private static func transcribeTracks(session initial: RecordingSession) async -> (session: RecordingSession, transcript: Transcript)? {
+        var session = initial
+        var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+        if job.status == .completed, let transcript = TranscriptStore.load(session) {
+            return (session, transcript)
+        }
+        job.beginAttempt()
+        session.transcriptionJob = job
+        session.transcriptStatus = .inProgress
+        session.save(); notifyRecordingChanged()
+
+        let prior = TranscriptStore.load(session) ?? Transcript(sessionID: session.id, localeUsed: session.localeUsed ?? "en-US",
+                                                                segments: [], status: .pending, source: "sfspeech-on-device")
+        let tracks = availableTracks(for: session)
+        guard !tracks.isEmpty else {
+            return markJobFailed(session: session, message: "No recording audio is available.")
+        }
+
+        let languagePreference = AppPreferences.transcriptionLanguage
+        let model = AppPreferences.whisperKitModel
+        let resolved = TranscriptionEngineResolver.resolve(
+            preference: AppPreferences.transcriptionEngine,
+            language: languagePreference,
+            model: model,
+            modelDownloaded: WhisperKitModelPaths.isDownloaded(model: model)
+        )
+        if case .whisperKitUnavailable = resolved {
+            let message = TranscriptionErrorSanitizer.message(TranscriptionError.modelNotDownloaded)
+            return markJobFailed(session: session, message: message)
+        }
+
+        if case .deepgram = resolved {
+            return await transcribeDeepgram(session: session, prior: prior)
+        }
+
+        let persistence = TranscriptionCheckpointPersistence(session: session, transcript: prior)
+        var successfulTrack = false
+        var locale = prior.localeUsed
+
+        for input in tracks {
+            let current = await persistence.track(named: input.track)
+            if current?.status == .completed {
+                successfulTrack = true
+                continue
+            }
+            await persistence.beginTrack(input.track, fileName: input.url.lastPathComponent)
+            let existing = await persistence.segments(for: input.track)
+            // If transcript.json was lost, recompute instead of trusting orphaned
+            // checkpoint flags. Repeating a chunk is safer than silently omitting it.
+            let completed = existing.isEmpty ? [] : (await persistence.completedChunks(for: input.track))
+            do {
+                let result: Transcript
+                switch resolved {
+                case .deepgram:
+                    // The whole mixed file is uploaded once so speaker labels
+                    // remain stable across the meeting. Handled above.
+                    throw DeepgramError.invalidResponse("Deepgram track routing error.")
+                case .whisperCLI(_, let language):
+                    result = try await WhisperCLITranscriptionProvider().transcribe(
+                        fileURL: input.url, sessionID: session.id, track: input.track,
+                        existingSegments: existing, completedChunkIndexes: completed,
+                        language: language,
+                        onPrepared: { chunks in
+                            await persistence.configure(track: input.track, chunks: chunks)
+                        },
+                        onCheckpoint: { checkpoint in
+                            await persistence.checkpoint(track: input.track,
+                                                         checkpoint: LocalTranscriptionProvider.Checkpoint(
+                                                            chunkIndex: checkpoint.chunkIndex,
+                                                            chunkCount: checkpoint.chunkCount,
+                                                            offset: checkpoint.offset,
+                                                            segments: checkpoint.segments))
+                        })
+                case .whisperKit(let model):
+                    // WhisperKit owns VAD chunking internally. Persist one
+                    // whole-track checkpoint so the durable job remains
+                    // coherent without reviving the old 240 s boundaries.
+                    result = try await WhisperKitTranscriptionProvider().transcribe(
+                        fileURL: input.url, sessionID: session.id, track: input.track,
+                        model: model, language: languagePreference.whisperCode)
+                    await persistence.checkpoint(track: input.track, segments: result.segments)
+                case .sfSpeech(let language):
+                    result = try await LocalTranscriptionProvider().transcribe(
+                        fileURL: input.url, sessionID: session.id, track: input.track,
+                        existingSegments: existing, completedChunkIndexes: completed,
+                        language: language,
+                        onPrepared: { chunks in
+                            await persistence.configure(track: input.track, chunks: chunks)
+                        },
+                        onCheckpoint: { checkpoint in
+                            await persistence.checkpoint(track: input.track, checkpoint: checkpoint)
+                        })
+                case .whisperKitUnavailable:
+                    // Handled before the track loop.
+                    throw TranscriptionError.modelNotDownloaded
+                }
+                locale = result.localeUsed
+                successfulTrack = true
+                await persistence.complete(track: input.track, locale: locale, source: result.source)
+            } catch {
+                await persistence.fail(track: input.track, message: TranscriptionErrorSanitizer.message(error))
+            }
+        }
+
+        // The model is deliberately held across mic + system tracks, then
+        // released before the next queued recording starts.
+        await WhisperKitEngine.shared.unload()
+
+        var snapshot = await persistence.snapshot()
+        if successfulTrack {
+            snapshot.session.transcriptionJob?.status = .completed
+            snapshot.session.transcriptionJob?.completedAt = Date()
+            snapshot.session.transcriptionJob?.lastError = nil
+            snapshot.session.transcriptStatus = .completed
+            snapshot.session.localeUsed = locale
+            snapshot.transcript.localeUsed = locale
+            snapshot.transcript.status = .completed
+            snapshot.transcript.segments.sort { $0.start < $1.start }
+            TranscriptStore.save(snapshot.transcript, to: snapshot.session)
+            snapshot.session.save(); notifyRecordingChanged()
+            return (snapshot.session, snapshot.transcript)
+        }
+        let message = snapshot.session.transcriptionJob?.tracks.compactMap(\.lastError).first
+            ?? "Hall-e could not transcribe the available audio."
+        return markJobFailed(session: snapshot.session, message: message)
+    }
+
+    private static func transcribeDeepgram(session initial: RecordingSession,
+                                           prior: Transcript) async -> (session: RecordingSession, transcript: Transcript)? {
+        var session = initial
+        let audioURL = session.playbackURL
+        guard FileManager.default.fileExists(atPath: audioURL.path) else {
+            return markJobFailed(session: session, message: "No mixed recording audio is available for Deepgram.")
+        }
+        let assetDuration = (try? await AVURLAsset(url: audioURL).load(.duration)).map(CMTimeGetSeconds) ?? 0
+        let duration = assetDuration.isFinite && assetDuration > 0
+            ? assetDuration : max(0, (session.endedAt ?? Date()).timeIntervalSince(session.startedAt))
+        let estimate = DeepgramConfiguration.estimatedCostUSD(duration: duration)
+        var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+        job.cloud = .init(state: AppPreferences.allowCloudAudioTranscription ? .uploading : .consentBlocked,
+                          requestFingerprint: "pending-audio-hash", estimatedCostUSD: estimate,
+                          requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
+                          updatedAt: Date())
+        session.transcriptionJob = job
+        session.save(); notifyRecordingChanged()
+
+        do {
+            let provider = DeepgramTranscriptionProvider(configuration: .init(),
+                                                         rawResponseDirectory: session.folderURL,
+                                                         duration: duration,
+                                                         responseCache: AppPaths.deepgramResponseCacheDir)
+            var replacement = try await provider.transcribe(fileURL: audioURL, sessionID: session.id, track: "mixed")
+            replacement.status = .completed
+            job.status = .completed
+            job.completedAt = Date()
+            job.lastError = nil
+            job.cloud = .init(state: .completed,
+                              requestFingerprint: replacement.providerMetadata?.audioSHA256 ?? "unknown",
+                              estimatedCostUSD: estimate,
+                              requestID: replacement.providerMetadata?.requestID,
+                              retryAfter: nil, lastHTTPStatus: 200, lastErrorCode: nil,
+                              updatedAt: Date())
+            session.transcriptionJob = job
+            session.transcriptStatus = .completed
+            session.localeUsed = replacement.localeUsed
+            TranscriptStore.save(replacement, to: session)
+            session.save(); notifyRecordingChanged()
+            await DeepgramCreditMonitor.noteCredentialUsed(replacement.providerMetadata?.credential)
+            return (session, replacement)
+        } catch let error as DeepgramError {
+            var state: CloudTranscriptionState = .retryableFailure
+            var status: TranscriptionJobStatus = .retryableFailed
+            var retryAfter: Date?
+            var httpStatus: Int?
+            var code: String?
+            switch error {
+            case .consentRequired:
+                state = .consentBlocked; status = .consentBlocked
+            case .missingAPIKey, .spendLimitExceeded, .actionRequired, .creditExhausted:
+                state = .actionRequired; status = .actionRequired
+                if case .actionRequired(let http, let providerCode) = error { httpStatus = http; code = providerCode }
+                if case .creditExhausted = error { httpStatus = 402 }
+                // Running out of money is the one failure Gabriel cannot discover
+                // by waiting, so it raises an alert rather than only a job state.
+                await DeepgramCreditMonitor.handle(error)
+            case .ambiguousBilling:
+                state = .ambiguousBilling; status = .ambiguousBilling
+            case .retryable(let http, let date, _):
+                retryAfter = date; httpStatus = http
+            case .invalidResponse:
+                state = .actionRequired; status = .actionRequired
+            }
+            let message = error.localizedDescription
+            if state == .retryableFailure, job.attemptCount < 5 {
+                status = .queued
+                if retryAfter == nil {
+                    let exponential = min(300.0, pow(2.0, Double(max(0, job.attemptCount - 1))) * 5.0)
+                    retryAfter = Date().addingTimeInterval(exponential + Double.random(in: 0...2))
+                }
+            } else if state == .retryableFailure {
+                state = .actionRequired; status = .actionRequired
+            }
+            job.status = status
+            job.lastError = message
+            job.cloud = .init(state: state, requestFingerprint: job.cloud?.requestFingerprint ?? "pending-audio-hash",
+                              estimatedCostUSD: estimate, requestID: nil, retryAfter: retryAfter,
+                              lastHTTPStatus: httpStatus, lastErrorCode: code, updatedAt: Date())
+            session.transcriptionJob = job
+            session.transcriptStatus = .failed
+            session.save(); notifyRecordingChanged()
+            if status == .queued, let retryAfter {
+                scheduleCloudRetry(sessionID: session.id, after: max(0, retryAfter.timeIntervalSinceNow))
+            }
+            // The prior transcript remains active on disk. Returning nil keeps
+            // downstream notes/reports from being regenerated from a failure.
+            _ = prior
+            return nil
+        } catch {
+            return markJobFailed(session: session, message: TranscriptionErrorSanitizer.message(error))
+        }
+    }
+
+    private static func scheduleCloudRetry(sessionID: UUID, after delay: TimeInterval) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !RecordingService.shared.isRecording,
+                  let queued = RecordingStore.allSessions().first(where: { $0.id == sessionID && $0.transcriptionJob?.status == .queued }) else { return }
+            await resume(queued)
+        }
+    }
+
+    private static func availableTracks(for session: RecordingSession) -> [(track: String, url: URL)] {
+        var tracks: [(String, URL)] = []
+        if FileManager.default.fileExists(atPath: session.micURL.path) { tracks.append(("mic", session.micURL)) }
+        if session.systemAudioFileName != nil, FileManager.default.fileExists(atPath: session.systemAudioURL.path) {
+            tracks.append(("system", session.systemAudioURL))
+        }
+        return tracks
+    }
+
+    private static func markJobFailed(session initial: RecordingSession, message: String) -> (session: RecordingSession, transcript: Transcript)? {
+        var session = initial
+        var job = session.transcriptionJob ?? .legacy(status: .failed)
+        job.status = .retryableFailed
+        job.lastError = message
+        session.transcriptionJob = job
+        session.transcriptStatus = .failed
+        session.save(); notifyRecordingChanged()
+        return nil
+    }
+
+    private static func updateVaultTranscriptStatus(session: RecordingSession, value: String) {
+        guard let service = MeetingNoteService.make(), let notePath = session.notePath else { return }
+        let pb = VaultPathBuilder(config: service.config)
+        attemptVaultUpdate("transcript_status frontmatter") {
+            try VaultWriter(vaultURL: service.vaultURL).updateFrontmatter(relativePath: notePath,
+                key: "transcript_status", value: value, pathBuilder: pb)
+        }
+    }
+
+    /// Renders a transcript for an Obsidian note. Deepgram diarization is the
+    /// whole point of the migration, so speaker turns must survive into the note;
+    /// writing `plainText` here silently discarded them for calendar meetings.
+    private static func transcriptBody(_ transcript: Transcript) -> String {
+        if transcript.segments.contains(where: { $0.speaker != nil }) {
+            return transcript.segments.map { segment in
+                let label = segment.speaker.map { "**Speaker \($0):**" } ?? "**Speaker:**"
+                return "\(label) \(segment.text)"
+            }.joined(separator: "\n\n")
+        }
+        let hasSystem = transcript.segments.contains { $0.track == "system" }
+        guard hasSystem else { return transcript.plainText.isEmpty ? "_(no speech recognized)_" : transcript.plainText }
+        return transcript.segments.map { "\($0.track == "mic" ? "**You:**" : "**Other audio:**") \($0.text)" }
+            .joined(separator: "\n\n")
     }
 
     private static func notifyRecordingChanged() {
         NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
     }
 
-    private static func presentAlert(_ title: String, _ info: String) {
-        let a = NSAlert(); a.messageText = title; a.informativeText = info; a.runModal()
+    private static func attemptVaultUpdate(_ label: String, _ body: () throws -> Void) {
+        do { try body() } catch { Log.obsidian.error("\(label, privacy: .public) failed: \(error, privacy: .public)") }
+    }
+}
+
+/// Serializes job + transcript checkpoints. Every completed chunk first lands in
+/// transcript.json and session.json before recognition proceeds to the next one.
+private actor TranscriptionCheckpointPersistence {
+    private var session: RecordingSession
+    private var transcript: Transcript
+
+    init(session: RecordingSession, transcript: Transcript) {
+        self.session = session
+        self.transcript = transcript
+    }
+
+    func track(named name: String) -> TranscriptionTrackProgress? {
+        session.transcriptionJob?.tracks.first { $0.track == name }
+    }
+
+    func segments(for track: String) -> [TranscriptSegment] { transcript.segments.filter { $0.track == track } }
+    func completedChunks(for track: String) -> Set<Int> {
+        session.transcriptionJob?.tracks.first { $0.track == track }?.completedChunkIndexes ?? []
+    }
+
+    func beginTrack(_ track: String, fileName: String) {
+        mutateTrack(track, fileName: fileName) { value in
+            value.status = .running
+            value.lastError = nil
+        }
+        persist()
+    }
+
+    func configure(track: String, chunks: [(index: Int, offset: TimeInterval)]) {
+        mutateTrack(track, fileName: "") { $0.configureChunks(chunks) }
+        persist()
+    }
+
+    func checkpoint(track: String, checkpoint: LocalTranscriptionProvider.Checkpoint) {
+        mutateTrack(track, fileName: "") { $0.markCompleted(checkpoint.chunkIndex) }
+        transcript.segments.removeAll { $0.track == track }
+        transcript.segments.append(contentsOf: checkpoint.segments)
+        transcript.segments.sort { $0.start < $1.start }
+        TranscriptStore.save(transcript, to: session)
+        persist()
+    }
+
+    func checkpoint(track: String, segments: [TranscriptSegment]) {
+        mutateTrack(track, fileName: "") { value in
+            value.chunks = [TranscriptionChunkProgress(index: 0, offset: 0, completed: true)]
+        }
+        transcript.segments.removeAll { $0.track == track }
+        transcript.segments.append(contentsOf: segments)
+        transcript.segments.sort { $0.start < $1.start }
+        TranscriptStore.save(transcript, to: session)
+        persist()
+    }
+
+    func complete(track: String, locale: String, source: String) {
+        mutateTrack(track, fileName: "") { $0.status = .completed }
+        transcript.localeUsed = locale
+        transcript.source = source
+        persist()
+    }
+
+    func fail(track: String, message: String) {
+        mutateTrack(track, fileName: "") {
+            $0.status = .failed
+            $0.lastError = message
+        }
+        persist()
+    }
+
+    func snapshot() -> (session: RecordingSession, transcript: Transcript) { (session, transcript) }
+
+    private func mutateTrack(_ name: String, fileName: String, _ body: (inout TranscriptionTrackProgress) -> Void) {
+        guard var job = session.transcriptionJob else { return }
+        let index: Int
+        if let existing = job.tracks.firstIndex(where: { $0.track == name }) { index = existing }
+        else {
+            job.tracks.append(TranscriptionTrackProgress(track: name, fileName: fileName, status: .queued,
+                                                         chunks: [], lastError: nil))
+            index = job.tracks.count - 1
+        }
+        body(&job.tracks[index])
+        session.transcriptionJob = job
+    }
+
+    private func persist() {
+        session.save()
+        NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
     }
 }

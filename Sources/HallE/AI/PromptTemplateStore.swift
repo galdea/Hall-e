@@ -64,4 +64,58 @@ enum PromptTemplateStore {
         let lines = events.map { "\($0.time) \($0.title)\($0.project.map { " [\($0)]" } ?? "")" }.joined(separator: "\n")
         return (system, "Today's meetings:\n\(lines)")
     }
+
+    static func meetingInsights(transcript: String, context: MeetingContext) -> (String, String) {
+        let system = """
+        Analyze a meeting transcript factually. Return ONLY JSON matching this shape:
+        {"cleaned_transcript": string|null, "summary": string, "decisions": [string],
+        "action_items": [{"task": string, "owner": string|null, "due_date": string|null,
+        "project": string|null, "confidence": number|null}], "follow_ups": [string],
+        "risks": [string], "confidence": number|null}
+        Do not invent facts. Use the transcript's language. Keep summary concise.
+        """
+        return (system, "Meeting: \(context.title) (\(context.date))\nTranscript:\n\(transcript)")
+    }
+
+    /// Names a recording after its content. The reply becomes a folder name, so
+    /// it has to be one short line — and it has to describe what was actually
+    /// discussed rather than restate the calendar invite.
+    static func recordingTopic(transcript: String, context: MeetingContext) -> (String, String) {
+        let system = """
+        You name a meeting recording after what was actually discussed.
+        Reply with ONE line: a specific noun phrase of at most 8 words, in the transcript's language.
+        No quotes, no trailing period, no prefix such as "Meeting about".
+        Describe the real subject matter, not the calendar title, and never invent topics that
+        the transcript does not support. If the transcript is too short or empty to tell,
+        reply with exactly: UNKNOWN
+        """
+        let opening = String(transcript.prefix(24_000))
+        return (system, "Scheduled title: \(context.title)\nDate: \(context.date)\n\nTranscript:\n\(opening)")
+    }
+
+    static func projectSnapshot(context: ProjectAssistantContext) -> (String, String) {
+        let system = """
+        You maintain a factual project operating brief. Use only the cited Hall-e context.
+        Return ONLY JSON matching:
+        {"summary":string,"status":string,"health":"on-track"|"at-risk"|"blocked"|"unknown",
+        "goals":[string],"decisions":[string],"blockers":[string],"risks":[string],
+        "next_steps":[string],"open_questions":[string],"agenda":[string],
+        "citation_ids":[string],"confidence":number|null}
+        Every material claim must be supported by one of the provided [S#] references. Distinguish
+        confirmed facts from inferences by prefixing inferred items with "Inference:". Do not invent
+        commitments, owners, deadlines, or progress. Use the dominant language of the context.
+        """
+        return (system, "Project: \(context.projectName)\n\n\(context.markdown)")
+    }
+
+    static func projectQuestion(_ question: String, context: ProjectAssistantContext) -> (String, String) {
+        let system = """
+        You are Hall-e's project assistant. Answer only from the cited project context. Be practical,
+        concise, and explicit about uncertainty. Return ONLY JSON matching:
+        {"answer":string,"citation_ids":[string],"suggested_updates":[string]}
+        Cite source IDs such as [S1] in the answer. Suggested updates are derived guidance, never
+        invented facts or commitments. Use the language of the question.
+        """
+        return (system, "Question: \(question)\n\nProject context:\n\(context.markdown)")
+    }
 }

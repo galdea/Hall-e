@@ -1,9 +1,12 @@
 # Hall-e
 
-A native macOS menu-bar work assistant: a unified hourly agenda across multiple
-Google Calendar accounts, 15-minute meeting reminders, automatic Obsidian meeting
-notes, deterministic + LLM-assisted project classification, and manual meeting
-recording with on-device transcription. Local-first and private by default.
+> Meeting intelligence migration: the local Deepgram → OpenClaw/Gemini → JSON/Markdown/PDF pipeline is implemented but fail-closed until explicit consent, rotated credentials, agent setup, and A/B/backfill gates pass. See `docs/operations/MEETING_PIPELINE.md`.
+
+A native macOS menu-bar work assistant: a unified agenda across multiple Google
+Calendar accounts, meeting reminders, inline recording playback and transcripts,
+automatic Obsidian notes, and a cited project assistant built from meetings, notes,
+linked Codex sessions, and selected ChatGPT/WhatsApp exports. Local-first and private
+by default.
 
 SwiftUI + AppKit, built with Swift Package Manager (no Xcode required).
 
@@ -83,6 +86,19 @@ agenda, right-click for Refresh / Settings / Quit.
 All are requested only when the feature is first used. Calendar access is via Google
 OAuth (browser), not a macOS permission.
 
+## Browser and desktop call capture
+
+Hall-e can offer local recording for supported Chrome calls (Google Meet, Zoom,
+Teams, WhatsApp Web, Jitsi, and Whereby) and best-effort Zoom/WhatsApp desktop
+calls. It always asks before capture, and it never creates or changes a Google
+Calendar event for a call it discovers outside the calendar.
+
+Open **Settings → Browser & Calls** to prepare the bundled Chrome extension, load
+it from `chrome://extensions`, and connect its displayed ID to Hall-e. The native
+helper accepts messages only from that exact extension ID, queues them locally, and
+does not receive audio or use the network. Add a custom domain in Hall-e and then
+approve that same host from the extension's Options page.
+
 ## Privacy
 
 - Local-first: calendar cache, notes, recordings, and transcripts stay on disk.
@@ -90,8 +106,12 @@ OAuth (browser), not a macOS permission.
   UserDefaults, files, logs, or notes.
 - Read-only calendar access (`calendar.readonly`).
 - AI features are **off** until you configure a provider. Cloud transcript
-  processing is **off** until you explicitly enable it.
-- Recording is always user-initiated and visibly indicated — never automatic.
+  and imported-conversation processing is **off** until you explicitly enable it.
+- Join-triggered calendar recording is opt-in and visibly indicated; ordinary calendar
+  events never start recording on their own, and manual recordings retain consent.
+- Codex indexing is opt-in per project folder and excludes system prompts, hidden
+  reasoning, tool output, credentials, and unrelated working directories.
+- ChatGPT and WhatsApp context is imported only from files and conversations you select.
 
 ## Notch note (crowded menu bar)
 
@@ -114,6 +134,13 @@ unused item, or ⌘-drag one off) or use a menu-bar manager like
   resyncs), actions (Join / Open agenda / Prepare note / Snooze), and cancel-on-
   change.
 - Periodic + wake + network-restored refresh; launch-at-login.
+- Completed calendar events expose inline recording playback and searchable transcripts.
+- Optional exact calendar-end auto-stop, WhatsApp call-end detection, and a 20-second
+  silence prompt that never stops without confirmation.
+- Data-rich Projects workspace with health, status, activity, risks, next steps,
+  suggested agendas, linked-source freshness, and cited assistant conversations.
+- Selective ChatGPT export import, incremental WhatsApp chat import, and project-folder-
+  scoped Codex session indexing.
 
 ## In progress / roadmap
 
@@ -121,8 +148,7 @@ unused item, or ⌘-drag one off) or use a menu-bar manager like
 - Deterministic + LLM project classifier for your projects.
 - AI Orchestrator (OpenAI-compatible, Anthropic, Gemini, Ollama/LM Studio) with
   Keychain-stored keys.
-- Manual mic recording + on-device transcription (SFSpeechRecognizer), then system
-  audio via Core Audio taps.
+- Broader media import and richer multi-speaker transcript editing.
 - Apple Calendar (EventKit) as an optional source; morning brief / end-of-day digest.
 
 ## Architecture

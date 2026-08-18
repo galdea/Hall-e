@@ -5,9 +5,15 @@ import Foundation
 enum LLMProviderFactory {
     static func make(config: LLMProviderConfig = .load()) -> LLMProvider {
         guard config.useAI, config.kind != .disabled else { return DisabledLLMProvider() }
-        let key = config.kind.needsAPIKey ? KeychainStore.get(account: config.keychainAccount) : nil
-        if config.kind.needsAPIKey && (key == nil || key!.isEmpty) { return DisabledLLMProvider() }
-        if config.model.isEmpty { return DisabledLLMProvider() }
+        let key = config.kind.needsAPIKey ? config.resolveAPIKey() : nil
+        if config.kind.needsAPIKey && (key == nil || key!.isEmpty) {
+            Log.ai.warning("AI is enabled but no API key is stored for \(config.kind.rawValue, privacy: .public); AI features are inactive")
+            return DisabledLLMProvider(reason: "No API key saved for \(config.kind.displayName)")
+        }
+        if config.model.isEmpty {
+            Log.ai.warning("AI is enabled but no model is set for \(config.kind.rawValue, privacy: .public); AI features are inactive")
+            return DisabledLLMProvider(reason: "No model set for \(config.kind.displayName)")
+        }
 
         switch config.kind {
         case .anthropic:
