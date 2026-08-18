@@ -59,9 +59,7 @@ import Foundation
         emit("monthly spend guard USD : \(AppPreferences.deepgramMonthlyLimitUSD)")
         let resolved = TranscriptionEngineResolver.resolve(
             preference: AppPreferences.transcriptionEngine,
-            language: AppPreferences.transcriptionLanguage,
-            model: AppPreferences.whisperKitModel,
-            modelDownloaded: WhisperKitModelPaths.isDownloaded(model: AppPreferences.whisperKitModel))
+            language: AppPreferences.transcriptionLanguage)
         emit("resolved engine         : \(resolved)")
         emit("recordings on disk      : \(RecordingStore.allSessions().count)")
     }

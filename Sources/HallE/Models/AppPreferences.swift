@@ -30,7 +30,6 @@ struct AppPreferences {
         static let quietHoursEnd = "quietHoursEnd"
         static let transcriptionEngine = "transcriptionEngine"
         static let transcriptionLanguage = "transcriptionLanguage"
-        static let whisperKitModel = "whisperKitModel"
         static let cloudAudioConsent = "cloudAudioConsent"
         static let cloudTranscriptConsent = "cloudTranscriptConsent"
         static let deepgramMonthlyLimitUSD = "deepgramMonthlyLimitUSD"
@@ -159,13 +158,6 @@ struct AppPreferences {
     static var transcriptionLanguage: TranscriptionLanguagePreference {
         get { TranscriptionLanguagePreference(rawValue: d.string(forKey: Key.transcriptionLanguage) ?? "auto") ?? .auto }
         set { d.set(newValue.rawValue, forKey: Key.transcriptionLanguage) }
-    }
-
-    /// WhisperKit's 626 MB large-v3 variant. The value is also used in the
-    /// persisted transcript source so a model change is auditable.
-    static var whisperKitModel: String {
-        get { d.string(forKey: Key.whisperKitModel) ?? "openai_whisper-large-v3-v20240930_626MB" }
-        set { d.set(newValue, forKey: Key.whisperKitModel) }
     }
 
     static var cloudAudioConsent: CloudProcessingConsent? {

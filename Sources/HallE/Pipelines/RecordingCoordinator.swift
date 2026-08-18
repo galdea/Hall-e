@@ -300,17 +300,10 @@ enum RecordingCoordinator {
         }
 
         let languagePreference = AppPreferences.transcriptionLanguage
-        let model = AppPreferences.whisperKitModel
         let resolved = TranscriptionEngineResolver.resolve(
             preference: AppPreferences.transcriptionEngine,
-            language: languagePreference,
-            model: model,
-            modelDownloaded: WhisperKitModelPaths.isDownloaded(model: model)
+            language: languagePreference
         )
-        if case .whisperKitUnavailable = resolved {
-            let message = TranscriptionErrorSanitizer.message(TranscriptionError.modelNotDownloaded)
-            return markJobFailed(session: session, message: message)
-        }
 
         if case .deepgram = resolved {
             return await transcribeDeepgram(session: session, prior: prior)
@@ -338,30 +331,6 @@ enum RecordingCoordinator {
                     // The whole mixed file is uploaded once so speaker labels
                     // remain stable across the meeting. Handled above.
                     throw DeepgramError.invalidResponse("Deepgram track routing error.")
-                case .whisperCLI(_, let language):
-                    result = try await WhisperCLITranscriptionProvider().transcribe(
-                        fileURL: input.url, sessionID: session.id, track: input.track,
-                        existingSegments: existing, completedChunkIndexes: completed,
-                        language: language,
-                        onPrepared: { chunks in
-                            await persistence.configure(track: input.track, chunks: chunks)
-                        },
-                        onCheckpoint: { checkpoint in
-                            await persistence.checkpoint(track: input.track,
-                                                         checkpoint: LocalTranscriptionProvider.Checkpoint(
-                                                            chunkIndex: checkpoint.chunkIndex,
-                                                            chunkCount: checkpoint.chunkCount,
-                                                            offset: checkpoint.offset,
-                                                            segments: checkpoint.segments))
-                        })
-                case .whisperKit(let model):
-                    // WhisperKit owns VAD chunking internally. Persist one
-                    // whole-track checkpoint so the durable job remains
-                    // coherent without reviving the old 240 s boundaries.
-                    result = try await WhisperKitTranscriptionProvider().transcribe(
-                        fileURL: input.url, sessionID: session.id, track: input.track,
-                        model: model, language: languagePreference.whisperCode)
-                    await persistence.checkpoint(track: input.track, segments: result.segments)
                 case .sfSpeech(let language):
                     result = try await LocalTranscriptionProvider().transcribe(
                         fileURL: input.url, sessionID: session.id, track: input.track,
@@ -373,9 +342,6 @@ enum RecordingCoordinator {
                         onCheckpoint: { checkpoint in
                             await persistence.checkpoint(track: input.track, checkpoint: checkpoint)
                         })
-                case .whisperKitUnavailable:
-                    // Handled before the track loop.
-                    throw TranscriptionError.modelNotDownloaded
                 }
                 locale = result.localeUsed
                 successfulTrack = true
@@ -387,7 +353,6 @@ enum RecordingCoordinator {
 
         // The model is deliberately held across mic + system tracks, then
         // released before the next queued recording starts.
-        await WhisperKitEngine.shared.unload()
 
         var snapshot = await persistence.snapshot()
         if successfulTrack {

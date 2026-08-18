@@ -76,13 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RecordingStore.enqueueLegacyFailuresForRetryOnce()
         RecordingStore.enqueueAppleSpeechFallbacksForRetryOnce()
         Log.rec.info("transcription recovery startup: \(RecordingStore.queuedSessions().count, privacy: .public) queued job(s)")
-        // Automatic/WhisperKit transcription must be prepared before queued
-        // jobs resume. Starting recovery first used to make a missing model
-        // look like a successful Apple Speech fallback.
+        // Deepgram needs no local model, so there is nothing to prepare before
+        // queued jobs resume — and no launch path that can start a download.
         Task { @MainActor in
             Log.rec.info("transcription recovery task started")
-            await WhisperKitModelManager.shared.prepareIfNeeded()
-            Log.rec.info("transcription engine preparation finished")
             await RecordingCoordinator.resumeQueuedJobsWhenIdle()
             Log.rec.info("transcription recovery task finished")
             await MeetingBriefingPipeline.resumeQueuedWhenIdle()

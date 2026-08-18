@@ -144,8 +144,8 @@ enum TranscriptionErrorSanitizer {
         if text.contains("authorized") || text.contains("permission") {
             return "Allow Speech Recognition in System Settings, then retry."
         }
-        if text.contains("whisperkit") || text.contains("model") && text.contains("download") {
-            return "Open Settings → Transcription and download the WhisperKit model, then retry."
+        if text.contains("credit") {
+            return "Top up the Deepgram account, or add a fallback key in Settings → Transcription, then retry."
         }
         if text.contains("locale") || text.contains("on-device") {
             return "Install an on-device dictation language in System Settings → Keyboard → Dictation, then retry."

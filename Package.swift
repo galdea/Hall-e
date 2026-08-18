@@ -7,14 +7,12 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.0.0"),
     ],
     targets: [
         .executableTarget(
             name: "HallE",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
-                .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Sources/HallE",
             // Localization files are processed normally; the Chrome extension
@@ -35,7 +33,6 @@ let package = Package(
             name: "HallETests",
             dependencies: [
                 "HallE",
-                .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Tests/HallETests",
             swiftSettings: [

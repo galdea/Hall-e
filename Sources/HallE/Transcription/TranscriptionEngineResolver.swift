@@ -1,18 +1,19 @@
 import Foundation
 
 enum TranscriptionEnginePreference: String, CaseIterable, Codable, Identifiable {
+    /// Retained so a preference stored by an older build still decodes. It now
+    /// means the same thing as `.deepgram`; there is no local engine left for it
+    /// to quietly fall through to, which is exactly why Whisper was removed.
     case auto
     case deepgram
-    case whisperKit = "whisperkit"
     case sfSpeech = "sfspeech"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .auto: "Automatic"
+        case .auto: "Automatic (Deepgram)"
         case .deepgram: "Deepgram Nova-3"
-        case .whisperKit: "WhisperKit (local AI)"
         case .sfSpeech: "Apple Speech"
         }
     }
@@ -41,10 +42,6 @@ enum TranscriptionLanguagePreference: String, CaseIterable, Codable, Identifiabl
         }
     }
 
-    /// WhisperKit accepts the two-letter Whisper language code. `nil` asks it
-    /// to detect the language for each decoding window.
-    var whisperCode: String? { self == .auto ? nil : rawValue }
-
     /// Apple Speech cannot auto-detect reliably without falling through to an
     /// unrelated language. Auto is deliberately Spanish for Hall-e's default
     /// audience and is still constrained to Spanish locales.
@@ -53,42 +50,20 @@ enum TranscriptionLanguagePreference: String, CaseIterable, Codable, Identifiabl
 
 enum SolvedTranscriptionEngine: Equatable {
     case deepgram
-    case whisperKit(model: String)
-    case whisperCLI(model: String, language: String?)
     case sfSpeech(language: String)
-    case whisperKitUnavailable
 }
 
 enum TranscriptionEngineResolver {
-    static func resolve(
-        preference: TranscriptionEnginePreference,
-        language: TranscriptionLanguagePreference,
-        model: String,
-        modelDownloaded: Bool,
-        deepgramReady: Bool = AppPreferences.allowCloudAudioTranscription && KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount),
-        whisperCLIAvailable: Bool = WhisperCLITranscriptionProvider.isAvailable
-    ) -> SolvedTranscriptionEngine {
+    /// Deepgram is the only automatic engine. When it cannot run — no consent, no
+    /// key, no credit — the job fails loudly and stays retryable rather than
+    /// producing a worse transcript from some other engine behind Gabriel's back.
+    static func resolve(preference: TranscriptionEnginePreference,
+                        language: TranscriptionLanguagePreference) -> SolvedTranscriptionEngine {
         switch preference {
-        case .deepgram:
+        case .auto, .deepgram:
             return .deepgram
-        case .whisperKit:
-            return modelDownloaded ? .whisperKit(model: model) : .whisperKitUnavailable
         case .sfSpeech:
             return .sfSpeech(language: language.sfSpeechCode)
-        case .auto:
-            // Automatic means “use Hall-e's primary local engine”. Prefer the
-            // installed Whisper CLI because it is the proven local runtime on
-            // this Mac, then use WhisperKit when it is available. It must not
-            // silently switch to Apple's recognizer when the model is missing:
-            // that produced completed-looking but unusable transcripts after a
-            // meeting. The caller keeps the durable job retryable until the
-            // model is prepared (or the person explicitly chooses Apple Speech).
-            if deepgramReady { return .deepgram }
-            if whisperCLIAvailable {
-                return .whisperCLI(model: WhisperCLITranscriptionProvider.model,
-                                   language: language.whisperCode)
-            }
-            return modelDownloaded ? .whisperKit(model: model) : .whisperKitUnavailable
         }
     }
 }

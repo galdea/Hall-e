@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-import WhisperKit
 @testable import HallE
 
 @Suite("Durable transcription recovery")
@@ -31,8 +30,8 @@ struct TranscriptionRecoveryTests {
                 .contains("Speech Recognition"))
         #expect(TranscriptionErrorSanitizer.guidance(for: "The audio file could not be decoded.")
                 .contains("Reveal"))
-        #expect(TranscriptionErrorSanitizer.guidance(for: TranscriptionError.modelNotDownloaded.localizedDescription)
-                .contains("download the WhisperKit model"))
+        #expect(TranscriptionErrorSanitizer.guidance(for: "The Deepgram primary account reported no remaining credit (HTTP 402).")
+                .contains("Top up the Deepgram account"))
     }
 
     @Test func retranscriptionResetClearsTracksAndCheckpoints() {
@@ -53,29 +52,20 @@ struct TranscriptionRecoveryTests {
         #expect(job.completedAt == nil)
     }
 
-    @Test func resolverNeverFallsThroughToWhisperEnglish() {
-        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish,
-                                                     model: "large", modelDownloaded: false,
-                                                     whisperCLIAvailable: false)
-                == .whisperKitUnavailable)
-        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english,
-                                                     model: "large", modelDownloaded: false,
-                                                     whisperCLIAvailable: false)
-                == .whisperKitUnavailable)
-        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish,
-                                                     model: "large", modelDownloaded: true,
-                                                     whisperCLIAvailable: false)
-                == .whisperKit(model: "large"))
-        #expect(TranscriptionEngineResolver.resolve(preference: .whisperKit, language: .spanish,
-                                                     model: "large", modelDownloaded: false)
-                == .whisperKitUnavailable)
-        #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .spanish,
-                                                     model: "large", modelDownloaded: false)
+    /// The original rule survives Whisper's removal: Hall-e must never quietly
+    /// substitute a different engine. Automatic now means Deepgram and nothing
+    /// else, and Apple Speech is reachable only by choosing it explicitly.
+    @Test func resolverNeverSilentlySubstitutesAnEngine() {
+        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish) == .deepgram)
+        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english) == .deepgram)
+        #expect(TranscriptionEngineResolver.resolve(preference: .deepgram, language: .spanish) == .deepgram)
+        // Apple Speech only when asked for, and still pinned to the chosen language.
+        #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .spanish)
                 == .sfSpeech(language: "es"))
-        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish,
-                                                     model: "large", modelDownloaded: false,
-                                                     whisperCLIAvailable: true)
-                == .whisperCLI(model: "large-v3-turbo", language: "es"))
+        #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .auto)
+                == .sfSpeech(language: "es"))
+        #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .english)
+                == .sfSpeech(language: "en"))
     }
 
     @Test func appleSpeechLocalesAreScopedToEffectiveLanguage() {
@@ -85,25 +75,5 @@ struct TranscriptionRecoveryTests {
                                                                      isAvailable: { $0 == "es-MX" })?.1 == "es-MX")
         #expect(LocalTranscriptionProvider.firstAvailableRecognizer(language: "es",
                                                                      isAvailable: { _ in false }) == nil)
-    }
-
-    @Test func whisperKitSegmentMappingSortsAndDropsEmptyWindows() {
-        let timings = TranscriptionTimings()
-        let late = TranscriptionSegment(start: 8, end: 10, text: " tarde ")
-        let empty = TranscriptionSegment(start: 2, end: 3, text: "   ")
-        let early = TranscriptionSegment(start: 1, end: 1.5, text: "Hola")
-        let results = [
-            TranscriptionResult(text: "tarde", segments: [late], language: "es", timings: timings),
-            TranscriptionResult(text: "", segments: [empty], language: "es", timings: timings),
-            TranscriptionResult(text: "Hola", segments: [early], language: "es", timings: timings),
-        ]
-
-        let mapped = WhisperKitTranscriptionProvider.mapSegments(results, track: "mic")
-
-        #expect(mapped.map(\.text) == ["Hola", "tarde"])
-        #expect(mapped.map(\.start) == [1, 8])
-        #expect(mapped.map(\.duration) == [0.5, 2])
-        #expect(mapped.allSatisfy { $0.track == "mic" })
-        #expect(WhisperKitTranscriptionProvider.source(for: "large") == "whisperkit:large")
     }
 }

@@ -1,6 +1,6 @@
 # ADR 0004: Historical Backfill and Final Whisper Removal
 
-Status: Accepted — user-approved 2026-08-09; execution remains gated by the steps below
+Status: Executed 2026-08-18 — backfill reconciled 28/28 (USD 9.51) and Whisper fully removed. See `docs/operations/MEETING_PIPELINE.md` for the removal record, the rollback artifact, and one deviation: `brew uninstall` also took the dependencies isl, libmpc, mpfr, ggml, and libomp, which this ADR did not sanction; no installed formula depends on them and gcloud/ffmpeg were verified working.
 Date: 2026-08-09
 
 ## Context

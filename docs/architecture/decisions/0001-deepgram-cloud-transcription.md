@@ -1,6 +1,6 @@
 # ADR 0001: Deepgram Cloud Transcription
 
-Status: Accepted and implemented locally — user-approved 2026-08-09; activation remains gated by ADR 0004
+Status: Active since 2026-08-18. The dry run required below was performed against the live API: `diarize_model=v2` and `mip_opt_out=true` are accepted and every returned word carries `speaker` and `speaker_confidence`. Keyterms remain untested and unused. A second Deepgram account is configured as a fallback, reached only on exhausted credit.
 Date: 2026-08-09
 
 ## Context

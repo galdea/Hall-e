@@ -46,15 +46,6 @@ enum AppPaths {
         return dir
     }
 
-    /// WhisperKit/Hugging Face models. This stays inside Application Support so
-    /// the first download does not trigger a Documents TCC prompt.
-    static var whisperKitModelsDir: URL {
-        let dir = appSupport.appendingPathComponent("Models", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
-        return dir
-    }
-
     static var vaultIndexFile: URL {
         appSupport.appendingPathComponent("vault-index.json")
     }

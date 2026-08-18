@@ -103,6 +103,30 @@ Verify delivery with `HALLE_DEEPGRAM_OP=test-alert`, and check scope with
 Failed recordings are never lost: the audio and the prior transcript are kept and
 the job stays retryable, so restoring credit and retrying is sufficient.
 
-## Whisper removal
+## Whisper removal — completed 2026-08-18
 
-Whisper remains installed until reconciliation is accepted and a commit/tag, archived signed app, checksum, and package inventory are recorded. `WhisperRemovalPlanner` produces the standalone removal plan. It never deletes models or invokes Homebrew. Global uninstall still requires Gabriel's final explicit confirmation, and `brew autoremove` is forbidden.
+Whisper is gone. Removed under ADR 0004 after reconciliation was accepted:
+
+- WhisperKit package dependency, engine, provider, model manager, CLI provider,
+  resolver branches, settings UI, and tests deleted; `Package.resolved` now
+  resolves GRDB only.
+- The 600 MB app-owned model directory (`Application Support/Hall-e/Models`) was
+  deleted after its exact contents were validated.
+- Homebrew `openai-whisper` (20250625_3) and `whisper-cpp` (1.9.1) uninstalled.
+  Both were installed on request and `brew uses --installed` reported no
+  dependents.
+
+Rollback artifact, recorded before removal: tag `pre-whisper-removal`, commit
+`bc46d4c`, and `Backfill/rollback/Hall-e-pre-whisper-removal.tar.gz`
+(sha256 `e8d0368439…`) with `brew-inventory-pre-removal.json`.
+
+**Deviation to note:** `brew uninstall` also removed the dependencies `isl`,
+`libmpc`, `mpfr`, `ggml`, and `libomp`, which ADR 0004 did not sanction — it
+forbids `brew autoremove` and expects unrelated dependencies to remain. Checked
+afterwards: no formula depends on them (`gcc` and `llama.cpp` are not installed),
+`brew missing` reports only a pre-existing stale `gcloud-cli: python@3.12`
+receipt, and `gcloud` and `ffmpeg` both verified working. Restore with
+`brew install isl libmpc mpfr ggml libomp` if anything later needs them.
+
+There is no local transcription engine left apart from Apple Speech, which is
+explicit-only. `auto` now means Deepgram, and no launch path can download a model.

@@ -5,7 +5,6 @@ struct TranscriptionSettingsView: View {
     @State private var engine = AppPreferences.transcriptionEngine
     @State private var language = AppPreferences.transcriptionLanguage
     @State private var speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
-    @State private var modelManager = WhisperKitModelManager.shared
     @State private var deepgramKey = ""
     @State private var deepgramKeyStored = KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount)
     @State private var cloudAudioEnabled = AppPreferences.allowCloudAudioTranscription
@@ -38,7 +37,7 @@ struct TranscriptionSettingsView: View {
                 }
                 .onChange(of: language) { _, value in AppPreferences.transcriptionLanguage = value }
 
-                Text("Automatic language detection is available in WhisperKit. For code-switched meetings, pin the dominant language when the detected language flips between windows.")
+                Text("Deepgram handles code-switched Spanish and English in one pass, so Auto-detect is the right choice for most meetings. The language setting only constrains Apple Speech.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -99,35 +98,6 @@ struct TranscriptionSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("WhisperKit model") {
-                HStack {
-                    Image(systemName: modelManager.isModelDownloaded ? "checkmark.circle.fill" : "arrow.down.circle")
-                        .foregroundStyle(modelManager.isModelDownloaded ? .green : .secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Large v3 · 626 MB")
-                        Text(AppPreferences.whisperKitModel).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    modelAction
-                }
-
-                if case .downloading(let progress) = modelManager.state {
-                    ProgressView(value: progress)
-                    Text("Downloading model… \(Int(progress * 100))%")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else if case .preparing = modelManager.state {
-                    ProgressView()
-                    Text("Preparing model for this Mac (one-time)…")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else if case .failed(let message) = modelManager.state {
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-
-                Text("The model is stored locally in Application Support. Automatic transcription prepares it on launch when needed; you can also start the download here.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
             Section("Apple Speech (explicit only)") {
                 HStack {
                     Image(systemName: speechAuthorized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -148,7 +118,7 @@ struct TranscriptionSettingsView: View {
                           systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                Text("Automatic and WhisperKit never fall back silently. Apple Speech is used only when you select it explicitly, and its locale list is restricted to the selected language.")
+                Text("Hall-e never falls back silently: if Deepgram cannot run, the recording is kept and the job stays retryable rather than producing a worse transcript. Apple Speech is used only when you select it explicitly, and its locale list is restricted to the selected language.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -161,7 +131,6 @@ struct TranscriptionSettingsView: View {
         .navigationTitle("Transcription")
         .onAppear {
             speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
-            modelManager.refresh()
         }
         .confirmationDialog(cloudConfirmation == .audio ? "Allow cloud audio processing?" : "Allow cloud transcript processing?",
                             isPresented: Binding(get: { cloudConfirmation != nil }, set: { if !$0 { cloudConfirmation = nil } }),
@@ -178,20 +147,6 @@ struct TranscriptionSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var modelAction: some View {
-        switch modelManager.state {
-        case .ready:
-            Button("Remove") { modelManager.removeModel() }.buttonStyle(.bordered)
-        case .downloading, .preparing:
-            ProgressView().controlSize(.small)
-        case .notDownloaded, .failed:
-            Button("Download & prepare") {
-                Task { await modelManager.downloadAndPrepare() }
-            }
-            .buttonStyle(.borderedProminent)
-        }
-    }
 
     /// Verifies the credit alert end-to-end from the running app, which is the
     /// only context where notification authorization is real.
