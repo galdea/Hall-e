@@ -1,5 +1,6 @@
 import SwiftUI
 import Speech
+import AppKit
 
 struct TranscriptionSettingsView: View {
     var isOnboarding = false
@@ -31,6 +32,14 @@ struct TranscriptionSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Your accounts, your keys") {
+                Text("Hall-e is free and needs no Hall-e login. Create your own Deepgram or Speechmatics account below. No developer keys or shared credits are included.")
+                Text("Eligible trial credit is enough to get started with recording and transcription—no paid Hall-e subscription needed. Provider allowances, expiry, and model access vary; check your account before adding paid credit.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Label("Keys are saved only in your macOS Keychain, never shared with Hall-e’s developers.", systemImage: "lock.shield")
+                    .font(.caption)
+            }
+
             Section("Transcription") {
                 Picker("Provider", selection: $engine) {
                     ForEach(TranscriptionEnginePreference.allCases) { value in
@@ -50,9 +59,14 @@ struct TranscriptionSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Deepgram cloud transcription") {
+            Section("1. Connect Deepgram") {
+                setupInstructions(provider: "Deepgram", signup: "https://console.deepgram.com/",
+                                  guide: "https://developers.deepgram.com/docs/create-additional-api-keys",
+                                  detail: "Sign up, open API Keys in your project, and create a key named Hall-e with transcription access. Copy the secret key when it is shown, then return here.")
                 HStack {
                     SecureField("Deepgram API key", text: $deepgramKey)
+                    Button("Paste") { pasteKey(into: $deepgramKey) }
+                        .help("Paste your copied Deepgram key; nothing is saved until you press Save.")
                     Button(deepgramKeyStored ? "Replace" : "Save") { saveDeepgramKey() }
                         .disabled(deepgramKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if deepgramKeyStored {
@@ -62,7 +76,7 @@ struct TranscriptionSettingsView: View {
                         }
                     }
                 }
-                Text(deepgramKeyStored ? "Key stored in macOS Keychain" : "No Deepgram key stored")
+                Text(deepgramKeyStored ? "Key saved. Next: allow transcription below." : "Paste your own key above, then press Save.")
                     .font(.caption).foregroundStyle(deepgramKeyStored ? .green : .secondary)
 
                 Toggle("Allow meeting audio to be uploaded to Deepgram", isOn: Binding(
@@ -74,28 +88,20 @@ struct TranscriptionSettingsView: View {
                 Text("Audio is sent only for transcription. Speaker 1, Speaker 2, and similar labels distinguish voices; they do not identify people by name. Model improvement is opted out.")
                     .font(.caption).foregroundStyle(.secondary)
 
-                HStack {
-                    Text("Cloud transcription monthly guard")
-                    Spacer()
-                    TextField("USD", value: $monthlyLimit, format: .number.precision(.fractionLength(0...2)))
-                        .frame(width: 80).multilineTextAlignment(.trailing)
-                        .onChange(of: monthlyLimit) { _, value in
-                            if value.isFinite, value >= 1 { AppPreferences.deepgramMonthlyLimitUSD = value }
-                        }
-                    Text("USD").font(.caption).foregroundStyle(.secondary)
-                }
-                Text("Shared by Deepgram and Speechmatics. Completed, in-flight, and ambiguous requests count toward the guard.")
-                    .font(.caption).foregroundStyle(.secondary)
-
-                Link("Get a Deepgram API key ↗", destination: URL(string: "https://console.deepgram.com/")!)
-                Text("This is an estimated local spending guard, not your provider balance. Trial credits, prices, and limits depend on your account. Failed recordings remain available to retry.")
-                    .font(.caption).foregroundStyle(.secondary)
+                setupStatus(deepgramKeyStored && cloudAudioEnabled,
+                            ready: "Deepgram setup complete · key validity is checked on your first transcription.",
+                            pending: deepgramKeyStored ? "Allow audio processing to finish setup." : "Save your key to continue.")
 
             }
 
-            Section("Speechmatics") {
+            Section("2. Connect Speechmatics · recommended backup") {
+                setupInstructions(provider: "Speechmatics", signup: "https://portal.speechmatics.com/",
+                                  guide: "https://docs.speechmatics.com/get-started/authentication",
+                                  detail: "Sign up, open API Keys, and create a key for Hall-e. Copy it, then return here. In your portal settings, turn Model Training off before enabling transcription.")
                 HStack {
                     SecureField("Speechmatics API key", text: $speechmaticsKey)
+                    Button("Paste") { pasteKey(into: $speechmaticsKey) }
+                        .help("Paste your copied Speechmatics key; nothing is saved until you press Save.")
                     Button(speechmaticsKeyStored ? "Replace" : "Save") { saveSpeechmaticsKey() }
                         .disabled(speechmaticsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if speechmaticsKeyStored {
@@ -105,10 +111,11 @@ struct TranscriptionSettingsView: View {
                         }
                     }
                 }
-                Link("Get a Speechmatics API key ↗", destination: URL(string: "https://portal.speechmatics.com/")!)
-                Text(speechmaticsKeyStored ? "Key stored in macOS Keychain" : "No Speechmatics key stored")
+                Text(speechmaticsKeyStored ? "Key saved. Next: choose a region and allow transcription below." : "Paste your own key above, then press Save.")
                     .font(.caption).foregroundStyle(speechmaticsKeyStored ? .green : .secondary)
 
+                Text("Choose where Speechmatics processes your audio. Keep the same region for existing jobs.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Processing region", selection: $speechmaticsRegion) {
                     Text("Select a region").tag(SpeechmaticsRegion?.none)
                     ForEach(SpeechmaticsRegion.supportedRegions) { region in
@@ -135,6 +142,38 @@ struct TranscriptionSettingsView: View {
                     .disabled(speechmaticsRegion?.isSupported != true || !speechmaticsTrainingOff)
                 Text("Works on its own, or as the backup in Automatic mode. Multilingual transcription with anonymous speaker labels. Audio and job data may remain in your selected region for up to 7 days.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Setup checklist") {
+                setupStatus(deepgramKeyStored && cloudAudioEnabled,
+                            ready: "Deepgram configured", pending: "Deepgram not configured")
+                setupStatus(speechmaticsKeyStored && speechmaticsAudioEnabled && speechmaticsRegion?.isSupported == true && speechmaticsTrainingOff,
+                            ready: "Speechmatics configured", pending: "Speechmatics needs a key, region, training setting, and audio permission")
+                Text("One configured provider is enough. Keep Provider set to Automatic to use either, and to enable credit-exhaustion fallback when both are configured. Saving a key does not upload audio or verify your balance.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Next: finish setup and make a short recording. Its transcript confirms that your key and provider credit work. You can change keys anytime in Settings → Transcription.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Spending guard · both providers") {
+                HStack {
+                    Text("Cloud transcription monthly guard")
+                    Spacer()
+                    TextField("USD", value: $monthlyLimit, format: .number.precision(.fractionLength(0...2)))
+                        .frame(width: 80).multilineTextAlignment(.trailing)
+                        .onChange(of: monthlyLimit) { _, value in
+                            if value.isFinite, value >= 1 { AppPreferences.deepgramMonthlyLimitUSD = value }
+                        }
+                    Text("USD").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Shared by Deepgram and Speechmatics. Completed, in-flight, and ambiguous requests count toward the guard.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Text("This is an estimated local spending guard, not your provider balance. Trial credits, prices, and limits depend on your account. Failed recordings remain available to retry.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Link("Deepgram trial & pricing", destination: URL(string: "https://deepgram.com/pricing")!)
+                Link("Speechmatics trial & pricing", destination: URL(string: "https://www.speechmatics.com/pricing")!)
             }
 
             if !isOnboarding {
@@ -186,7 +225,7 @@ struct TranscriptionSettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Transcription")
-        .alert("Could not save API key", isPresented: Binding(get: { keyError != nil }, set: { if !$0 { keyError = nil } })) {
+        .alert("API key setup", isPresented: Binding(get: { keyError != nil }, set: { if !$0 { keyError = nil } })) {
             Button("OK") { keyError = nil }
         } message: { Text(keyError ?? "") }
         .onAppear {
@@ -210,6 +249,34 @@ struct TranscriptionSettingsView: View {
         }
     }
 
+
+    private func setupInstructions(provider: String, signup: String, guide: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Link("Sign up / open \(provider) ↗", destination: URL(string: signup)!)
+                    .buttonStyle(.borderedProminent)
+                Link("Key creation guide ↗", destination: URL(string: guide)!)
+            }
+            Text(detail).font(.caption).foregroundStyle(.secondary)
+            Text("Already have an account? Use a key from your own account.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func setupStatus(_ complete: Bool, ready: String, pending: String) -> some View {
+        Label(complete ? ready : pending, systemImage: complete ? "checkmark.circle.fill" : "circle")
+            .font(.caption).foregroundStyle(complete ? .green : .secondary)
+    }
+
+    private func pasteKey(into field: Binding<String>) {
+        // Read the clipboard only in direct response to the user's Paste action.
+        guard let value = NSPasteboard.general.string(forType: .string),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            keyError = "Copy your API key from the provider’s website first, then press Paste."
+            return
+        }
+        field.wrappedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private func saveDeepgramKey() {
         let value = deepgramKey.trimmingCharacters(in: .whitespacesAndNewlines)

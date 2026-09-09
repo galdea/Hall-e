@@ -67,7 +67,7 @@ struct OnboardingView: View {
             }
             Text(copy("System audio permission is requested when you choose to capture a supported app.", "El permiso de audio del sistema se solicita al capturar una app compatible.")).foregroundStyle(.secondary)
         case 2:
-            header("text.bubble", copy("Connect transcription", "Conecta la transcripción"), copy("Paste a Deepgram or Speechmatics API key. We recommend both so Speechmatics can take over when Deepgram runs out of credit.", "Pega una clave API de Deepgram o Speechmatics. Recomendamos ambos para que Speechmatics continúe cuando Deepgram se quede sin crédito."))
+            header("text.bubble", copy("Connect transcription", "Conecta la transcripción"), copy("Use your own free-trial account. Open a provider below, create an API key, and paste it into Hall-e. One provider is enough to start; we recommend both for fallback.", "Usa tu propia cuenta de prueba gratuita. Abre un proveedor, crea una clave API y pégala en Hall-e. Uno basta para empezar; recomendamos ambos para tener respaldo."))
             TranscriptionSettingsView(isOnboarding: true)
                 .frame(maxHeight: .infinity)
             Text(copy("You can also record now and set up transcription later. Your audio stays on your Mac until you enable a provider.", "También puedes grabar ahora y configurar la transcripción después. El audio permanece en tu Mac hasta que actives un proveedor."))

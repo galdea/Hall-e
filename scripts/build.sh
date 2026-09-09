@@ -7,7 +7,7 @@ if [[ "${TOOLCHAIN_WORKAROUND:-0}" == 1 ]]; then
   ./scripts/fix-toolchain.sh
   export SWIFTPM_CUSTOM_LIBS_DIR="$PWD/.toolchain-fix"
 fi
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.1}"
 BUILD_NUM="${BUILD_NUM:-$(date -u +%Y%m%d%H%M)}"
 SIGN_ID="${SIGN_ID:--}"
 SIGNING_MODE="${SIGNING_MODE:-adhoc}"

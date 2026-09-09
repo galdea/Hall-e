@@ -34,6 +34,18 @@ No terminal, Google account, Obsidian, or separate AI subscription is required f
 | **Deepgram** | [Create an API key](https://console.deepgram.com/) | Nova-3 multilingual transcription with speaker diarization |
 | **Speechmatics** | [Create an API key](https://portal.speechmatics.com/) | Melia 1 multilingual transcription with speaker diarization; select US or EU processing and confirm Model Training is off |
 
+### First launch: connect your own account
+
+Hall-e does not require a Hall-e login and **does not ship with the developer’s API keys or shared credit**. Each user connects their own account. Keys are stored in that user’s macOS Keychain.
+
+1. In the setup screen, click **Sign up / open Deepgram** or **Sign up / open Speechmatics**. Create your own account in the browser.
+2. Open **API Keys** in the provider’s console and create a key for Hall-e. Deepgram keys belong to a project; choose transcription access. Copy the secret key while it is visible. The setup screen includes each provider’s key-creation guide.
+3. Return to Hall-e, click **Paste**, then **Save**. Hall-e reads the clipboard only when you click Paste and keeps the key hidden.
+4. Allow that provider to transcribe audio. For Speechmatics, select US or EU processing and confirm that you turned **Model Training off** in its portal.
+5. Follow the setup checklist, then make a short recording to confirm your key and available credit work. You can add the second provider later in **Settings → Transcription**.
+
+Eligible trial credit lets you get started without buying a Hall-e subscription. [Deepgram’s getting-started guide](https://developers.deepgram.com/guides/fundamentals/make-your-first-api-request) and [Speechmatics’ pricing page](https://www.speechmatics.com/pricing) describe their current free-credit offers. Allowances, expiry, and model access depend on the provider and your account; they are not unlimited. Signup and key creation happen on the provider’s site, where you control your account and billing.
+
 **We recommend setting up both.** In **Automatic** mode, Hall-e prefers Deepgram and switches to Speechmatics when Deepgram explicitly reports exhausted credit, provided both are configured and you enabled audio processing for each. Speechmatics also works by itself. Selecting a provider explicitly keeps that provider in control.
 
 This works with eligible trial credit or paid accounts; providers set their own trial terms, balances, and prices. Hall-e doesn't create accounts or extend trials. It won't switch providers after an ambiguous upload or bypass your shared monthly spending guard. You can inspect the provider used in the transcript viewer. Recordings stay available when transcription needs attention.

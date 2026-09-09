@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — Bring your own key, step by step
+
+- First-run setup explains personal provider accounts and eligible trial credit.
+- Direct signup and key-creation guides, explicit Paste buttons, and a configuration checklist help users connect their own keys.
+- Spending controls now sit in a shared section for both providers.
+- No shared API credentials; personal accounts are not a public release prerequisite.
+
 ## 0.2.0 — Public app preparation
 
 - New first-run setup for microphone and Deepgram/Speechmatics API keys.

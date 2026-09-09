@@ -8,7 +8,7 @@ on:
     inputs:
       version:
         description: 'Version (X.Y.Z)'
-        default: '0.2.0'
+        default: '0.2.1'
         required: true
         type: string
       notarize:
@@ -42,7 +42,7 @@ jobs:
           REQUESTED_NOTARIZE: ${{ inputs.notarize }}
           TAG_NOTARIZE: ${{ vars.RELEASE_NOTARIZE }}
         run: |
-          version="${REQUESTED_VERSION:-0.2.0}"
+          version="${REQUESTED_VERSION:-0.2.1}"
           notarize=0
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
