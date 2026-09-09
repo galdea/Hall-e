@@ -82,3 +82,7 @@ repository visibility and never modifies an already published release.
 
 References: [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution),
 [GitHub runner images](https://github.com/actions/runner-images).
+
+## Automated installation check
+
+Each disposable macOS CI runner extracts the release archive into a new Applications location, verifies its signature, launches through LaunchServices, and checks that the app remains running with a valid database, empty project directory, and no recordings. This verifies first launch on both architectures. Interactive microphone/system-audio permission prompts and a real call still require a human check; CI does not grant those permissions.
