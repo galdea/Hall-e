@@ -4,6 +4,7 @@ import AppKit
 
 struct TranscriptionSettingsView: View {
     var isOnboarding = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var engine = AppPreferences.transcriptionEngine
     @State private var language = AppPreferences.transcriptionLanguage
     @State private var speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -19,6 +20,8 @@ struct TranscriptionSettingsView: View {
     @State private var monthlyLimit = AppPreferences.deepgramMonthlyLimitUSD
     @State private var cloudConfirmation: CloudConfirmation?
     @State private var keyError: String?
+    @State private var cloudExpanded = false
+    @State private var speechLocale: String?
 
     private enum CloudConfirmation: String, Identifiable {
         case deepgramAudio, speechmaticsAudio, reports
@@ -26,18 +29,14 @@ struct TranscriptionSettingsView: View {
     }
 
     private var speechLanguage: String { language.sfSpeechCode }
-    private var speechLocale: String? {
-        LocalTranscriptionProvider.firstAvailableRecognizer(language: speechLanguage)?.1
-    }
+    private func copy(_ en: String, _ es: String) -> String { PublicUICopy.text(en, es) }
 
     var body: some View {
         Form {
-            Section("Your accounts, your keys") {
-                Text("Hall-e is free and needs no Hall-e login. Create your own Deepgram or Speechmatics account below. No developer keys or shared credits are included.")
-                Text("Eligible trial credit is enough to get started with recording and transcription—no paid Hall-e subscription needed. Provider allowances, expiry, and model access vary; check your account before adding paid credit.")
+            Section(copy("Your meetings, on your Mac", "Tus reuniones, en tu Mac")) {
+                Text(copy("Recording, notes, and supported on-device transcription need no account or API key. Cloud transcription is optional and uses your own provider account with your permission.", "Las grabaciones, las notas y la transcripción local compatible no necesitan cuenta ni clave API. La transcripción en la nube es opcional y usa tu propia cuenta, con tu autorización."))
+                Text(copy("Local speech requires macOS permission and an available language model. If it is unavailable, you can keep recording and transcribe later, or connect a cloud provider.", "La transcripción local requiere permiso de macOS y un modelo de idioma disponible. Si no está disponible, puedes grabar y transcribir después, o conectar un proveedor en la nube."))
                     .font(.caption).foregroundStyle(.secondary)
-                Label("Keys are saved only in your macOS Keychain, never shared with Hall-e’s developers.", systemImage: "lock.shield")
-                    .font(.caption)
             }
 
             if !isOnboarding {
@@ -54,15 +53,25 @@ struct TranscriptionSettingsView: View {
                         Text(value.displayName).tag(value)
                     }
                 }
-                .onChange(of: language) { _, value in AppPreferences.transcriptionLanguage = value }
+                .onChange(of: language) { _, value in
+                    AppPreferences.transcriptionLanguage = value
+                    refreshSpeechReadiness()
+                }
 
-                Text("Choose Automatic and connect either provider below. We recommend both: Hall-e can switch from Deepgram to Speechmatics when Deepgram reports exhausted credit. Each provider needs your permission.")
+                Text(copy("Automatic uses a connected, authorized cloud provider when available; otherwise it uses Apple Speech on this Mac. Select On this Mac to keep new transcription local even when you have connected a cloud account. Existing remote jobs keep their original provider.", "Automático usa un proveedor en la nube conectado y autorizado cuando está disponible; en caso contrario, usa Apple Speech en este Mac. Elige En este Mac para mantener las nuevas transcripciones locales aunque tengas una cuenta conectada. Los trabajos remotos existentes conservan su proveedor."))
                     .font(.caption).foregroundStyle(.secondary)
             }
-
+            localSpeechSection
+            Section {
+                Button(cloudExpanded ? copy("Hide cloud accounts", "Ocultar cuentas en la nube") : copy("Connect optional cloud transcription", "Conectar transcripción opcional en la nube")) {
+                    cloudExpanded.toggle()
+                }
+            }
             }
 
-            Section("1. Connect Deepgram") {
+            if isOnboarding || cloudExpanded {
+
+            Section("Deepgram · optional") {
                 setupInstructions(provider: "Deepgram", signup: "https://console.deepgram.com/",
                                   guide: "https://developers.deepgram.com/docs/create-additional-api-keys",
                                   detail: "Sign up, open API Keys in your project, and create a key named Hall-e with transcription access. Copy the secret key when it is shown, then return here.")
@@ -97,7 +106,7 @@ struct TranscriptionSettingsView: View {
 
             }
 
-            Section("2. Connect Speechmatics · recommended backup") {
+            Section("Speechmatics · optional provider or backup") {
                 setupInstructions(provider: "Speechmatics", signup: "https://portal.speechmatics.com/",
                                   guide: "https://docs.speechmatics.com/get-started/authentication",
                                   detail: "Sign up, open API Keys, and create a key for Hall-e. Copy it, then return here. In your portal settings, turn Model Training off before enabling transcription.")
@@ -160,7 +169,7 @@ struct TranscriptionSettingsView: View {
                             ready: "Deepgram configured", pending: "Deepgram not configured")
                 setupStatus(speechmaticsKeyStored && speechmaticsAudioEnabled && speechmaticsRegion?.isSupported == true && speechmaticsTrainingOff,
                             ready: "Speechmatics configured", pending: "Speechmatics needs a key, region, training setting, and audio permission")
-                Text("One configured provider is enough. Keep Provider set to Automatic to use either, and to enable credit-exhaustion fallback when both are configured. Saving a key does not upload audio or verify your balance.")
+                Text("For cloud transcription, one configured provider is enough. Automatic can use either provider, with credit-exhaustion fallback when both are configured. Saving a key does not upload audio or verify your balance. On this Mac keeps new transcription local.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Next: finish setup and make a short recording. Its transcript confirms that your key and provider credit work. You can change keys anytime in Settings → Transcription.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -185,6 +194,9 @@ struct TranscriptionSettingsView: View {
 
                 Link("Deepgram trial & pricing", destination: URL(string: "https://deepgram.com/pricing")!)
                 Link("Speechmatics trial & pricing", destination: URL(string: "https://www.speechmatics.com/pricing")!)
+                Label("Your keys are stored in macOS Keychain. No developer keys or shared credits are included.", systemImage: "lock.shield")
+                    .font(.caption)
+            }
             }
 
             if !isOnboarding {
@@ -201,33 +213,6 @@ struct TranscriptionSettingsView: View {
             }
 
                 }
-            Section("Apple Speech (optional)") {
-                DisclosureGroup("On-device transcription") {
-                HStack {
-                    Image(systemName: speechAuthorized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(speechAuthorized ? .green : .orange)
-                    Text("Speech Recognition permission")
-                    Spacer()
-                    Text(speechAuthorized ? "Granted" : "Not granted")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Text("Selected language model")
-                    Spacer()
-                    Text(speechLocale ?? "none available")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if speechLocale == nil {
-                    Label("None for \(speechLanguage == "es" ? "Spanish" : language.displayName.lowercased()) — transcription will fail rather than use English.",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                Text("Apple Speech is used only when selected. The language setting applies to Apple Speech; cloud providers detect languages automatically.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-                }
-
             Section {
                 Text("Raw transcripts stay local. Summary, decisions, action items, and follow-ups are generated only when AI and cloud transcript processing are enabled in AI Orchestrator.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -240,8 +225,10 @@ struct TranscriptionSettingsView: View {
             Button("OK") { keyError = nil }
         } message: { Text(keyError ?? "") }
         .onAppear {
-            speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
+            refreshSpeechReadiness()
+            cloudExpanded = deepgramKeyStored || speechmaticsKeyStored || engine == .deepgram || engine == .speechmatics
         }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refreshSpeechReadiness() } }
         .confirmationDialog(cloudConfirmation == .reports ? "Allow cloud transcript processing?" : "Allow cloud audio processing?",
                             isPresented: Binding(get: { cloudConfirmation != nil }, set: { if !$0 { cloudConfirmation = nil } }),
                             titleVisibility: .visible) {
@@ -260,6 +247,40 @@ struct TranscriptionSettingsView: View {
         }
     }
 
+    private var localSpeechSection: some View {
+        Section(copy("On-device transcription", "Transcripción en este Mac")) {
+            Label(speechAuthorized ? copy("Speech permission granted", "Permiso de voz autorizado") : copy("Speech permission needed", "Falta autorizar el reconocimiento de voz"),
+                  systemImage: speechAuthorized ? "checkmark.circle" : "exclamationmark.triangle")
+            if !speechAuthorized {
+                Button(copy("Enable speech recognition", "Activar reconocimiento de voz")) {
+                    Task { @MainActor in
+                        _ = await LocalTranscriptionProvider.requestAuthorization()
+                        refreshSpeechReadiness()
+                    }
+                }
+                Button(copy("Open speech privacy settings", "Abrir privacidad de reconocimiento de voz")) {
+                    SystemSettingsOpener.openSpeechPrivacy()
+                }
+            }
+            LabeledContent(copy("Local language model", "Modelo de idioma local")) {
+                Text(speechLocale ?? copy("Not available for \(speechLanguage)", "No disponible para \(speechLanguage)"))
+                    .foregroundStyle(.secondary)
+            }
+            if speechLocale == nil {
+                Text(copy("macOS may offer the language in Keyboard → Dictation. Return here after enabling or downloading it and check again. Availability depends on your Mac and language; no unrelated language will be substituted.", "macOS puede ofrecer el idioma en Teclado → Dictado. Vuelve después de activarlo o descargarlo y revisa de nuevo. La disponibilidad depende del Mac y del idioma; no se sustituirá por un idioma diferente."))
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(copy("Open Keyboard settings", "Abrir ajustes de Teclado")) { SystemSettingsOpener.openKeyboardSettings() }
+            }
+            Button(copy("Check again", "Revisar de nuevo")) { refreshSpeechReadiness() }
+            Text(copy("Audio stays on this Mac. Local transcripts do not identify individual speakers. Cloud providers can add anonymous speaker labels when connected and authorized.", "El audio permanece en este Mac. Las transcripciones locales no identifican hablantes individuales. Los proveedores en la nube pueden agregar etiquetas anónimas de hablantes si los conectas y autorizas."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func refreshSpeechReadiness() {
+        speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
+        speechLocale = LocalTranscriptionProvider.firstAvailableRecognizer(language: speechLanguage)?.1
+    }
 
     private func setupInstructions(provider: String, signup: String, guide: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {

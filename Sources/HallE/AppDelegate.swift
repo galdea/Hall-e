@@ -77,8 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RecordingStore.enqueueAppleSpeechFallbacksForRetryOnce()
         RecordingRecovery.reconcileInterruptedCaptures()
         Log.rec.info("transcription recovery startup: \(RecordingStore.queuedSessions().count, privacy: .public) queued job(s)")
-        // Deepgram needs no local model, so there is nothing to prepare before
-        // queued jobs resume — and no launch path that can start a download.
+        // Resume durable jobs without replacing user-selected providers.
         Task { @MainActor in
             Log.rec.info("transcription recovery task started")
             await RecordingCoordinator.resumeQueuedJobsWhenIdle()
@@ -95,6 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !AppPreferences.onboardingCompleted,
            ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
             OnboardingWindowController.shared.show()
+        } else if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
+            WorkspaceWindowController.shared.show()
         }
 
         NotificationCenter.default.addObserver(
@@ -177,10 +178,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    /// Re-opening the app (Finder/Spotlight/`open`) shows the agenda — a reliable
+    /// Re-opening the app (Finder/Spotlight/`open`) shows the workspace — a reliable
     /// way in even when the menu-bar icon is hidden behind the notch.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        statusItemController?.showPopover()
+        if OnboardingWindowController.shared.window?.isVisible == true {
+            OnboardingWindowController.shared.show()
+        } else {
+            WorkspaceWindowController.shared.show()
+        }
         return true
     }
 }

@@ -7,8 +7,12 @@ if [[ "${TOOLCHAIN_WORKAROUND:-0}" == 1 ]]; then
   ./scripts/fix-toolchain.sh
   export SWIFTPM_CUSTOM_LIBS_DIR="$PWD/.toolchain-fix"
 fi
-VERSION="${VERSION:-0.2.2}"
-BUILD_NUM="${BUILD_NUM:-$(date -u +%Y%m%d%H%M)}"
+VERSION="${VERSION:-0.3.0}"
+if [[ -z "${BUILD_NUM:-}" ]]; then
+  # A commit timestamp is numeric, monotonic in normal release history, and
+  # stable across architectures and reruns of the same source revision.
+  BUILD_NUM="$(git show -s --format=%ct HEAD 2>/dev/null || date -u +%Y%m%d%H%M)"
+fi
 SIGN_ID="${SIGN_ID:--}"
 SIGNING_MODE="${SIGNING_MODE:-adhoc}"
 CONFIG="${CONFIG:-release}"

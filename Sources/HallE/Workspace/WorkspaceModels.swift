@@ -228,22 +228,6 @@ enum WorkspaceNavigation {
     }
 
     static func startRecording() {
-        guard !RecordingService.shared.isRecording else { return }
-        let alert = NSAlert()
-        alert.messageText = "Start recording?"
-        alert.informativeText = "Hall-e records locally. Tell every participant before recording."
-        alert.addButton(withTitle: "Start recording")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let now = Date()
-        let event = UnifiedEvent(
-            dedupKey: "manual:\(UUID().uuidString)", title: "Recording — \(HalleDate.time(now))",
-            startTs: now, endTs: now, isAllDay: false, status: "confirmed",
-            winnerAccountEmail: AppPreferences.primaryAccountEmail ?? "", sourcesJSON: "[]")
-        Task {
-            await RecordingService.shared.start(for: event, notePath: nil, sourceKind: .manual) { session in
-                Task { await RecordingCoordinator.finishCall(session: session, event: event) }
-            }
-        }
+        NewRecordingWindowController.shared.show()
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 enum TranscriptionEnginePreference: String, CaseIterable, Codable, Identifiable {
-    /// Prefer configured, consented Deepgram, with Speechmatics as the cloud fallback.
+    /// Use a connected, consented cloud provider; otherwise stay on device.
     case auto
     case deepgram
     case speechmatics
@@ -11,10 +11,10 @@ enum TranscriptionEnginePreference: String, CaseIterable, Codable, Identifiable 
 
     var displayName: String {
         switch self {
-        case .auto: "Automatic (Deepgram → Speechmatics)"
+        case .auto: PublicUICopy.text("Automatic (local or connected cloud)", "Automático (local o nube conectada)")
         case .deepgram: "Deepgram Nova-3"
         case .speechmatics: "Speechmatics Melia 1 (fallback)"
-        case .sfSpeech: "Apple Speech"
+        case .sfSpeech: PublicUICopy.text("On this Mac (Apple Speech)", "En este Mac (Apple Speech)")
         }
     }
 }
@@ -32,20 +32,32 @@ enum TranscriptionLanguagePreference: String, CaseIterable, Codable, Identifiabl
 
     var displayName: String {
         switch self {
-        case .auto: "Auto-detect"
-        case .spanish: "Spanish"
-        case .english: "English"
-        case .portuguese: "Portuguese"
-        case .french: "French"
-        case .german: "German"
-        case .italian: "Italian"
+        case .auto: PublicUICopy.text("Automatic (Mac language for local speech)", "Automático (idioma del Mac para voz local)")
+        case .spanish: PublicUICopy.text("Spanish", "Español")
+        case .english: PublicUICopy.text("English", "Inglés")
+        case .portuguese: PublicUICopy.text("Portuguese", "Portugués")
+        case .french: PublicUICopy.text("French", "Francés")
+        case .german: PublicUICopy.text("German", "Alemán")
+        case .italian: PublicUICopy.text("Italian", "Italiano")
         }
     }
 
-    /// Apple Speech cannot auto-detect reliably without falling through to an
-    /// unrelated language. Auto is deliberately Spanish for Hall-e's default
-    /// audience and is still constrained to Spanish locales.
-    var sfSpeechCode: String { self == .auto ? "es" : rawValue }
+    /// Apple Speech needs an explicit language. Cloud providers can auto-detect.
+    var sfSpeechCode: String {
+        self == .auto ? Self.localLanguage(preferredLanguages: Locale.preferredLanguages) : rawValue
+    }
+
+    static func localLanguage(preferredLanguages: [String]) -> String {
+        for identifier in preferredLanguages {
+            let code = identifier.replacingOccurrences(of: "_", with: "-").split(separator: "-").first.map(String.init) ?? ""
+            if let language = Self(rawValue: code.lowercased()), language != .auto { return language.rawValue }
+        }
+        // Preserve an unsupported Mac language so setup explains that a model
+        // is unavailable instead of silently transcribing in unrelated English.
+        let first = preferredLanguages.first?.replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-").first.map(String.init)?.lowercased()
+        return first.flatMap { $0.isEmpty ? nil : $0 } ?? "en"
+    }
 }
 
 enum SolvedTranscriptionEngine: Equatable {
@@ -56,7 +68,7 @@ enum SolvedTranscriptionEngine: Equatable {
 
 enum TranscriptionEngineResolver {
     /// Availability is injected so routing never reads credentials or preferences.
-    /// With neither cloud available, Deepgram reports the missing setup/consent.
+    /// A fresh installation needs no account or API key for local transcription.
     static func resolve(preference: TranscriptionEnginePreference,
                         language: TranscriptionLanguagePreference,
                         availability: CloudFallbackPolicy.Availability = .init(),
@@ -75,14 +87,19 @@ enum TranscriptionEngineResolver {
                 // Speechmatics alone. These checkpoints prove no upload began.
                 let setupBlocked = checkpoint.state == .consentBlocked
                     || checkpoint.lastErrorCode == "missing_api_key"
+                if setupBlocked, !CloudFallbackPolicy.requiresReview(checkpoint),
+                   !availability.deepgramAvailable, !availability.speechmaticsAvailable {
+                    return .sfSpeech(language: language.sfSpeechCode)
+                }
                 if checkpoint.provider != .speechmatics, setupBlocked,
                    !availability.deepgramAvailable, availability.speechmaticsAvailable {
                     return .speechmatics
                 }
                 return checkpoint.provider == .speechmatics ? .speechmatics : .deepgram
             }
-            return availability.deepgramAvailable || !availability.speechmaticsAvailable
-                ? .deepgram : .speechmatics
+            if availability.deepgramAvailable { return .deepgram }
+            if availability.speechmaticsAvailable { return .speechmatics }
+            return .sfSpeech(language: language.sfSpeechCode)
         case .deepgram:
             return .deepgram
         case .speechmatics:

@@ -24,8 +24,8 @@ struct CloudFallbackPolicyTests {
                         let availability = CloudFallbackPolicy.Availability(
                             deepgramConfigured: dgKey, deepgramConsented: dgConsent,
                             speechmaticsConfigured: smConfiguration, speechmaticsConsented: smConsent)
-                        let expected: SolvedTranscriptionEngine = !(dgKey && dgConsent)
-                            && smConfiguration && smConsent ? .speechmatics : .deepgram
+                        let expected: SolvedTranscriptionEngine = dgKey && dgConsent ? .deepgram
+                            : smConfiguration && smConsent ? .speechmatics : .sfSpeech(language: "es")
                         #expect(TranscriptionEngineResolver.resolve(
                             preference: .auto, language: .spanish, availability: availability) == expected)
                     }
@@ -55,6 +55,19 @@ struct CloudFallbackPolicyTests {
         for error in failures {
             #expect(CloudFallbackPolicy.fallback(preference: .auto, failedEngine: .deepgram,
                                                  error: error, availability: ready) == nil)
+        }
+    }
+
+    @Test func preUploadSetupFailuresCanRecoverLocallyWithoutCloudConsent() {
+        var missingKey = checkpoint(state: .actionRequired)
+        missingKey.lastErrorCode = "missing_api_key"
+        for saved in [checkpoint(state: .consentBlocked), missingKey] {
+            #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english,
+                availability: .init(), checkpoint: saved) == .sfSpeech(language: "en"))
+        }
+        for state in [CloudTranscriptionState.retryableFailure, .actionRequired, .ambiguousBilling] {
+            #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english,
+                availability: .init(), checkpoint: checkpoint(state: state)) == .deepgram)
         }
     }
 

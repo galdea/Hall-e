@@ -18,6 +18,14 @@ enum SystemSettingsOpener {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     }
 
+    static func openSpeechPrivacy() {
+        open("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
+    }
+
+    static func openKeyboardSettings() {
+        open("x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
+    }
+
     static func openNotificationSettings() {
         let bundleID = Bundle.main.bundleIdentifier ?? AppPaths.bundleID
         let appSettings = "x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleId=\(bundleID)"

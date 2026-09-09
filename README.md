@@ -16,37 +16,38 @@ Hall-e is an open-source macOS assistant for recording meetings, turning convers
 
 The name borrows a little from **HAL**, from *2001: A Space Odyssey*, and a lot of heart from **WALL-E**. Smart, helpful, and nice. The airlock stays open. 🌱
 
-## Install, add a key, press record
+## Install, open, meet
 
-1. Download a ZIP from [Releases](https://github.com/galdea/Hall-e/releases). Choose **arm64** for Apple silicon or **x86_64** for Intel. Requires **macOS 14 or later**; capturing another app's audio requires **14.2+**.
-2. Unzip and drag **Hall-e.app** into **Applications**. Open it and look for Hall-e in your menu bar.
-3. Follow setup: allow your microphone, paste a **Deepgram** or **Speechmatics** API key, and allow that provider to transcribe your audio.
-4. Click **Start recording**. Your audio and transcript appear in **Meetings & recordings → Recordings**.
+1. Download the **DMG** from [the latest release](https://github.com/galdea/Hall-e/releases/latest). Choose **arm64** for Apple silicon or **x86_64** for Intel; check **Apple menu → About This Mac**. Requires **macOS 14 or later**; capturing another app's audio requires **14.2+**.
+2. Open the DMG, drag **Hall-e** to **Applications**, eject the disk image, and open Hall-e. A ZIP alternative is available too.
+3. Follow four short setup steps: choose your language, allow the microphone, set up local speech recognition, and try the optional **eight-second audio check**. Setup can be resumed later.
+4. Choose **Start recording**, name your meeting, and select **Microphone only** for an in-person conversation or **Microphone + your meeting app** for an online call. Join the call first and tell participants you are recording.
+5. Stop when you finish. Your audio, transcript, and autosaved notes are together in **Meetings & recordings → Recordings**. Export notes and transcript as one Markdown file.
 
-No terminal, Google account, Obsidian, or separate AI subscription is required for the basic recording/transcription workflow. Internet access and usable provider credit are required for cloud transcription.
+**No account or API key is needed for supported on-device transcription.** No terminal, calendar account, browser extension, Obsidian, or separate AI subscription is required to record and take notes. Local speech depends on macOS permission and an available language model; setup checks readiness and lets you test it. When unavailable, keep recording and transcribe later, or connect an optional cloud provider. Cloud transcription requires internet access, your own provider account and credit, and explicit permission.
 
 **Release signing:** archives marked `adhoc` are not Apple-notarized. macOS may block the first launch; after verifying the download, use **System Settings → Privacy & Security → Open Anyway** if offered. Managed Macs may disallow this. Archives explicitly marked `notarized` have completed Apple's checks. See [installation and release details](docs/release.md).
 
-## Bring your own transcription key
+## Optional cloud transcription
 
 | Provider | Set up | What Hall-e uses |
 | --- | --- | --- |
 | **Deepgram** | [Create an API key](https://console.deepgram.com/) | Nova-3 multilingual transcription with speaker diarization |
 | **Speechmatics** | [Create an API key](https://portal.speechmatics.com/) | Melia 1 multilingual transcription with speaker diarization; select US or EU processing and confirm Model Training is off |
 
-### First launch: connect your own account
+### Connect a provider when you need it
 
-Hall-e does not require a Hall-e login and **does not ship with the developer’s API keys or shared credit**. Each user connects their own account. Keys are stored in that user’s macOS Keychain.
+In **Settings → Transcription → Connect optional cloud transcription**, you can add cloud transcription and anonymous speaker labels. Hall-e **does not ship with the developer’s API keys or shared credit**. Each cloud user connects their own account. Keys are stored in that user’s macOS Keychain.
 
-1. In the setup screen, click **Sign up / open Deepgram** or **Sign up / open Speechmatics**. Create your own account in the browser.
+1. Click **Sign up / open Deepgram** or **Sign up / open Speechmatics**. Create your own account in the browser.
 2. Open **API Keys** in the provider’s console and create a key for Hall-e. Deepgram keys belong to a project; choose transcription access. Copy the secret key while it is visible. The setup screen includes each provider’s key-creation guide.
 3. Return to Hall-e, click **Paste**, then **Save**. Hall-e reads the clipboard only when you click Paste and keeps the key hidden.
 4. Allow that provider to transcribe audio. For Speechmatics, select US or EU processing and confirm that you turned **Model Training off** in its portal.
-5. Follow the setup checklist, then make a short recording to confirm your key and available credit work. You can add the second provider later in **Settings → Transcription**.
+5. Select **Automatic** or the connected provider, then make a short recording to confirm your key and available credit work. You can add the second provider later.
 
-Eligible trial credit lets you get started without buying a Hall-e subscription. [Deepgram’s getting-started guide](https://developers.deepgram.com/guides/fundamentals/make-your-first-api-request) and [Speechmatics’ pricing page](https://www.speechmatics.com/pricing) describe their current free-credit offers. Allowances, expiry, and model access depend on the provider and your account; they are not unlimited. Signup and key creation happen on the provider’s site, where you control your account and billing.
+Provider charges, trial allowances, expiry, and model access depend on your account. Check the provider's dashboard before processing audio; Hall-e does not verify your balance when saving a key. Signup and billing stay with the provider.
 
-**We recommend setting up both.** In **Automatic** mode, Hall-e prefers Deepgram and switches to Speechmatics when Deepgram explicitly reports exhausted credit, provided both are configured and you enabled audio processing for each. Speechmatics also works by itself. Selecting a provider explicitly keeps that provider in control.
+In **Automatic** mode, new recordings use local Apple Speech when no cloud provider is configured and authorized. With cloud connected, Automatic prefers Deepgram; Speechmatics can work on its own or as a backup when Deepgram explicitly reports exhausted credit. Each provider needs its own permission. Choose **On this Mac (Apple Speech)** to keep new transcription local even with cloud accounts connected. Existing accepted remote jobs retain their provider, avoiding duplicate submissions.
 
 This works with eligible trial credit or paid accounts; providers set their own trial terms, balances, and prices. Hall-e doesn't create accounts or extend trials. It won't switch providers after an ambiguous upload or bypass your shared monthly spending guard. You can inspect the provider used in the transcript viewer. Recordings stay available when transcription needs attention.
 
@@ -54,7 +55,8 @@ The default **$25 monthly guard** estimates combined transcription spending in H
 
 ## Useful basics
 
-- **Know who said what.** Read, search, copy, or export timestamps and anonymous **Speaker 1 / Speaker 2** labels. These distinguish voices, not people's identities. Speaker numbers belong to one recording and can be imperfect, especially with overlapping speech.
+- **Find what was said.** Read, search, copy, and export transcripts. Optional cloud transcription adds anonymous **Speaker 1 / Speaker 2** labels; local speech does not diarize individual voices. Speaker numbers belong to one recording and can be imperfect, especially with overlapping speech.
+- **Write alongside the conversation.** Autosaved local notes stay separate from the audio folder and survive audio deletion. Export your notes and transcript together. No external notes app is needed.
 - **Keep meetings together.** Choose an existing project or create one while categorizing a meeting. Optionally apply it to future occurrences of a recurring meeting.
 - **A gentle nudge.** With a calendar connected, get a gentle ring five minutes before a meeting.
 - **Don't record an empty room forever.** After 20 seconds without detected speech, Hall-e asks whether to stop. It waits another 20 seconds, then stops if you don't respond. Change both timings or disable auto-stop in **Settings → Recording**. If audio monitoring is uncertain, Hall-e keeps recording.
@@ -62,15 +64,17 @@ The default **$25 monthly guard** estimates combined transcription spending in H
 
 ## Add more when you need it
 
-- **Calendars & invitations:** first-run setup guides you through Google, Outlook/Microsoft 365 (Exchange), and other calendars available in Apple Calendar. Choose which calendars Hall-e reads, including Teams meeting links. No mailbox or Teams-chat access. No developer credentials needed for the macOS route; [setup and compatibility details](docs/calendar-setup.md).
-- **Call capture:** supported desktop apps and the bundled Chrome extension can capture the other side of a call. Enable permissions and configure it in **Settings → Calls**. A microphone-only recording may not hear remote participants wearing headphones.
-- **Notes:** choose an ordinary notes folder. Obsidian can open it too, but isn't required.
+- **Calendars & invitations:** connect Google, Outlook/Microsoft 365 (Exchange), and other calendars available in Apple Calendar from Settings when ready. Choose which calendars Hall-e reads, including Teams meeting links. No mailbox or Teams-chat access. No developer credentials needed for the macOS route; [setup and compatibility details](docs/calendar-setup.md).
+- **Call capture:** choose a running app when starting a recording, without an extension. Hall-e captures that app's audio, potentially including other playing tabs or windows, never silently all system audio. If capture fails, a visible warning explains that only the microphone is being recorded; join the call, check permissions, and retry meeting audio. The optional bundled Chrome extension and **Settings → Calls** provide additional workflows.
+- **Notes folders:** optionally connect an ordinary notes folder. Obsidian can open it too, but isn't required.
 - **AI:** optional provider settings enable additional intelligence. The advanced structured-report integration has separate requirements; see [meeting pipeline](docs/operations/MEETING_PIPELINE.md). A transcription API key alone does not generate AI reports.
-- **Apple Speech:** an optional on-device engine, selected explicitly in settings; availability depends on installed language support. It doesn't provide cloud-style speaker diarization.
+- **Apple Speech:** the account-free starting path; check or enable it in **Settings → Transcription**. English, Spanish, Portuguese, French, German, and Italian are offered when a compatible local model is available. Automatic local language follows supported Mac language preferences; choose your actual meeting language explicitly when needed.
 
 ## Your recordings are yours
 
-API keys live in **macOS Keychain**. Audio, transcripts, and the local database live under `~/Library/Application Support/Hall-e`; notes may live in a folder you choose. Cloud audio processing is off until you enable a provider. Transcript-text AI processing has its own permission. Let everyone know when you record and send a meeting to a cloud service.
+API keys live in **macOS Keychain**. Audio, transcripts, the local database, and built-in **Meeting Notes** live under `~/Library/Application Support/Hall-e`; optional integration notes may live in a folder you choose. The onboarding audio test stays local and is deleted after completion or cancellation. Cloud audio processing is off until you enable a provider. Transcript-text AI processing has its own permission. Let everyone know when you record and send a meeting to a cloud service.
+
+To update or share Hall-e, open **Settings → About & support → Check for updates / share Hall-e**. Quit Hall-e before replacing the app in Applications. Your library and provider choices are preserved. Updates are downloaded manually; there is no background auto-updater.
 
 [Privacy details](PRIVACY.md) · [Report a security issue](SECURITY.md)
 
@@ -92,7 +96,7 @@ make app
 open dist/Hall-e.app
 ```
 
-`make release` creates an app ZIP and checksum. You don't need a personal signing certificate to build locally. For Developer ID signing, notarization, CI, and supported architectures, see [release documentation](docs/release.md).
+`make release` creates DMG and ZIP installers plus checksums. You don't need a personal signing certificate to build locally. For Developer ID signing, notarization, CI, and supported architectures, see [release documentation](docs/release.md).
 
 Small improvements are welcome: clearer copy, better accessibility, Spanish/English polish, reliable audio capture, and thoughtful bug reports. [Contributing guide](CONTRIBUTING.md).
 

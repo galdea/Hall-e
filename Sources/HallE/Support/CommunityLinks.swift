@@ -2,6 +2,7 @@ import Foundation
 
 enum CommunityLinks {
     static let github = URL(string: "https://github.com/galdea/Hall-e")!
+    static let latestRelease = URL(string: "https://github.com/galdea/Hall-e/releases/latest")!
     // Replace only when the maintainer supplies a donation destination.
     static let support = URL(string: "https://github.com/galdea/Hall-e#support")!
 }

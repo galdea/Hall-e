@@ -55,6 +55,8 @@ struct RecordingSession: Codable, Identifiable {
     var localCaptureEventID: String?
     /// Non-fatal capture limitation, e.g. system-audio permission unavailable.
     var audioCaptureNotice: String?
+    /// Explicitly selected app; nil for microphone-only and older recordings.
+    var capturedAppBundleID: String?
     /// This recording's folder relative to `AppPaths.recordingsDir`, e.g.
     /// `Accurate/2026-08-04 1801 - Revisión de resultados - Sebastián`.
     /// Recordings are filed under their thematic project and renamed once the
@@ -100,6 +102,14 @@ struct RecordingSession: Codable, Identifiable {
     }
 
     let slug: String
+
+    /// Match the playback timeline, which starts with the microphone rather
+    /// than the session's earlier setup/permission timestamp.
+    func timelineOffset(for track: String) -> TimeInterval {
+        guard track == "system" else { return 0 }
+        let playbackStart = micStartedAt ?? startedAt
+        return max(0, (systemAudioStartedAt ?? playbackStart).timeIntervalSince(playbackStart))
+    }
 
     init(event: UnifiedEvent, notePath: String?, sourceKind: RecordingSourceKind = .calendarMeeting) {
         id = UUID()

@@ -300,7 +300,8 @@ enum RecordingCoordinator {
         session.transcriptStatus = .inProgress
         session.save(); notifyRecordingChanged()
 
-        let prior = TranscriptStore.load(session) ?? Transcript(sessionID: session.id, localeUsed: session.localeUsed ?? "en-US",
+        let savedTranscript = TranscriptStore.load(session)
+        let prior = savedTranscript ?? Transcript(sessionID: session.id, localeUsed: session.localeUsed ?? "en-US",
                                                                 segments: [], status: .pending, source: "sfspeech-on-device")
         let tracks = availableTracks(for: session)
         guard !tracks.isEmpty else {
@@ -332,11 +333,12 @@ enum RecordingCoordinator {
 
         let persistence = TranscriptionCheckpointPersistence(session: session, transcript: prior)
         var successfulTrack = false
+        var failedTrack = false
         var locale = prior.localeUsed
 
         for input in tracks {
             let current = await persistence.track(named: input.track)
-            if current?.status == .completed {
+            if current?.status == .completed, savedTranscript != nil {
                 successfulTrack = true
                 continue
             }
@@ -358,7 +360,7 @@ enum RecordingCoordinator {
                     result = try await LocalTranscriptionProvider().transcribe(
                         fileURL: input.url, sessionID: session.id, track: input.track,
                         existingSegments: existing, completedChunkIndexes: completed,
-                        language: language,
+                        language: language, timelineOffset: session.timelineOffset(for: input.track),
                         onPrepared: { chunks in
                             await persistence.configure(track: input.track, chunks: chunks)
                         },
@@ -370,6 +372,7 @@ enum RecordingCoordinator {
                 successfulTrack = true
                 await persistence.complete(track: input.track, locale: locale, source: result.source)
             } catch {
+                failedTrack = true
                 await persistence.fail(track: input.track, message: TranscriptionErrorSanitizer.message(error))
             }
         }
@@ -378,7 +381,7 @@ enum RecordingCoordinator {
         // released before the next queued recording starts.
 
         var snapshot = await persistence.snapshot()
-        if successfulTrack {
+        if successfulTrack && !failedTrack {
             snapshot.session.transcriptionJob?.status = .completed
             snapshot.session.transcriptionJob?.completedAt = Date()
             snapshot.session.transcriptionJob?.lastError = nil

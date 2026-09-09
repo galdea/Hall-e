@@ -7,9 +7,8 @@ import AVFoundation
 /// Core Audio process tap → private aggregate device → IOProc → file. macOS 14.2+.
 /// Best-effort: callers treat a throw as "mic-only" and keep the note usable.
 ///
-/// NOTE: needs a live-call runtime validation (and the "System Audio Recording"
-/// permission). If the per-process tap under-captures on a given WhatsApp build,
-/// the global-exclude-self fallback is used.
+/// Requires the macOS audio recording permission. A missing target fails
+/// explicitly; it must never expand a per-app choice to all system audio.
 @available(macOS 14.2, *)
 final class SystemAudioRecorder {
     enum CaptureError: Error, LocalizedError {
@@ -35,8 +34,7 @@ final class SystemAudioRecorder {
     private var latestPowerAt = Date.distantPast
     private var voiceMonitor: VoiceActivityMonitor?
 
-    /// Start capturing `targetBundleID`'s output to `url`. Falls back to a global
-    /// tap (excluding our own process) if the target process can't be resolved.
+    /// Start capturing only `targetBundleID`'s output to `url`.
     func start(targetBundleID: String, to url: URL) throws {
         // Mix down EVERY process object in the app's bundle family (main app +
         // any helper/renderer), not just the first match — an outgoing or video

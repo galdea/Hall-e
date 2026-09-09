@@ -5,9 +5,10 @@ import Speech
 /// Probes a locale fallback chain, chunks long files, and shifts segment
 /// timestamps by each chunk's offset. No fake speaker labels.
 struct LocalTranscriptionProvider: TranscriptionProvider {
-    /// Spanish locales, followed by English only when English was explicitly
-    /// selected. The old chain silently returned en-US for Spanish recordings.
-    static let localeChain = ["es-CL", "es-419", "es-MX", "es-ES", "en-US"]
+    /// Candidates are always filtered to the selected language. Actual local
+    /// model availability is checked at runtime; never substitute another language.
+    static let localeChain = ["es-CL", "es-419", "es-MX", "es-ES", "en-US", "en-GB",
+                              "pt-BR", "pt-PT", "fr-FR", "fr-CA", "de-DE", "it-IT"]
 
     struct Checkpoint: Sendable {
         let chunkIndex: Int
@@ -29,11 +30,14 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
     func transcribe(fileURL: URL, sessionID: UUID, track: String,
                     existingSegments: [TranscriptSegment] = [],
                     completedChunkIndexes: Set<Int> = [],
-                    language: String = "es",
+                    language: String = TranscriptionLanguagePreference.auto.sfSpeechCode,
+                    timelineOffset: TimeInterval = 0,
                     onPrepared: (@Sendable ([(index: Int, offset: TimeInterval)]) async -> Void)? = nil,
                     onCheckpoint: (@Sendable (Checkpoint) async -> Void)? = nil) async throws -> Transcript {
         try await AudioPreflight.validate(fileURL)
+        try Task.checkCancellation()
         guard await Self.requestAuthorization() else { throw TranscriptionError.notAuthorized }
+        try Task.checkCancellation()
         guard let (recognizer, localeId) = Self.firstAvailableRecognizer(language: language) else {
             throw TranscriptionError.noLocaleAvailable
         }
@@ -47,12 +51,13 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
 
         var segments = existingSegments.filter { $0.track == track }
         for chunk in chunks {
+            try Task.checkCancellation()
             if completedChunkIndexes.contains(chunk.index) { continue }
-            let result = try await Self.recognizeChunk(recognizer, url: chunk.url, offset: chunk.offset, track: track)
+            let result = try await Self.recognizeChunk(recognizer, url: chunk.url, offset: timelineOffset + chunk.offset, track: track)
             // Drop the words that fall inside the overlap region of subsequent
             // chunks (the previous chunk already transcribed that audio), then
             // coalesce the kept words into one block per chunk for readability.
-            let cutoff = chunk.offset == 0 ? 0 : chunk.offset + AudioChunker.overlapSeconds
+            let cutoff = timelineOffset + (chunk.offset == 0 ? 0 : chunk.offset + AudioChunker.overlapSeconds)
             let kept = result.words.enumerated().filter { $0.element.start + $0.element.duration > cutoff }
             if let first = kept.first, let last = kept.last {
                 let text = Self.blockText(formatted: result.formatted, words: result.words,
@@ -85,7 +90,8 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
     }
 
     static func candidateLocales(for language: String) -> [String] {
-        let prefix = language.split(separator: "-").first.map(String.init)?.lowercased() ?? language.lowercased()
+        let normalized = language.replacingOccurrences(of: "_", with: "-")
+        let prefix = normalized.split(separator: "-").first.map(String.init)?.lowercased() ?? normalized.lowercased()
         return localeChain.filter { locale in
             let localePrefix = locale.split(separator: "-").first.map(String.init)?.lowercased() ?? locale.lowercased()
             return localePrefix == prefix
@@ -96,7 +102,7 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
     /// The injected availability closure keeps locale policy unit-testable
     /// without asking the host Speech daemon during tests.
     static func firstAvailableRecognizer(
-        language: String = "es",
+        language: String = TranscriptionLanguagePreference.auto.sfSpeechCode,
         isAvailable: ((String) -> Bool)? = nil
     ) -> (SFSpeechRecognizer, String)? {
         for id in candidateLocales(for: language) {
@@ -126,33 +132,81 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
     private static func recognizeChunk(_ recognizer: SFSpeechRecognizer, url: URL,
                                        offset: TimeInterval, track: String) async throws -> ChunkResult {
         let request = SFSpeechURLRecognitionRequest(url: url)
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        guard recognizer.supportsOnDeviceRecognition else { throw TranscriptionError.noLocaleAvailable }
+        request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = false
 
-        return try await withCheckedThrowingContinuation { cont in
-            let guardOnce = ResumeGuard()
-            let task = recognizer.recognitionTask(with: request) { result, error in
-                if let error {
-                    if guardOnce.tryResume() { cont.resume(throwing: TranscriptionError.failed(error.localizedDescription)) }
-                    return
+        let operation = RecognitionOperation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { cont in
+                guard operation.begin(cont) else { return }
+                let task = recognizer.recognitionTask(with: request) { result, error in
+                    if let error {
+                        operation.finish(.failure(TranscriptionError.failed(error.localizedDescription)))
+                        return
+                    }
+                    guard let result, result.isFinal else { return }
+                    let words = result.bestTranscription.segments.map {
+                        TranscriptSegment(start: offset + $0.timestamp, duration: $0.duration,
+                                          text: $0.substring, track: track)
+                    }
+                    operation.finish(.success(ChunkResult(words: words,
+                        formatted: result.bestTranscription.formattedString)))
                 }
-                guard let result, result.isFinal else { return }
-                let words = result.bestTranscription.segments.map {
-                    TranscriptSegment(start: offset + $0.timestamp, duration: $0.duration,
-                                      text: $0.substring, track: track)
+                operation.attach(task)
+                let deadline = DispatchWorkItem { [weak operation] in
+                    operation?.finish(.failure(TranscriptionError.failed(
+                        "Recognition timed out. Your recording is saved; try transcription again.")))
                 }
-                if guardOnce.tryResume() {
-                    cont.resume(returning: ChunkResult(words: words,
-                                                       formatted: result.bestTranscription.formattedString))
-                }
+                operation.attach(deadline)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + recognitionTimeout, execute: deadline)
             }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + recognitionTimeout) {
-                if guardOnce.tryResume() {
-                    task.cancel()
-                    cont.resume(throwing: TranscriptionError.failed(
-                        "recognition timed out after \(Int(recognitionTimeout))s"))
-                }
-            }
+        } onCancel: {
+            operation.finish(.failure(CancellationError()))
+        }
+    }
+
+    /// Recognition callbacks, cancellation, and the deadline can race. Finish
+    /// once, including cancellation before the continuation/task is installed.
+    private final class RecognitionOperation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<ChunkResult, Error>?
+        private var outcome: Result<ChunkResult, Error>?
+        private var task: SFSpeechRecognitionTask?
+        private var deadline: DispatchWorkItem?
+
+        func begin(_ continuation: CheckedContinuation<ChunkResult, Error>) -> Bool {
+            lock.lock()
+            if let outcome { lock.unlock(); continuation.resume(with: outcome); return false }
+            self.continuation = continuation
+            lock.unlock()
+            return true
+        }
+        func attach(_ task: SFSpeechRecognitionTask) {
+            lock.lock()
+            if outcome != nil { lock.unlock(); task.cancel(); return }
+            self.task = task
+            lock.unlock()
+        }
+        func attach(_ deadline: DispatchWorkItem) {
+            lock.lock()
+            if outcome != nil { lock.unlock(); deadline.cancel(); return }
+            self.deadline = deadline
+            lock.unlock()
+        }
+        func finish(_ result: Result<ChunkResult, Error>) {
+            lock.lock()
+            guard outcome == nil else { lock.unlock(); return }
+            outcome = result
+            let continuation = self.continuation
+            let task = self.task
+            let deadline = self.deadline
+            self.continuation = nil; self.task = nil; self.deadline = nil
+            lock.unlock()
+            deadline?.cancel()
+            task?.cancel()
+            continuation?.resume(with: result)
         }
     }
 

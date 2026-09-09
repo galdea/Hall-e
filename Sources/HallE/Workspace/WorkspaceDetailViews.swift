@@ -219,18 +219,32 @@ struct RecordingDetailView: View {
     let onDelete: () -> Void
     @State private var confirmsDeletion = false
     @State private var deletionError: String?
+    @State private var recorder = RecordingService.shared
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text(session.eventTitle).font(.title2.weight(.semibold)); HalleStatusBadge(text: session.transcriptStatus.rawValue, tone: session.transcriptStatus == .failed ? .error : session.transcriptStatus == .completed ? .success : .warning)
                 LabeledContent("Started", value: session.startedAt.formatted(date: .abbreviated, time: .shortened)); LabeledContent("Audio", value: session.micFileName)
                 if let note = session.notePath { LabeledContent("Note", value: note) }
-                RecordingTransportView(session: session)
-                TranscriptReaderView(session: session)
+                if recorder.currentSession?.id == session.id && recorder.isRecording {
+                    HStack {
+                        Label(PublicUICopy.text("Recording · \(recorder.elapsed.formattedDuration)", "Grabando · \(recorder.elapsed.formattedDuration)"), systemImage: "record.circle.fill")
+                            .foregroundStyle(.red)
+                        Spacer()
+                        Button(PublicUICopy.text("Stop recording", "Detener grabación")) { recorder.stop() }
+                            .buttonStyle(.borderedProminent).tint(.red)
+                    }
+                } else {
+                    RecordingTransportView(session: session)
+                }
+                MeetingNotesView(session: session).id(session.id)
+                Divider()
+                if session.isFinished { TranscriptReaderView(session: session) }
                 HStack {
                     Button("Reveal recording folder") { NSWorkspace.shared.activateFileViewerSelecting([session.folderURL]) }
                     Spacer()
                     Button("Delete Audio…", role: .destructive) { confirmsDeletion = true }
+                        .disabled(recorder.currentSession?.id == session.id && !session.isFinished)
                 }
                 if let deletionError { Text(deletionError).font(.caption).foregroundStyle(.red) }
             }.padding(20)

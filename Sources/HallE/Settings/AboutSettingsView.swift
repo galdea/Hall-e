@@ -9,6 +9,11 @@ struct AboutSettingsView: View {
                     Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")
                 }
                 LabeledContent("Build") { Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—") }
+                Link(destination: CommunityLinks.latestRelease) {
+                    Label(PublicUICopy.text("Check for updates / share Hall-e", "Buscar actualizaciones / compartir Hall-e"), systemImage: "arrow.down.circle")
+                }
+                Text(PublicUICopy.text("Opens the latest download. Quit Hall-e before replacing it in Applications; your recordings and notes stay on this Mac.", "Abre la descarga más reciente. Cierra Hall-e antes de reemplazarlo en Aplicaciones; tus grabaciones y notas permanecen en este Mac."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section(PublicUICopy.text("Open source & support", "Código abierto y apoyo")) {
                 Link(destination: CommunityLinks.github) {

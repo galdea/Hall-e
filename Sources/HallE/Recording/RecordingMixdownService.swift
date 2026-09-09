@@ -29,9 +29,7 @@ enum RecordingMixdownService {
                                          of: micSource, at: .zero)
             // Align against when the mic actually began capturing, not the
             // session timestamp (stamped before the permission prompt).
-            let micStart = session.micStartedAt ?? session.startedAt
-            let offsetSeconds = max(0, (session.systemAudioStartedAt ?? micStart)
-                .timeIntervalSince(micStart))
+            let offsetSeconds = session.timelineOffset(for: "system")
             try systemTrack.insertTimeRange(CMTimeRange(start: .zero, duration: systemDuration),
                                             of: systemSource,
                                             at: CMTime(seconds: offsetSeconds, preferredTimescale: 600))

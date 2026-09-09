@@ -141,43 +141,10 @@ enum RecordingStore {
         AppPreferences.transcriptionRecoveryMigration = 1
     }
 
-    /// Older builds could complete a job with Apple's recognizer when the
-    /// intended local Whisper engine was not installed. Those sessions have no
-    /// durable job field, so migrate them once when the primary engine is in
-    /// use. Keep the old JSON beside the recording until the replacement is
-    /// successfully written; the audio remains the source of truth.
+    /// Retire the old engine-replacement migration. Completed local transcripts
+    /// are valid user data; upgrading must not remove them or trigger uploads.
     static func enqueueAppleSpeechFallbacksForRetryOnce() {
         guard AppPreferences.transcriptionRecoveryMigration < 2 else { return }
-        guard AppPreferences.transcriptionEngine != .sfSpeech else {
-            AppPreferences.transcriptionRecoveryMigration = 2
-            return
-        }
-
-        for var session in allSessions() {
-            guard session.transcriptStatus == .completed,
-                  session.transcriptionJob == nil,
-                  let transcript = TranscriptStore.load(session),
-                  transcript.source == "sfspeech-on-device" else { continue }
-
-            let backup = session.folderURL.appendingPathComponent("transcript.json.bak-auto-sfspeech")
-            do {
-                if FileManager.default.fileExists(atPath: backup.path) {
-                    try FileManager.default.removeItem(at: backup)
-                }
-                try FileManager.default.moveItem(at: session.transcriptFileURL, to: backup)
-            } catch {
-                Log.rec.error("could not preserve fallback transcript for retry: \(error, privacy: .public)")
-                continue
-            }
-
-            var job = TranscriptionJob()
-            job.resetForRetranscription()
-            session.transcriptionJob = job
-            session.transcriptStatus = .pending
-            session.localeUsed = nil
-            session.save()
-            Log.rec.info("queued Apple Speech fallback for Whisper recovery: \(session.slug, privacy: .public)")
-        }
         AppPreferences.transcriptionRecoveryMigration = 2
     }
 

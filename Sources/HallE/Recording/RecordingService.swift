@@ -138,14 +138,28 @@ final class RecordingService: NSObject {
     @discardableResult
     func startCall(for event: UnifiedEvent, notePath: String?,
                    sourceKind: RecordingSourceKind,
+                   targetBundleID: String? = nil,
                    onFinish: @escaping (RecordingSession) -> Void) async -> UUID? {
         switch state { case .idle, .failed: break; default: return nil }
         await start(for: event, notePath: notePath, sourceKind: sourceKind, onFinish: onFinish)
         guard isRecording, let session = currentSession else { return nil }
-        guard let bundleID = Self.targetBundleID(for: sourceKind) else { return session.id }
+        guard let bundleID = targetBundleID ?? Self.targetBundleID(for: sourceKind) else { return session.id }
+        currentSession?.capturedAppBundleID = bundleID
+        currentSession?.save()
         startSystemCapture(bundleID: bundleID, session: session)
         callCaptureIdentityVerified = systemRecorder != nil
         return session.id
+    }
+
+    var canRetryMeetingAudio: Bool {
+        isRecording && systemRecorder == nil && currentSession?.capturedAppBundleID != nil
+    }
+
+    func retryMeetingAudio() {
+        guard canRetryMeetingAudio, let session = currentSession, let bundleID = session.capturedAppBundleID else { return }
+        startSystemCapture(bundleID: bundleID, session: session)
+        callCaptureIdentityVerified = systemRecorder != nil
+        if callCaptureIdentityVerified { noticeText = nil }
     }
 
     private func startSystemCapture(bundleID: String, session: RecordingSession) {
@@ -156,11 +170,12 @@ final class RecordingService: NSObject {
                 systemRecorder = rec
                 currentSession?.systemAudioFileName = "system.m4a"
                 currentSession?.systemAudioStartedAt = Date()
+                currentSession?.capturedAppBundleID = bundleID
                 currentSession?.audioCaptureNotice = nil
                 currentSession?.save()
                 Log.rec.info("system-audio tap started for \(bundleID, privacy: .public)")
             } catch {
-                setMicOnlyNotice("System audio is unavailable; microphone only. Automatic silence stopping is paused to protect remote speech.")
+                setMicOnlyNotice(PublicUICopy.text("Meeting app audio is unavailable: recording your microphone only. Join the call, check macOS audio recording permission, then retry meeting audio.", "El audio de la app no está disponible: solo se graba tu micrófono. Entra a la llamada, revisa el permiso de grabación de audio en macOS y reintenta."))
                 Log.rec.error("system-audio tap failed, recording mic only: \(error, privacy: .public)")
             }
         } else {

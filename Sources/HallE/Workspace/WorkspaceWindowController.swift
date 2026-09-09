@@ -7,6 +7,12 @@ final class WorkspaceWindowController {
     private var window: NSWindow?
     private let model = WorkspaceViewModel()
 
+    func showRecording(id: UUID) {
+        model.route = .meetings
+        model.selection = .recording(id)
+        show()
+    }
+
     func showMeeting(dedupKey: String) {
         model.openMeeting(dedupKey: dedupKey)
         show()

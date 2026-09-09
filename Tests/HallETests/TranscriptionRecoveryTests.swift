@@ -52,19 +52,16 @@ struct TranscriptionRecoveryTests {
         #expect(job.completedAt == nil)
     }
 
-    /// The original rule survives Whisper's removal: Hall-e must never quietly
-    /// substitute a different engine. Automatic now means Deepgram and nothing
-    /// else, and Apple Speech is reachable only by choosing it explicitly.
-    @Test func resolverNeverSilentlySubstitutesAnEngine() {
-        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish) == .deepgram)
-        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english) == .deepgram)
+    @Test func freshInstallUsesLocalSpeechAndExplicitChoicesArePreserved() {
+        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish) == .sfSpeech(language: "es"))
+        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english) == .sfSpeech(language: "en"))
         #expect(TranscriptionEngineResolver.resolve(preference: .deepgram, language: .spanish) == .deepgram)
         #expect(TranscriptionEngineResolver.resolve(preference: .speechmatics, language: .spanish) == .speechmatics)
-        // Apple Speech only when asked for, and still pinned to the chosen language.
+        // Local recognition stays pinned to the chosen language.
         #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .spanish)
                 == .sfSpeech(language: "es"))
         #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .auto)
-                == .sfSpeech(language: "es"))
+                == .sfSpeech(language: TranscriptionLanguagePreference.auto.sfSpeechCode))
         #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .english)
                 == .sfSpeech(language: "en"))
     }
@@ -99,7 +96,7 @@ struct TranscriptionRecoveryTests {
 
     @Test func appleSpeechLocalesAreScopedToEffectiveLanguage() {
         #expect(LocalTranscriptionProvider.candidateLocales(for: "es") == ["es-CL", "es-419", "es-MX", "es-ES"])
-        #expect(LocalTranscriptionProvider.candidateLocales(for: "en") == ["en-US"])
+        #expect(LocalTranscriptionProvider.candidateLocales(for: "en") == ["en-US", "en-GB"])
         #expect(LocalTranscriptionProvider.firstAvailableRecognizer(language: "es",
                                                                      isAvailable: { $0 == "es-MX" })?.1 == "es-MX")
         #expect(LocalTranscriptionProvider.firstAvailableRecognizer(language: "es",

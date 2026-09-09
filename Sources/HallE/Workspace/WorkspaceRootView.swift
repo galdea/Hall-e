@@ -149,6 +149,9 @@ struct TodayWorkspaceView: View {
                     Text(PublicUICopy.text("Start a recording from the toolbar. Connect a calendar later if you want your agenda and meeting reminders here.", "Inicia una grabación desde la barra superior. Conecta un calendario después si quieres ver tu agenda y recordatorios aquí."))
                         .foregroundStyle(.secondary)
                     Button(PublicUICopy.text("View recordings", "Ver grabaciones")) { model.route = .meetings }
+                    if !AppPreferences.onboardingCompleted {
+                        Button(PublicUICopy.text("Finish setup", "Terminar configuración")) { OnboardingWindowController.shared.show() }
+                    }
                     if !model.recordings.isEmpty {
                         Text(PublicUICopy.text("Recent recordings", "Grabaciones recientes")).font(.headline)
                         ForEach(Array(model.recordings.prefix(5))) { recording in
@@ -387,7 +390,7 @@ struct SearchWorkspaceView: View {
     }
 }
 
-private extension TimeInterval {
+extension TimeInterval {
     var formattedDuration: String {
         let total = max(0, Int(self)); return String(format: "%02d:%02d", total / 60, total % 60)
     }

@@ -199,6 +199,29 @@ struct RecordingLifecycleTests {
         #expect(RecordingRecovery.interrupted(original, audioDuration: 42, now: start) == nil)
     }
 
+    @Test func delayedMeetingAudioKeepsTranscriptAndPlaybackAlignedAfterRelaunch() throws {
+        var session = RecordingSession(event: Self.event(start: start, duration: 600), notePath: nil,
+                                       sourceKind: .manual)
+        session.startedAt = start
+        session.micStartedAt = start.addingTimeInterval(30)
+        session.systemAudioStartedAt = start.addingTimeInterval(75)
+        session.capturedAppBundleID = "us.zoom.xos"
+        let restored = try JSONDecoder().decode(RecordingSession.self, from: JSONEncoder().encode(session))
+        // Permission/setup time is absent from playback. Meeting audio starts
+        // 45 seconds into the saved audio, including after a retry/relaunch.
+        #expect(restored.timelineOffset(for: "mic") == 0)
+        #expect(restored.timelineOffset(for: "system") == 45)
+        #expect(restored.capturedAppBundleID == "us.zoom.xos")
+
+        session.systemAudioStartedAt = start
+        #expect(session.timelineOffset(for: "system") == 0)
+        session.micStartedAt = nil
+        session.systemAudioStartedAt = start.addingTimeInterval(12)
+        #expect(session.timelineOffset(for: "system") == 12)
+        session.systemAudioStartedAt = nil
+        #expect(session.timelineOffset(for: "system") == 0)
+    }
+
     private static func event(start: Date, duration: TimeInterval) -> UnifiedEvent {
         UnifiedEvent(dedupKey: "event", title: "Get Accurate", startTs: start,
                      endTs: start.addingTimeInterval(duration), isAllDay: false,

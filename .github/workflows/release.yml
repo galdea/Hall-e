@@ -8,7 +8,7 @@ on:
     inputs:
       version:
         description: 'Version (X.Y.Z)'
-        default: '0.2.2'
+        default: '0.3.0'
         required: true
         type: string
       notarize:
@@ -17,8 +17,15 @@ on:
         type: boolean
 permissions:
   contents: read
+concurrency:
+  # If a main push is tagged while its validation is still running, keep the tag
+  # run and cancel the redundant run for the same commit. A later non-tag run
+  # may queue behind a tag, but cannot cancel release packaging.
+  group: hall-e-release-${{ github.sha }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/tags/v') }}
 jobs:
   package:
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +39,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Select Swift 6 toolchain
         run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: swift-xcode26.2-${{ matrix.arch }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            swift-xcode26.2-${{ matrix.arch }}-${{ hashFiles('Package.resolved', 'Package.swift') }}-
       - name: Test
         env:
           MACOSX_DEPLOYMENT_TARGET: '14.0'
@@ -42,7 +55,7 @@ jobs:
           REQUESTED_NOTARIZE: ${{ inputs.notarize }}
           TAG_NOTARIZE: ${{ vars.RELEASE_NOTARIZE }}
         run: |
-          version="${REQUESTED_VERSION:-0.2.2}"
+          version="${REQUESTED_VERSION:-0.3.0}"
           notarize=0
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -51,24 +64,27 @@ jobs:
             notarize=1
           fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          build_num="$(git show -s --format=%ct HEAD)"
+          [[ "$build_num" =~ ^[0-9]+$ ]] || exit 1
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_NUM=$build_num" >> "$GITHUB_ENV"
           echo "NOTARIZE=$notarize" >> "$GITHUB_ENV"
           if [[ "$notarize" == 1 ]]; then
             echo 'SIGNING_MODE=developer-id' >> "$GITHUB_ENV"
+            echo 'PACKAGE_STATUS=notarized' >> "$GITHUB_ENV"
           else
             echo 'SIGNING_MODE=adhoc' >> "$GITHUB_ENV"
+            echo 'PACKAGE_STATUS=adhoc' >> "$GITHUB_ENV"
           fi
       - name: Package ad-hoc archive
         if: env.NOTARIZE == '0'
         env:
           ARCH: ${{ matrix.arch }}
-          BUILD_NUM: ${{ github.run_number }}
         run: ./scripts/release.sh
       - name: Package notarized archive
         if: env.NOTARIZE == '1'
         env:
           ARCH: ${{ matrix.arch }}
-          BUILD_NUM: ${{ github.run_number }}
           SIGN_ID: ${{ secrets.DEVELOPER_ID_SIGN_ID }}
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
@@ -77,19 +93,24 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: ./scripts/release-ci.sh
       - name: Verify fresh-profile installation
-        run: ./scripts/smoke-install.sh dist/*.zip
+        run: |
+          ./scripts/smoke-install.sh dist/*.zip
+          ./scripts/smoke-install.sh dist/*.dmg
       - uses: actions/upload-artifact@v4
         with:
-          name: Hall-e-${{ env.VERSION }}-macOS14-${{ matrix.arch }}-${{ env.SIGNING_MODE }}
+          name: Hall-e-${{ env.VERSION }}-macOS14-${{ matrix.arch }}-${{ env.PACKAGE_STATUS }}
           path: |
+            dist/*.dmg
             dist/*.zip
             dist/*.sha256
           if-no-files-found: error
+          retention-days: 7
 
-  draft-release:
+  publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: package
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -97,14 +118,37 @@ jobs:
         with:
           path: packages
           merge-multiple: true
-      - name: Prepare downloadable draft release
+      - name: Publish verified downloadable release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          if ls packages/*-notarized.dmg >/dev/null 2>&1; then
+            trust_note='These downloads are Developer ID signed and Apple-notarized.'
+          else
+            trust_note='These downloads are ad-hoc signed and are not Apple-notarized. After verifying the download source, macOS may require System Settings → Privacy & Security → Open Anyway on first launch. Managed Macs may require IT approval.'
+          fi
+          cat > release-notes.md <<EOF
+          ## Download and start
+
+          Download the **DMG** matching your Mac: **arm64 = Apple silicon**, **x86_64 = Intel**. Open it, drag Hall-e to Applications, eject the disk image, and open Hall-e. ZIP alternatives and SHA-256 checksums are included. Requires macOS 14+; meeting-app audio requires 14.2+.
+
+          $trust_note
+
+          ## Your first meeting
+
+          Follow four guided setup steps, allow microphone and speech recognition, choose your meeting language, and try the optional eight-second audio check. Supported local transcription needs no account or API key; setup checks language-model availability. Connected cloud providers remain optional and require explicit consent.
+
+          Choose **Start recording**, name your meeting, and select **Microphone + your meeting app** for online calls. Join the call first and tell participants before recording. If app audio is unavailable, Hall-e shows a microphone-only warning and a retry action. Notes save automatically on your Mac; export your notes and transcript together as Markdown.
+
+          Existing recordings and provider choices are preserved. CI tests and fresh-profile startup checks run separately for Apple silicon and Intel. Real microphone permissions and live calls still need an interactive check on each Mac; automatic AI summaries are optional integrations, not part of local transcription.
+
+          [Installation, updating, and troubleshooting](https://github.com/$GH_REPO/blob/$RELEASE_TAG/docs/release.md)
+          EOF
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Hall-e $RELEASE_TAG" --notes "Download the archive matching your Mac. arm64 is Apple silicon; x86_64 is Intel. Archives marked adhoc are not Apple-notarized; see the installation guide in the README."
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Hall-e $RELEASE_TAG — Your meetings, on your Mac" --notes-file release-notes.md
           fi
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          gh release upload "$RELEASE_TAG" packages/*.zip packages/*.sha256 --clobber
+          gh release upload "$RELEASE_TAG" packages/*.dmg packages/*.zip packages/*.sha256 --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file release-notes.md

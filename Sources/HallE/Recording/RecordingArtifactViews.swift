@@ -19,9 +19,11 @@ struct RecordingPromptBanner: View {
                     Button("Extend 5 min") { recorder.extendScheduledEnd() }.controlSize(.small)
                 } else if recorder.silencePromptVisible {
                     Button("Keep") { recorder.keepRecordingAfterSilence() }.controlSize(.small)
+                } else if recorder.canRetryMeetingAudio {
+                    Button(PublicUICopy.text("Retry meeting audio", "Reintentar audio de la reunión")) { recorder.retryMeetingAudio() }.controlSize(.small)
                 }
                 Button("Stop") {
-                    recorder.stop(reason: recorder.scheduledEndPromptVisible ? .scheduledEnd : .silencePrompt)
+                    recorder.stop(reason: recorder.scheduledEndPromptVisible ? .scheduledEnd : recorder.silencePromptVisible ? .silencePrompt : .manual)
                 }.controlSize(.small).buttonStyle(.borderedProminent).tint(.red)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
@@ -116,11 +118,16 @@ struct TranscriptReaderView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Divider()
-            if session.transcriptStatus == .completed, !transcript.isEmpty {
+            if !transcript.isEmpty {
+                if session.transcriptStatus != .completed {
+                    Label(PublicUICopy.text("Partial transcript · some audio still needs processing", "Transcripción parcial · aún falta procesar parte del audio"), systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 ScrollView {
                     Text(visibleText).font(.callout).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(minHeight: 90, maxHeight: 190)
+                }.frame(minHeight: 150, maxHeight: 420)
+                if session.transcriptStatus == .failed { TranscriptionRecoveryControls(session: session) }
             } else {
                 Label(transcriptStatusText, systemImage: transcriptStatusSymbol)
                     .font(.caption).foregroundStyle(.secondary).padding(.vertical, 12)
