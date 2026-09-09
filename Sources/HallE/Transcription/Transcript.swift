@@ -46,6 +46,18 @@ struct Transcript: Codable {
     var words: [TranscriptWord]? = nil
     var providerMetadata: TranscriptProviderMetadata? = nil
 
+    /// Readable copy/export with stable anonymous voice labels and time offsets.
+    /// Keep plainText separate for language-model input and classification.
+    var speakerLabeledText: String {
+        segments.map { segment in
+            let seconds = segment.start.isFinite ? max(0, Int(min(segment.start, 35_999_999))) : 0
+            let timestamp = String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+            let label = segment.speaker.map { "Speaker \($0 + 1)" }
+                ?? (segment.track == "mic" ? "Microphone" : "Audio")
+            return "[\(timestamp)] \(label): \(segment.text)"
+        }.joined(separator: "\n\n")
+    }
+
     var plainText: String {
         segments.map(\.text).joined(separator: " ")
     }

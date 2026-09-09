@@ -1,11 +1,11 @@
 # Hall-E meeting intelligence pipeline
 
-Status: implemented locally on 2026-08-09; activation and migration remain gated.
+Status: updated for public app preparation on 2026-09-08. The historical migration section below is an operator runbook, not required end-user setup.
 
 ## Runtime path
 
 1. A completed recording is mixed once.
-2. With explicit cloud-audio consent and a rotated Keychain key, Hall-E uploads the whole file to Deepgram Nova-3 multilingual with smart formatting, utterances, diarization v2, and Model Improvement Program opt-out.
+2. Automatic prefers ready Deepgram Nova-3, or Speechmatics if it is the only ready provider. A definite Deepgram credit-exhaustion rejection can fall back to separately consented Speechmatics. Explicit providers remain fixed. Speechmatics requires its own key, US/EU region-bound consent, and Model Training-off confirmation.
 3. Hall-E validates speaker-bearing words/utterances before atomically replacing the active transcript. Raw successful provider JSON and the prior transcript are retained.
 4. With separate transcript-text consent, Hall-E invokes the dedicated tool-less `halle-reports` OpenClaw agent using a Gemini-only allowlist.
 5. Every substantive report item must carry a valid utterance/time evidence anchor. Unknown owners are `Unassigned`; dates without evidence are rejected.
@@ -20,6 +20,16 @@ The application fails closed until all of these are true:
 - cloud transcript-text consent is recorded;
 - the `halle-reports` OpenClaw agent exists with no tools, no delivery, and primary model `github-copilot/gemini-3.1-pro`;
 - a fixture transcription and a fixture report pass before real audio is selected.
+
+Speechmatics activation additionally requires:
+
+- rotate the key disclosed in chat and save only the replacement through Settings → Transcription;
+- select and confirm US1 or EU1 (changing region revokes the prior consent);
+- confirm Model Training is off in the Speechmatics portal;
+- grant Speechmatics-specific audio consent acknowledging provider retention up to 7 days;
+- choose Automatic or Speechmatics; verify a representative M4A/diarization recording before relying on it for important meetings.
+
+Automatic mode can switch only after definite Deepgram credit exhaustion; ambiguous uploads and the shared spending guard never trigger fallback. If a create response is lost before a Speechmatics job ID is saved, the submission is marked ambiguous and cannot be blindly retried. Once a job ID is saved, relaunch/retry resumes that region-scoped job without re-uploading.
 
 Production OpenClaw configuration is intentionally not mutated by this implementation. Creating the agent remains a separately approved production-config action.
 
@@ -100,8 +110,7 @@ with no further change. Until then the guaranteed notice is the failed request.
 Verify delivery with `HALLE_DEEPGRAM_OP=test-alert`, and check scope with
 `HALLE_DEEPGRAM_OP=balance`.
 
-Failed recordings are never lost: the audio and the prior transcript are kept and
-the job stays retryable, so restoring credit and retrying is sufficient.
+Failed recordings are never lost: the audio and prior transcript are kept. Ordinary failures stay retryable; ambiguous provider submissions require review before a new transcription attempt.
 
 ## Whisper removal — completed 2026-08-18
 
@@ -128,5 +137,4 @@ afterwards: no formula depends on them (`gcc` and `llama.cpp` are not installed)
 receipt, and `gcloud` and `ffmpeg` both verified working. Restore with
 `brew install isl libmpc mpfr ggml libomp` if anything later needs them.
 
-There is no local transcription engine left apart from Apple Speech, which is
-explicit-only. `auto` now means Deepgram, and no launch path can download a model.
+There is no local transcription engine left apart from Apple Speech, which is explicit-only. `auto` uses the consented cloud routing policy; Speechmatics may be primary when it is the only ready provider or a credit-exhaustion fallback, and no launch path can download a model.

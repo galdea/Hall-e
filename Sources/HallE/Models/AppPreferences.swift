@@ -33,6 +33,9 @@ struct AppPreferences {
         static let cloudAudioConsent = "cloudAudioConsent"
         static let cloudTranscriptConsent = "cloudTranscriptConsent"
         static let deepgramMonthlyLimitUSD = "deepgramMonthlyLimitUSD"
+        static let speechmaticsAudioConsent = "speechmaticsAudioConsent"
+        static let speechmaticsRegion = "speechmaticsRegion"
+        static let speechmaticsModelTrainingConfirmedOff = "speechmaticsModelTrainingConfirmedOff"
     }
 
     static var refreshIntervalMinutes: Int {
@@ -170,8 +173,32 @@ struct AppPreferences {
         set { setCodable(newValue, forKey: Key.cloudTranscriptConsent) }
     }
 
+    static var speechmaticsAudioConsent: CloudProcessingConsent? {
+        get { codable(CloudProcessingConsent.self, forKey: Key.speechmaticsAudioConsent) }
+        set { setCodable(newValue, forKey: Key.speechmaticsAudioConsent) }
+    }
+
+    static var speechmaticsRegion: SpeechmaticsRegion? {
+        get { d.string(forKey: Key.speechmaticsRegion).flatMap(SpeechmaticsRegion.init(rawValue:)) }
+        set {
+            if let newValue { d.set(newValue.rawValue, forKey: Key.speechmaticsRegion) }
+            else { d.removeObject(forKey: Key.speechmaticsRegion) }
+        }
+    }
+
+    static var speechmaticsModelTrainingConfirmedOff: Bool {
+        get { d.bool(forKey: Key.speechmaticsModelTrainingConfirmedOff) }
+        set { d.set(newValue, forKey: Key.speechmaticsModelTrainingConfirmedOff) }
+    }
+
     static var allowCloudAudioTranscription: Bool { cloudAudioConsent?.isActive == true }
     static var allowCloudTranscriptReports: Bool { cloudTranscriptConsent?.isActive == true }
+    static var allowSpeechmaticsAudioTranscription: Bool {
+        guard let region = speechmaticsRegion, region.isSupported,
+              speechmaticsModelTrainingConfirmedOff,
+              let consent = speechmaticsAudioConsent, consent.isActive else { return false }
+        return consent.processor == region.consentProcessor
+    }
 
     static var deepgramMonthlyLimitUSD: Double {
         get {
@@ -179,6 +206,11 @@ struct AppPreferences {
             return value > 0 ? value : 25
         }
         set { d.set(max(1, newValue), forKey: Key.deepgramMonthlyLimitUSD) }
+    }
+
+    static var cloudTranscriptionMonthlyLimitUSD: Double {
+        get { deepgramMonthlyLimitUSD }
+        set { deepgramMonthlyLimitUSD = newValue }
     }
 
     // Codable blobs stored as JSON data.

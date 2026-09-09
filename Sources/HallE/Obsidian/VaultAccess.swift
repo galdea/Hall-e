@@ -10,8 +10,8 @@ enum VaultAccess {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Vault"
-        panel.message = "Select your Obsidian vault folder"
+        panel.prompt = "Choose Notes Folder"
+        panel.message = "Select a folder for Hall-e notes. No separate notes app is required."
         if let existing = ObsidianVaultConfig.load() {
             panel.directoryURL = URL(fileURLWithPath: existing.vaultPath)
         } else {
@@ -22,7 +22,7 @@ enum VaultAccess {
 
         var config = ObsidianVaultConfig(vaultPath: url.path)
         config.bookmarkData = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-        config.resolvedVaultName = ObsidianURIOpener.vaultName(forPath: url.path) ?? url.lastPathComponent
+        config.resolvedVaultName = url.lastPathComponent
         config.save()
         return config
     }

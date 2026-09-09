@@ -1,0 +1,13 @@
+name: Feature idea
+description: A small idea that would make Hall-e more useful.
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What would this help you do?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea

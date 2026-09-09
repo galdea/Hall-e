@@ -1,46 +1,67 @@
 #!/bin/bash
-# Builds HallE with SPM and assembles a signed Hall-e.app in dist/.
-# Requires the one-time "Hall-e Dev" signing identity (scripts/make-cert.sh).
+# Build a relocatable macOS 14+ app. Ad-hoc signing needs no certificate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Broken-CLT workaround (see scripts/fix-toolchain.sh)
-./scripts/fix-toolchain.sh >/dev/null
-export SWIFTPM_CUSTOM_LIBS_DIR="$(cd .toolchain-fix && pwd -P)"
-
-VERSION="${VERSION:-0.1.0}"
-BUILD_NUM="$(date +%Y%m%d%H%M)"
-SIGN_ID="${SIGN_ID:-Hall-e Dev}"
+if [[ "${TOOLCHAIN_WORKAROUND:-0}" == 1 ]]; then
+  ./scripts/fix-toolchain.sh
+  export SWIFTPM_CUSTOM_LIBS_DIR="$PWD/.toolchain-fix"
+fi
+VERSION="${VERSION:-0.2.0}"
+BUILD_NUM="${BUILD_NUM:-$(date -u +%Y%m%d%H%M)}"
+SIGN_ID="${SIGN_ID:--}"
+SIGNING_MODE="${SIGNING_MODE:-adhoc}"
 CONFIG="${CONFIG:-release}"
-# Canonical paths prevent Swift's module cache from seeing the same build
-# directory under two names when packaging from an isolated worktree.
+ARCH="${ARCH:-$(uname -m)}"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be X.Y.Z' >&2; exit 1; }
+[[ "$BUILD_NUM" =~ ^[0-9]+$ ]] || { echo 'BUILD_NUM must be numeric' >&2; exit 1; }
+case "$ARCH" in arm64|x86_64) ;; *) echo 'ARCH must be arm64 or x86_64' >&2; exit 1;; esac
+case "$SIGNING_MODE" in
+  adhoc) [[ "$SIGN_ID" == - ]] || { echo 'Use SIGNING_MODE=developer-id for a certificate' >&2; exit 1; } ;;
+  developer-id) [[ "$SIGN_ID" == 'Developer ID Application: '* ]] || { echo 'Set SIGN_ID to a Developer ID Application identity' >&2; exit 1; } ;;
+  *) echo 'Invalid SIGNING_MODE' >&2; exit 1;;
+esac
+export MACOSX_DEPLOYMENT_TARGET=14.0
 BUILD_DIR="${BUILD_DIR:-$PWD/.build}"
 mkdir -p "$BUILD_DIR"
 BUILD_DIR="$(cd "$BUILD_DIR" && pwd -P)"
-
-swift build --scratch-path "$BUILD_DIR" --disable-build-manifest-caching -j 4 -c "$CONFIG" --product HallE
-swift build --scratch-path "$BUILD_DIR" --disable-build-manifest-caching -j 4 -c "$CONFIG" --product CallCaptureNativeHost
+args=(--disable-build-manifest-caching --scratch-path "$BUILD_DIR" --arch "$ARCH" -c "$CONFIG" -j "${JOBS:-4}")
+swift build "${args[@]}" --product HallE
+swift build "${args[@]}" --product CallCaptureNativeHost
+BIN_DIR="$(swift build "${args[@]}" --show-bin-path)"
 
 APP="dist/Hall-e.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-
-cp "$BUILD_DIR/$CONFIG/HallE" "$APP/Contents/MacOS/Hall-e"
-cp "$BUILD_DIR/$CONFIG/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
-cp "Sources/HallE/Resources/GentleRing.wav" "$APP/Contents/Resources/GentleRing.wav"
-sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" \
-    BundleResources/Info.plist > "$APP/Contents/Info.plist"
+cp "$BIN_DIR/HallE" "$APP/Contents/MacOS/Hall-e"
+cp "$BIN_DIR/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
+# Include all SwiftPM bundles, including dependency privacy/resources bundles.
+shopt -s nullglob
+for bundle in "$BIN_DIR/"*.bundle; do
+  ditto "$bundle" "$APP/Contents/Resources/$(basename "$bundle")"
+done
+RES="$APP/Contents/Resources/HallE_HallE.bundle"
+for resource in en.lproj/Localizable.strings es.lproj/Localizable.strings GentleRing.wav CallCaptureExtension/manifest.json CallCaptureExtension/service-worker.js CallCaptureExtension/options.html CallCaptureExtension/options.js; do
+  [[ -f "$RES/$resource" ]] || { echo "Missing bundled resource: $resource" >&2; exit 1; }
+done
+cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
+# Notification sounds also resolve from the main bundle.
+cp "$RES/GentleRing.wav" "$APP/Contents/Resources/"
+sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" BundleResources/Info.plist > "$APP/Contents/Info.plist"
+plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
-
-if [ -f BundleResources/AppIcon.icns ]; then
+if [[ -f BundleResources/AppIcon.icns ]]; then
   cp BundleResources/AppIcon.icns "$APP/Contents/Resources/"
+  /usr/libexec/PlistBuddy -c 'Add :CFBundleIconFile string AppIcon' "$APP/Contents/Info.plist"
 fi
-# SPM resource bundle, if the target ever declares resources
-if [ -d "$BUILD_DIR/$CONFIG/HallE_HallE.bundle" ]; then
-  cp -R "$BUILD_DIR/$CONFIG/HallE_HallE.bundle" "$APP/Contents/Resources/"
+sign_args=(--force --sign "$SIGN_ID")
+if [[ "$SIGNING_MODE" == developer-id ]]; then
+  sign_args+=(--options runtime --timestamp)
 fi
-
-codesign --force --sign "$SIGN_ID" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"
-codesign --force --sign "$SIGN_ID" --identifier cl.gabriel.hall-e "$APP"
-codesign --verify --verbose=2 "$APP"
-echo "✓ Built $APP ($VERSION build $BUILD_NUM)"
+codesign "${sign_args[@]}" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"
+codesign "${sign_args[@]}" --entitlements BundleResources/Release.entitlements --identifier cl.gabriel.hall-e "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
+for binary in Hall-e CallCaptureNativeHost; do
+  [[ "$(lipo -archs "$APP/Contents/MacOS/$binary")" == "$ARCH" ]] || { echo 'Unexpected binary architecture' >&2; exit 1; }
+done
+echo "Built $APP ($VERSION build $BUILD_NUM, $ARCH, $SIGNING_MODE; not notarized)"

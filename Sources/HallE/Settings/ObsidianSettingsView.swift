@@ -7,25 +7,25 @@ struct ObsidianSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Vault") {
+            Section("Notes folder") {
                 if let config {
                     LabeledContent("Folder") {
                         Text(config.vaultPath).truncationMode(.middle).lineLimit(1)
                     }
-                    LabeledContent("Vault name") {
+                    LabeledContent("Folder name") {
                         Text(config.resolvedVaultName ?? "—")
                     }
                     HStack {
                         Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                             .foregroundStyle(reachable ? .green : .orange)
-                        Text(reachable ? "Vault is reachable and writable" : "Vault folder is missing or read-only")
+                        Text(reachable ? "Notes folder is reachable and writable" : "Notes folder is missing or read-only")
                             .font(.callout)
                     }
                 } else {
-                    Text("No vault selected. Hall-e writes meeting notes into a subfolder of your Obsidian vault.")
+                    Text("Choose any folder for your Markdown notes. Hall-e reads and writes them directly; TextEdit opens them for editing.")
                         .foregroundStyle(.secondary).font(.callout)
                 }
-                Button(config == nil ? "Choose Vault…" : "Change Vault…") {
+                Button(config == nil ? "Choose Notes Folder…" : "Change Notes Folder…") {
                     if let picked = VaultAccess.chooseVault() {
                         config = picked
                         subfolder = picked.subfolderName
@@ -52,7 +52,7 @@ struct ObsidianSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Obsidian")
+        .navigationTitle("Notes Folder")
     }
 
     private func saveSubfolder() {

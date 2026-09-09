@@ -100,6 +100,20 @@ enum RecordingStore {
         for var session in allSessions() {
             var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
             guard job.status == .running || session.transcriptStatus == .inProgress else { continue }
+            if job.cloud?.provider == .speechmatics,
+               job.cloud?.phase == .submitting,
+               job.cloud?.providerJobID == nil {
+                job.status = .ambiguousBilling
+                job.lastError = "Speechmatics may have accepted the audio before Hall-e quit, but no job ID was saved. The audio will not be uploaded again automatically."
+                job.cloud?.state = .ambiguousBilling
+                job.cloud?.phase = .ambiguousSubmission
+                job.cloud?.updatedAt = Date()
+                session.transcriptionJob = job
+                session.transcriptStatus = .failed
+                session.save()
+                Log.rec.error("speechmatics submission became ambiguous after interruption: \(session.slug, privacy: .public)")
+                continue
+            }
             job.status = .queued
             job.startedAt = nil
             job.lastError = nil
@@ -121,7 +135,7 @@ enum RecordingStore {
             var job = session.transcriptionJob ?? .legacy(status: .failed)
             job.queueForRetry()
             session.transcriptionJob = job
-            session.transcriptStatus = .pending
+            session.transcriptStatus = job.status == .queued ? .pending : .failed
             session.save()
         }
         AppPreferences.transcriptionRecoveryMigration = 1
@@ -181,6 +195,12 @@ enum RecordingStore {
         guard var session = allSessions().first(where: { $0.slug == slug }) else { return nil }
         var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
         job.queueForRetry()
+        guard job.status == .queued else {
+            session.transcriptionJob = job
+            session.transcriptStatus = .failed
+            session.save()
+            return nil
+        }
         session.transcriptionJob = job
         session.transcriptStatus = .pending
         session.save()

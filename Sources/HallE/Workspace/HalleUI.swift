@@ -23,6 +23,7 @@ struct HalleStatusBadge: View {
     var tone: HalleStatusTone = .neutral
     var body: some View {
         Text(text).font(.caption2.weight(.medium))
+            .lineLimit(1).truncationMode(.tail)
             .foregroundStyle(tone.color)
             .padding(.horizontal, 7).padding(.vertical, 3)
             .background(tone.color.opacity(0.12), in: Capsule())

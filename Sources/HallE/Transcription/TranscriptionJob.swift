@@ -95,12 +95,25 @@ struct TranscriptionJob: Codable, Equatable {
     }
 
     mutating func queueForRetry() {
+        if cloud?.provider == .speechmatics, cloud?.phase == .ambiguousSubmission,
+           cloud?.providerJobID == nil {
+            status = .ambiguousBilling
+            lastError = "Speechmatics submission is ambiguous and cannot be uploaded again automatically."
+            return
+        }
+        let resumableSpeechmatics = cloud?.provider == .speechmatics && cloud?.providerJobID != nil
         status = .queued
         lastError = nil
         queuedAt = Date()
         startedAt = nil
         completedAt = nil
-        cloud = nil
+        if resumableSpeechmatics {
+            cloud?.state = .awaitingResponse
+            cloud?.phase = .polling
+            cloud?.updatedAt = Date()
+        } else {
+            cloud = nil
+        }
         for index in tracks.indices {
             if tracks[index].status == .failed { tracks[index].status = .queued }
             tracks[index].lastError = nil
@@ -117,6 +130,7 @@ struct TranscriptionJob: Codable, Equatable {
         queuedAt = Date()
         startedAt = nil
         completedAt = nil
+        cloud = nil
     }
 
     mutating func beginAttempt() {
@@ -145,7 +159,13 @@ enum TranscriptionErrorSanitizer {
             return "Allow Speech Recognition in System Settings, then retry."
         }
         if text.contains("credit") {
-            return "Top up the Deepgram account, or add a fallback key in Settings → Transcription, then retry."
+            return "Top up the active transcription provider, or select Speechmatics after configuring it in Settings → Transcription."
+        }
+        if text.contains("ambiguous") || text.contains("will not be uploaded again") {
+            return "The recording is safe. Reveal the audio and review the provider job before choosing a new transcription attempt."
+        }
+        if text.contains("speechmatics") || text.contains("api key") || text.contains("processing region") {
+            return "Configure the Speechmatics key, region, Model Training confirmation, and consent in Settings → Transcription, then retry."
         }
         if text.contains("locale") || text.contains("on-device") {
             return "Install an on-device dictation language in System Settings → Keyboard → Dictation, then retry."

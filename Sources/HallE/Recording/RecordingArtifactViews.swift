@@ -80,7 +80,7 @@ struct TranscriptReaderView: View {
     @State private var query = ""
     @State private var showRetranscriptionConfirmation = false
 
-    private var transcript: String { RecordingStore.transcriptText(for: session) ?? "" }
+    private var transcript: String { TranscriptStore.load(session)?.speakerLabeledText ?? "" }
     private var visibleText: String {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return transcript }
         let matches = transcript.components(separatedBy: .newlines).filter {
@@ -96,6 +96,9 @@ struct TranscriptReaderView: View {
                 TextField("Search transcript", text: $query).textFieldStyle(.plain)
                 Button { copyTranscript() } label: { Image(systemName: "doc.on.doc") }
                     .buttonStyle(.borderless).help("Copy transcript")
+                Button { exportTranscript() } label: { Image(systemName: "square.and.arrow.up") }
+                    .buttonStyle(.borderless).help("Export transcript")
+                    .disabled(transcript.isEmpty)
                 if session.transcriptStatus == .completed {
                     Button { showRetranscriptionConfirmation = true } label: {
                         Image(systemName: "arrow.clockwise")
@@ -107,6 +110,10 @@ struct TranscriptReaderView: View {
                     Button { openNote(note) } label: { Image(systemName: "note.text") }
                         .buttonStyle(.borderless).help("Open meeting note")
                 }
+            }
+            if let metadata = TranscriptStore.load(session)?.providerMetadata {
+                Text("Transcribed with \(metadata.provider.capitalized) · speaker labels are anonymous")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Divider()
             if session.transcriptStatus == .completed, !transcript.isEmpty {
@@ -142,6 +149,15 @@ struct TranscriptReaderView: View {
     private var transcriptStatusSymbol: String {
         session.transcriptStatus == .failed ? "exclamationmark.triangle" : "waveform"
     }
+    private func exportTranscript() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Hall-e transcript.txt"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try transcript.write(to: url, atomically: true, encoding: .utf8) }
+        catch { NSAlert(error: error).runModal() }
+    }
+
     private func copyTranscript() {
         guard !transcript.isEmpty else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(transcript, forType: .string)
@@ -168,10 +184,12 @@ struct TranscriptionRecoveryControls: View {
             Text(TranscriptionErrorSanitizer.guidance(for: job.lastError))
                 .font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 8) {
-                Button("Retry") { RecordingCoordinator.retry(session: session) }
-                    .buttonStyle(.borderedProminent)
-                Button("Retry all failed") { RecordingCoordinator.retryAll() }
-                    .buttonStyle(.bordered)
+                if job.status != .ambiguousBilling {
+                    Button("Retry") { RecordingCoordinator.retry(session: session) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Retry all failed") { RecordingCoordinator.retryAll() }
+                        .buttonStyle(.bordered)
+                }
                 Button("Reveal audio") { NSWorkspace.shared.activateFileViewerSelecting([session.folderURL]) }
                     .buttonStyle(.bordered)
             }

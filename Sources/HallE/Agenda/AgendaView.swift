@@ -45,12 +45,8 @@ struct AgendaView: View {
             ForEach(timeline.hourGroups) { group in
                 let visible = group.events.filter { $0.dedupKey != key }
                 if !visible.isEmpty {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(group.hour, format: .dateTime.hour()).font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary).frame(width: 34, alignment: .trailing).padding(.top, 8)
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(visible) { EventRowView(event: $0, onSelect: onSelect) }
-                        }
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(visible) { EventRowView(event: $0, onSelect: onSelect) }
                     }
                 }
             }

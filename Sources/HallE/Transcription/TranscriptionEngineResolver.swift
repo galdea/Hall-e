@@ -1,19 +1,19 @@
 import Foundation
 
 enum TranscriptionEnginePreference: String, CaseIterable, Codable, Identifiable {
-    /// Retained so a preference stored by an older build still decodes. It now
-    /// means the same thing as `.deepgram`; there is no local engine left for it
-    /// to quietly fall through to, which is exactly why Whisper was removed.
+    /// Prefer configured, consented Deepgram, with Speechmatics as the cloud fallback.
     case auto
     case deepgram
+    case speechmatics
     case sfSpeech = "sfspeech"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .auto: "Automatic (Deepgram)"
+        case .auto: "Automatic (Deepgram → Speechmatics)"
         case .deepgram: "Deepgram Nova-3"
+        case .speechmatics: "Speechmatics Melia 1 (fallback)"
         case .sfSpeech: "Apple Speech"
         }
     }
@@ -50,18 +50,43 @@ enum TranscriptionLanguagePreference: String, CaseIterable, Codable, Identifiabl
 
 enum SolvedTranscriptionEngine: Equatable {
     case deepgram
+    case speechmatics
     case sfSpeech(language: String)
 }
 
 enum TranscriptionEngineResolver {
-    /// Deepgram is the only automatic engine. When it cannot run — no consent, no
-    /// key, no credit — the job fails loudly and stays retryable rather than
-    /// producing a worse transcript from some other engine behind Gabriel's back.
+    /// Availability is injected so routing never reads credentials or preferences.
+    /// With neither cloud available, Deepgram reports the missing setup/consent.
     static func resolve(preference: TranscriptionEnginePreference,
-                        language: TranscriptionLanguagePreference) -> SolvedTranscriptionEngine {
+                        language: TranscriptionLanguagePreference,
+                        availability: CloudFallbackPolicy.Availability = .init(),
+                        checkpoint: CloudTranscriptionJob? = nil) -> SolvedTranscriptionEngine {
+        // Resuming an accepted remote job is not a new engine selection.
+        if checkpoint?.provider == .speechmatics, checkpoint?.providerJobID != nil {
+            return .speechmatics
+        }
         switch preference {
-        case .auto, .deepgram:
+        case .auto:
+            // Keep retries on their chosen provider, including legacy Deepgram
+            // checkpoints. Configuration changes must not turn an unknown
+            // upload outcome or a spend failure into a provider switch.
+            if let checkpoint {
+                // Recording before setup must remain usable after connecting
+                // Speechmatics alone. These checkpoints prove no upload began.
+                let setupBlocked = checkpoint.state == .consentBlocked
+                    || checkpoint.lastErrorCode == "missing_api_key"
+                if checkpoint.provider != .speechmatics, setupBlocked,
+                   !availability.deepgramAvailable, availability.speechmaticsAvailable {
+                    return .speechmatics
+                }
+                return checkpoint.provider == .speechmatics ? .speechmatics : .deepgram
+            }
+            return availability.deepgramAvailable || !availability.speechmaticsAvailable
+                ? .deepgram : .speechmatics
+        case .deepgram:
             return .deepgram
+        case .speechmatics:
+            return .speechmatics
         case .sfSpeech:
             return .sfSpeech(language: language.sfSpeechCode)
         }

@@ -6,7 +6,13 @@ import GRDB
 enum DebugFixtures {
     /// True when running with directly-inserted sample data; sync is suppressed so
     /// the fixtures aren't rebuilt away.
-    static var isActive: Bool { ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1" }
+    static var isActive: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1"
+        #else
+        return false
+        #endif
+    }
 
     static func loadIfRequested() {
         guard isActive else { return }

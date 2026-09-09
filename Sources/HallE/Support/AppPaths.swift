@@ -59,7 +59,9 @@ enum AppPaths {
         appSupport.appendingPathComponent("vault-index.json")
     }
 
-    static var deepgramSpendLedgerFile: URL {
+    /// Kept at the original filename so existing spend reservations remain in
+    /// force after the ledger becomes provider-labelled.
+    static var cloudTranscriptionSpendLedgerFile: URL {
         appSupport.appendingPathComponent("deepgram-spend-ledger.json")
     }
 
@@ -69,6 +71,13 @@ enum AppPaths {
     /// full backfill therefore transcribe the same audio only once.
     static var deepgramResponseCacheDir: URL {
         let dir = backfillDirectory.appendingPathComponent("RawResponses", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir
+    }
+
+    static var speechmaticsResponseCacheDir: URL {
+        let dir = backfillDirectory.appendingPathComponent("SpeechmaticsRawResponses", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         return dir

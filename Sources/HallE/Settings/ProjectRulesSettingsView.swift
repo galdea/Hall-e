@@ -84,7 +84,7 @@ struct ProjectRulesSettingsView: View {
 
             Section("Emails & domains") {
                 if contacts.isEmpty {
-                    Text("None — add an attendee email (e.g. ana@getaccurate.cl) or a domain (getaccurate.cl) to pin those meetings here.")
+                    Text("None — add an attendee email (e.g. ana@example.com) or a domain (example.com) to pin those meetings here.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(contacts, id: \.self) { aliasRow(project, $0) }

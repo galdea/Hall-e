@@ -53,7 +53,7 @@ struct ProjectKnowledgeContextBuilder {
         sections += ["", "## Project notes"]
         for document in projectVault {
             let citation = ProjectCitation(id: "S\(citations.count + 1)", sourceDocumentId: "vault:\(document.path)",
-                                              sourceLabel: "Obsidian", title: document.title,
+                                              sourceLabel: "Local notes", title: document.title,
                                               excerpt: Self.excerpt(document.body), occurredAt: document.modifiedAt)
             citations.append(citation)
             let transcriptSafe = includeRawTranscripts ? document.body : Self.withoutTranscript(document.body)

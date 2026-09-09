@@ -87,4 +87,5 @@ enum KeychainStore {
     /// It is a different account with independent credit, not a second key on the
     /// same one, so it survives the primary's free grant being used up.
     static let deepgramFallbackTranscriptionAccount = "deepgram#prerecorded-transcription-fallback"
+    static let speechmaticsTranscriptionAccount = "speechmatics#batch-transcription"
 }

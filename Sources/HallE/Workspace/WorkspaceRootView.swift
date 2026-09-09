@@ -12,12 +12,13 @@ struct WorkspaceRootView: View {
             sidebar
         } content: {
             routeContent
-                .navigationTitle(model.route.title)
+                .navigationSplitViewColumnWidth(min: 350, ideal: 420, max: 620)
+                .navigationTitle(model.route == .meetings ? PublicUICopy.text("Meetings & recordings", "Reuniones y grabaciones") : model.route.title)
         } detail: {
             detailContent
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 1000, minHeight: 600)
         .safeAreaInset(edge: .top, spacing: 0) { RecordingPromptBanner() }
         .environment(\.locale, language.locale)
         .id(language.language)
@@ -27,9 +28,13 @@ struct WorkspaceRootView: View {
                     Button { recorder.stop() } label: {
                         Label(recorder.elapsed.formattedDuration, systemImage: "record.circle.fill")
                             .foregroundStyle(.red)
-                    }.help("Stop recording")
+                    }.help(PublicUICopy.text("Stop recording", "Detener grabación"))
+                } else {
+                    Button { WorkspaceNavigation.startRecording() } label: {
+                        Label(PublicUICopy.text("Start recording", "Iniciar grabación"), systemImage: "record.circle")
+                    }
                 }
-                SyncHealthButton()
+                if !model.appState.accounts.isEmpty { SyncHealthButton() }
                 Button { model.route = .search } label: { Image(systemName: "magnifyingglass") }
                     .keyboardShortcut("f", modifiers: .command).help(L10n.text("workspace.search"))
                 Button { SettingsWindowController.shared.show() } label: { Image(systemName: "gearshape") }
@@ -41,12 +46,12 @@ struct WorkspaceRootView: View {
     private var sidebar: some View {
         List(selection: $model.route) {
             Section(L10n.text("sidebar.focus")) {
-                routeRow(.today); routeRow(.inbox)
+                routeRow(.today); routeRow(.meetings); routeRow(.inbox)
             }
             Section(L10n.text("sidebar.organize")) {
-                routeRow(.projects); routeRow(.meetings); routeRow(.actions)
+                routeRow(.projects); routeRow(.actions)
             }
-            Section("Directory") { routeRow(.people); routeRow(.search) }
+            Section(PublicUICopy.text("Find", "Buscar")) { routeRow(.people); routeRow(.search) }
         }
         .navigationTitle(L10n.text("app.name"))
         .navigationSplitViewColumnWidth(min: 180, ideal: 205, max: 250)
@@ -55,7 +60,7 @@ struct WorkspaceRootView: View {
     private func routeRow(_ route: WorkspaceRoute) -> some View {
         Label {
             HStack {
-                Text(route.title)
+                Text(route == .meetings ? PublicUICopy.text("Meetings & recordings", "Reuniones y grabaciones") : route.title)
                 Spacer()
                 let badge = model.badge(for: route)
                 if badge > 0 { Text("\(badge)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
@@ -109,7 +114,7 @@ struct WorkspaceRootView: View {
 
     private var missingSelection: some View {
         HalleEmptyState(symbol: "questionmark.folder", title: "Item unavailable",
-                        detail: "It may have changed in Obsidian or during calendar sync.")
+                        detail: "It may have moved or been removed.")
     }
     private var detailPrompt: String {
         switch model.route {
@@ -138,8 +143,26 @@ struct TodayWorkspaceView: View {
                 MetricPill(value: "\(conflicts)", label: "conflicts")
                 Spacer()
             }.padding([.horizontal, .top], 12)
-            AgendaView(events: model.appState.agenda, hasAccounts: !model.appState.accounts.isEmpty) {
-                model.selection = .meeting($0.dedupKey)
+            if model.appState.accounts.isEmpty && model.appState.agenda.isEmpty {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(PublicUICopy.text("Ready when you are", "Listo cuando tú quieras")).font(.title2.bold())
+                    Text(PublicUICopy.text("Start a recording from the toolbar. Connect a calendar later if you want your agenda and meeting reminders here.", "Inicia una grabación desde la barra superior. Conecta un calendario después si quieres ver tu agenda y recordatorios aquí."))
+                        .foregroundStyle(.secondary)
+                    Button(PublicUICopy.text("View recordings", "Ver grabaciones")) { model.route = .meetings }
+                    if !model.recordings.isEmpty {
+                        Text(PublicUICopy.text("Recent recordings", "Grabaciones recientes")).font(.headline)
+                        ForEach(Array(model.recordings.prefix(5))) { recording in
+                            Button { model.selection = .recording(recording.id) } label: {
+                                Label(recording.startedAt.formatted(date: .abbreviated, time: .shortened), systemImage: "waveform")
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                    Spacer()
+                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                AgendaView(events: model.appState.agenda, hasAccounts: !model.appState.accounts.isEmpty) {
+                    model.selection = .meeting($0.dedupKey)
+                }
             }
         }
     }
@@ -184,7 +207,7 @@ struct ProjectsWorkspaceView: View {
     @State private var creatingProject = false
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("Stable project identities organize meetings, actions, and exports.").font(.caption).foregroundStyle(.secondary); Spacer(); Button { creatingProject = true } label: { Label("New Project", systemImage: "plus") } }.padding(12)
+            HStack { Text("Keep related meetings, notes, and actions together.").font(.caption).foregroundStyle(.secondary); Spacer(); Button { creatingProject = true } label: { Label("New Project", systemImage: "plus") } }.padding(12)
             Divider()
             if model.projects.isEmpty { HalleEmptyState(symbol: "folder.badge.plus", title: "No projects", detail: "Create a project to organize meetings and notes.") }
             else {
@@ -238,13 +261,13 @@ struct ProjectsWorkspaceView: View {
 struct MeetingsWorkspaceView: View {
     enum Filter: String, CaseIterable { case upcoming = "Upcoming", past = "Past", recordings = "Recordings" }
     let model: WorkspaceViewModel
-    @State private var filter: Filter = .upcoming
+    @State private var filter: Filter = .recordings
     @State private var query = ""
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Picker("", selection: $filter) { ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
-                TextField("Filter meetings", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+                Picker("", selection: $filter) { ForEach(Filter.allCases, id: \.self) { Text($0 == .recordings ? PublicUICopy.text("Recordings", "Grabaciones") : $0 == .upcoming ? PublicUICopy.text("Upcoming", "Próximas") : PublicUICopy.text("Past", "Pasadas")).tag($0) } }.pickerStyle(.segmented)
+                TextField(PublicUICopy.text("Filter meetings & recordings", "Filtrar reuniones y grabaciones"), text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
             }.padding(12)
             Divider()
             if filter == .recordings { recordingsList } else { meetingsList }

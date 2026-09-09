@@ -32,7 +32,7 @@ final class ObsidianFeatureHooks: FeatureHooks {
                 let descriptor = try service.createOrFindMeetingNote(for: event, projectName: event.projectId)
                 if open {
                     await MainActor.run {
-                        ObsidianURIOpener.open(vaultRelativePath: descriptor.vaultRelativePath)
+                        LocalNoteOpener.open(vaultRelativePath: descriptor.vaultRelativePath)
                     }
                 }
                 Log.obsidian.info("meeting note ready (created=\(descriptor.wasCreated, privacy: .public))")
@@ -45,8 +45,8 @@ final class ObsidianFeatureHooks: FeatureHooks {
 
     private func notifyVaultUnreachable() {
         let alert = NSAlert()
-        alert.messageText = "Obsidian vault not available"
-        alert.informativeText = "Choose your vault in Settings → Obsidian, and make sure the folder exists."
+        alert.messageText = "Notes folder not available"
+        alert.informativeText = "Choose your notes folder in Settings → Notes Folder, and make sure the folder exists."
         alert.runModal()
     }
 

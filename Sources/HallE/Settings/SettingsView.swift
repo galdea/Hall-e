@@ -1,25 +1,25 @@
 import SwiftUI
 
 enum SettingsGroup: String, CaseIterable, Identifiable {
-    case general, meetings, capture, intelligence, storagePrivacy, advanced
+    case general, capture, meetings, intelligence, storagePrivacy, advanced
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .general: "General"
-        case .meetings: "Meetings"
-        case .capture: "Capture"
-        case .intelligence: "Intelligence"
-        case .storagePrivacy: "Storage & Privacy"
-        case .advanced: "Advanced"
+        case .general: PublicUICopy.text("General", "General")
+        case .meetings: PublicUICopy.text("Calendar (optional)", "Calendario (opcional)")
+        case .capture: PublicUICopy.text("Recording & transcription", "Grabación y transcripción")
+        case .intelligence: PublicUICopy.text("AI (optional)", "IA (opcional)")
+        case .storagePrivacy: PublicUICopy.text("Files & privacy", "Archivos y privacidad")
+        case .advanced: PublicUICopy.text("About", "Acerca de")
         }
     }
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, accounts, calendars, notifications, recording, browserCalls
-    case transcription, aiOrchestrator, obsidian, privacy, advanced
+    case general, recording, transcription, accounts, calendars, notifications, browserCalls
+    case aiOrchestrator, obsidian, privacy, advanced, about
 
     var id: String { rawValue }
 
@@ -27,26 +27,27 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: .general
         case .accounts, .calendars, .notifications: .meetings
-        case .recording, .browserCalls: .capture
-        case .transcription, .aiOrchestrator: .intelligence
+        case .recording, .transcription, .browserCalls: .capture
+        case .aiOrchestrator: .intelligence
         case .obsidian, .privacy: .storagePrivacy
-        case .advanced: .advanced
+        case .advanced, .about: .advanced
         }
     }
 
     var title: String {
         switch self {
-        case .general: "General"
-        case .accounts: "Accounts"
-        case .calendars: "Calendar"
-        case .notifications: "Reminders"
-        case .recording: "Recording"
-        case .browserCalls: "Calls"
-        case .transcription: "Transcription"
-        case .aiOrchestrator: "AI Providers"
-        case .obsidian: "Vault"
-        case .privacy: "Privacy"
-        case .advanced: "Advanced"
+        case .general: PublicUICopy.text("General", "General")
+        case .accounts: PublicUICopy.text("Accounts", "Cuentas")
+        case .calendars: PublicUICopy.text("Calendar", "Calendario")
+        case .notifications: PublicUICopy.text("Reminders", "Recordatorios")
+        case .recording: PublicUICopy.text("Recording", "Grabación")
+        case .browserCalls: PublicUICopy.text("Calls", "Llamadas")
+        case .transcription: PublicUICopy.text("Transcription", "Transcripción")
+        case .aiOrchestrator: PublicUICopy.text("AI Providers", "Proveedores de IA")
+        case .obsidian: PublicUICopy.text("Notes folder", "Carpeta de notas")
+        case .privacy: PublicUICopy.text("Privacy", "Privacidad")
+        case .advanced: PublicUICopy.text("About", "Acerca de")
+        case .about: PublicUICopy.text("About & support", "Acerca de y apoyo")
         }
     }
 
@@ -62,7 +63,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiOrchestrator: ["ai", "providers", "openai", "anthropic", "models"]
         case .obsidian: ["vault", "obsidian", "storage", "notes"]
         case .privacy: ["privacy", "cloud", "consent", "data"]
-        case .advanced: ["advanced", "migration", "version", "about"]
+        case .advanced, .about: ["version", "about", "github", "star", "coffee", "support", "apoyo", "café"]
         }
     }
 
@@ -85,24 +86,25 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @State private var selection: SettingsSection = {
         guard let raw = ProcessInfo.processInfo.environment["HALLE_DEBUG_SETTINGS_TAB"] else { return .general }
-        return SettingsSection.debugValue(raw) ?? .general
+        let section = SettingsSection.debugValue(raw) ?? .general
+        return section == .advanced ? .about : section
     }()
     @State private var searchQuery = ""
     @State private var language = AppLanguageStore.shared
 
     private var filteredSections: [SettingsSection] {
-        SettingsSection.allCases.filter { $0.matches(searchQuery) }
+        SettingsSection.allCases.filter { $0 != .advanced && $0.matches(searchQuery) }
     }
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                TextField("Search settings", text: $searchQuery)
+                TextField(PublicUICopy.text("Search settings", "Buscar ajustes"), text: $searchQuery)
                     .textFieldStyle(.roundedBorder)
                     .padding(10)
                 Divider()
                 if filteredSections.isEmpty {
-                    Text("No settings found").foregroundStyle(.secondary).padding()
+                    Text(PublicUICopy.text("No settings found", "No se encontraron ajustes")).foregroundStyle(.secondary).padding()
                 }
                 List(selection: $selection) {
                     ForEach(SettingsGroup.allCases) { group in
@@ -144,7 +146,7 @@ struct SettingsView: View {
         case .aiOrchestrator: AISettingsView()
         case .obsidian: ObsidianSettingsView()
         case .privacy: PrivacySettingsView()
-        case .advanced: AdvancedSettingsView()
+        case .advanced, .about: AboutSettingsView()
         }
     }
 }

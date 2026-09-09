@@ -123,12 +123,23 @@ struct ProjectDetailView: View {
                     Button { showPreview = true } label: {
                         Label("Export context", systemImage: "square.and.arrow.up")
                     }.buttonStyle(.bordered)
-                    Button { tab = .assistant } label: {
-                        Label("Ask Hall-e", systemImage: "sparkles")
-                    }.buttonStyle(.borderedProminent)
+                    if LLMProviderConfig.load().useAI {
+                        Button { tab = .assistant } label: {
+                            Label("Ask Hall-e", systemImage: "sparkles")
+                        }.buttonStyle(.borderedProminent)
+                    }
                 }
-                Picker("", selection: $tab) { ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
-                    .pickerStyle(.segmented).frame(maxWidth: 760)
+                HStack {
+                    Picker("Project section", selection: $tab) {
+                        ForEach([Tab.overview, .meetings, .notes, .actions], id: \.self) { Text($0.rawValue).tag($0) }
+                        if [.assistant, .activity, .sources, .rules].contains(tab) { Text(tab.rawValue).tag(tab) }
+                    }.pickerStyle(.segmented)
+                    Menu("More") {
+                        Button("Activity") { tab = .activity }
+                        Button("Connected sources") { tab = .sources }
+                        Button("Project matching rules") { tab = .rules }
+                    }
+                }
             }.padding(20)
             Divider(); projectContent
         }

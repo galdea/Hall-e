@@ -31,7 +31,7 @@ struct TranscriptionRecoveryTests {
         #expect(TranscriptionErrorSanitizer.guidance(for: "The audio file could not be decoded.")
                 .contains("Reveal"))
         #expect(TranscriptionErrorSanitizer.guidance(for: "The Deepgram primary account reported no remaining credit (HTTP 402).")
-                .contains("Top up the Deepgram account"))
+                .contains("active transcription provider"))
     }
 
     @Test func retranscriptionResetClearsTracksAndCheckpoints() {
@@ -59,6 +59,7 @@ struct TranscriptionRecoveryTests {
         #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish) == .deepgram)
         #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english) == .deepgram)
         #expect(TranscriptionEngineResolver.resolve(preference: .deepgram, language: .spanish) == .deepgram)
+        #expect(TranscriptionEngineResolver.resolve(preference: .speechmatics, language: .spanish) == .speechmatics)
         // Apple Speech only when asked for, and still pinned to the chosen language.
         #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .spanish)
                 == .sfSpeech(language: "es"))
@@ -66,6 +67,34 @@ struct TranscriptionRecoveryTests {
                 == .sfSpeech(language: "es"))
         #expect(TranscriptionEngineResolver.resolve(preference: .sfSpeech, language: .english)
                 == .sfSpeech(language: "en"))
+    }
+
+    @Test func retryPreservesSpeechmaticsRemoteJobCheckpoint() {
+        var job = TranscriptionJob(status: .retryableFailed, attemptCount: 1,
+                                   cloud: .init(state: .retryableFailure,
+                                                requestFingerprint: "fp", estimatedCostUSD: 0.1,
+                                                requestID: "job-1", retryAfter: nil,
+                                                lastHTTPStatus: 503, lastErrorCode: nil,
+                                                updatedAt: Date(), provider: .speechmatics,
+                                                phase: .polling, providerJobID: "job-1"))
+        job.queueForRetry()
+        #expect(job.status == .queued)
+        #expect(job.cloud?.provider == .speechmatics)
+        #expect(job.cloud?.providerJobID == "job-1")
+        #expect(job.cloud?.phase == .polling)
+    }
+
+    @Test func ambiguousSpeechmaticsSubmissionCannotBeBlindlyRetried() {
+        var job = TranscriptionJob(status: .ambiguousBilling, attemptCount: 1,
+                                   cloud: .init(state: .ambiguousBilling,
+                                                requestFingerprint: "fp", estimatedCostUSD: 0.1,
+                                                requestID: nil, retryAfter: nil,
+                                                lastHTTPStatus: nil, lastErrorCode: nil,
+                                                updatedAt: Date(), provider: .speechmatics,
+                                                phase: .ambiguousSubmission, providerJobID: nil))
+        job.queueForRetry()
+        #expect(job.status == .ambiguousBilling)
+        #expect(job.cloud?.phase == .ambiguousSubmission)
     }
 
     @Test func appleSpeechLocalesAreScopedToEffectiveLanguage() {

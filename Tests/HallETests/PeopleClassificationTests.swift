@@ -16,7 +16,7 @@ struct PeopleClassificationTests {
 
     /// classificationProjects derives a tagged person's email → .email(strong) onto their project.
     @Test func personEmailClassifiesMeeting() {
-        let projects = AliasStore.seed
+        let projects = ClassificationFixtures.seed
         let accurateId = projects.first { $0.name == "Accurate" }!.id
         let person = Person(name: "Ana Ruiz", emails: ["ana@acmecorp.com"], projectIds: [accurateId])
         // Build a temporary AliasStore-equivalent by calling classificationProjects with explicit people
@@ -29,7 +29,7 @@ struct PeopleClassificationTests {
     }
 
     @Test func transcriptClassifiesByKeywords() {
-        let derived = deriveProjects(AliasStore.seed, people: [])
+        let derived = deriveProjects(ClassificationFixtures.seed, people: [])
         let c = MeetingClassifier(projects: derived, rules: UserRuleStore())
         let hit = c.classifyTranscript(text: "Hablamos del director dashboard, los funcionarios del colegio y el sociograma para el clima escolar.")
         #expect(hit.project == "Accurate")
@@ -38,7 +38,7 @@ struct PeopleClassificationTests {
     }
 
     @Test func personNameInTranscriptNudgesProject() {
-        let projects = AliasStore.seed
+        let projects = ClassificationFixtures.seed
         let rumboId = projects.first { $0.name == "Rumbo" }!.id
         let person = Person(name: "Zoraida Villalobos", projectIds: [rumboId])
         let derived = deriveProjects(projects, people: [person])

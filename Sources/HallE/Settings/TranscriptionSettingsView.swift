@@ -2,18 +2,27 @@ import SwiftUI
 import Speech
 
 struct TranscriptionSettingsView: View {
+    var isOnboarding = false
     @State private var engine = AppPreferences.transcriptionEngine
     @State private var language = AppPreferences.transcriptionLanguage
     @State private var speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
     @State private var deepgramKey = ""
     @State private var deepgramKeyStored = KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount)
+    @State private var speechmaticsKey = ""
+    @State private var speechmaticsKeyStored = KeychainStore.exists(account: KeychainStore.speechmaticsTranscriptionAccount)
+    @State private var speechmaticsRegion = AppPreferences.speechmaticsRegion
+    @State private var speechmaticsTrainingOff = AppPreferences.speechmaticsModelTrainingConfirmedOff
+    @State private var speechmaticsAudioEnabled = AppPreferences.allowSpeechmaticsAudioTranscription
     @State private var cloudAudioEnabled = AppPreferences.allowCloudAudioTranscription
     @State private var cloudReportsEnabled = AppPreferences.allowCloudTranscriptReports
     @State private var monthlyLimit = AppPreferences.deepgramMonthlyLimitUSD
     @State private var cloudConfirmation: CloudConfirmation?
-    @State private var creditAlertStatus: String?
+    @State private var keyError: String?
 
-    private enum CloudConfirmation: String, Identifiable { case audio, reports; var id: String { rawValue } }
+    private enum CloudConfirmation: String, Identifiable {
+        case deepgramAudio, speechmaticsAudio, reports
+        var id: String { rawValue }
+    }
 
     private var speechLanguage: String { language.sfSpeechCode }
     private var speechLocale: String? {
@@ -23,7 +32,7 @@ struct TranscriptionSettingsView: View {
     var body: some View {
         Form {
             Section("Transcription") {
-                Picker("Engine", selection: $engine) {
+                Picker("Provider", selection: $engine) {
                     ForEach(TranscriptionEnginePreference.allCases) { value in
                         Text(value.displayName).tag(value)
                     }
@@ -37,13 +46,13 @@ struct TranscriptionSettingsView: View {
                 }
                 .onChange(of: language) { _, value in AppPreferences.transcriptionLanguage = value }
 
-                Text("Deepgram handles code-switched Spanish and English in one pass, so Auto-detect is the right choice for most meetings. The language setting only constrains Apple Speech.")
+                Text("Choose Automatic and connect either provider below. We recommend both: Hall-e can switch from Deepgram to Speechmatics when Deepgram reports exhausted credit. Each provider needs your permission.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Deepgram cloud transcription") {
                 HStack {
-                    SecureField("Rotated Deepgram API key", text: $deepgramKey)
+                    SecureField("Deepgram API key", text: $deepgramKey)
                     Button(deepgramKeyStored ? "Replace" : "Save") { saveDeepgramKey() }
                         .disabled(deepgramKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if deepgramKeyStored {
@@ -59,35 +68,78 @@ struct TranscriptionSettingsView: View {
                 Toggle("Allow meeting audio to be uploaded to Deepgram", isOn: Binding(
                     get: { cloudAudioEnabled },
                     set: { enabled in
-                        if enabled { cloudConfirmation = .audio }
+                        if enabled { cloudConfirmation = .deepgramAudio }
                         else { revokeAudioConsent() }
                     }))
-                Text("Separate from transcript-text processing. Hall-e requests Nova-3 multilingual, diarization v2, and Model Improvement Program opt-out. You remain responsible for participant notice and lawful recording/cloud processing.")
+                Text("Audio is sent only for transcription. Speaker 1, Speaker 2, and similar labels distinguish voices; they do not identify people by name. Model improvement is opted out.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 HStack {
-                    Text("Monthly spend guard")
+                    Text("Cloud transcription monthly guard")
                     Spacer()
                     TextField("USD", value: $monthlyLimit, format: .number.precision(.fractionLength(0...2)))
                         .frame(width: 80).multilineTextAlignment(.trailing)
-                        .onSubmit { AppPreferences.deepgramMonthlyLimitUSD = monthlyLimit }
+                        .onChange(of: monthlyLimit) { _, value in
+                            if value.isFinite, value >= 1 { AppPreferences.deepgramMonthlyLimitUSD = value }
+                        }
                     Text("USD").font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Default: USD 25. Completed, in-flight, and ambiguous requests count toward the guard.")
+                Text("Shared by Deepgram and Speechmatics. Completed, in-flight, and ambiguous requests count toward the guard.")
                     .font(.caption).foregroundStyle(.secondary)
 
+                Link("Get a Deepgram API key ↗", destination: URL(string: "https://console.deepgram.com/")!)
+                Text("This is an estimated local spending guard, not your provider balance. Trial credits, prices, and limits depend on your account. Failed recordings remain available to retry.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+            }
+
+            Section("Speechmatics") {
                 HStack {
-                    Button("Send test credit alert") { Task { await sendCreditAlertTest() } }
-                    if let creditAlertStatus {
-                        Text(creditAlertStatus).font(.caption)
-                            .foregroundStyle(creditAlertStatus.hasPrefix("Delivered") ? .green : .orange)
+                    SecureField("Speechmatics API key", text: $speechmaticsKey)
+                    Button(speechmaticsKeyStored ? "Replace" : "Save") { saveSpeechmaticsKey() }
+                        .disabled(speechmaticsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if speechmaticsKeyStored {
+                        Button("Remove", role: .destructive) {
+                            KeychainStore.delete(account: KeychainStore.speechmaticsTranscriptionAccount)
+                            speechmaticsKeyStored = false
+                        }
                     }
                 }
-                Text("Hall-e notifies you when the Deepgram account runs out of credit, or when the monthly guard pauses uploads. Balance cannot be polled with a transcription-only key, so the alert is raised from the failed request itself. Recordings are always kept and stay retryable.")
+                Link("Get a Speechmatics API key ↗", destination: URL(string: "https://portal.speechmatics.com/")!)
+                Text(speechmaticsKeyStored ? "Key stored in macOS Keychain" : "No Speechmatics key stored")
+                    .font(.caption).foregroundStyle(speechmaticsKeyStored ? .green : .secondary)
+
+                Picker("Processing region", selection: $speechmaticsRegion) {
+                    Text("Select a region").tag(SpeechmaticsRegion?.none)
+                    ForEach(SpeechmaticsRegion.supportedRegions) { region in
+                        Text(region.displayName).tag(Optional(region))
+                    }
+                }
+                .onChange(of: speechmaticsRegion) { _, value in
+                    if value != AppPreferences.speechmaticsRegion { revokeSpeechmaticsConsent() }
+                    AppPreferences.speechmaticsRegion = value
+                }
+
+                Toggle("I confirmed Model Training is off in Speechmatics", isOn: $speechmaticsTrainingOff)
+                    .onChange(of: speechmaticsTrainingOff) { _, value in
+                        AppPreferences.speechmaticsModelTrainingConfirmedOff = value
+                        if !value { revokeSpeechmaticsConsent() }
+                    }
+
+                Toggle("Allow meeting audio to be uploaded to Speechmatics", isOn: Binding(
+                    get: { speechmaticsAudioEnabled },
+                    set: { enabled in
+                        if enabled { cloudConfirmation = .speechmaticsAudio }
+                        else { revokeSpeechmaticsConsent() }
+                    }))
+                    .disabled(speechmaticsRegion?.isSupported != true || !speechmaticsTrainingOff)
+                Text("Works on its own, or as the backup in Automatic mode. Multilingual transcription with anonymous speaker labels. Audio and job data may remain in your selected region for up to 7 days.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Automatic corporate reports") {
+            if !isOnboarding {
+            Section("Optional integrations") {
+                DisclosureGroup("Advanced transcript processing") {
                 Toggle("Allow transcript text to be processed by OpenClaw + Gemini", isOn: Binding(
                     get: { cloudReportsEnabled },
                     set: { enabled in
@@ -98,7 +150,9 @@ struct TranscriptionSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Apple Speech (explicit only)") {
+                }
+            Section("Apple Speech (optional)") {
+                DisclosureGroup("On-device transcription") {
                 HStack {
                     Image(systemName: speechAuthorized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(speechAuthorized ? .green : .orange)
@@ -118,49 +172,44 @@ struct TranscriptionSettingsView: View {
                           systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                Text("Hall-e never falls back silently: if Deepgram cannot run, the recording is kept and the job stays retryable rather than producing a worse transcript. Apple Speech is used only when you select it explicitly, and its locale list is restricted to the selected language.")
+                Text("Apple Speech is used only when selected. The language setting applies to Apple Speech; cloud providers detect languages automatically.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+                }
 
             Section {
                 Text("Raw transcripts stay local. Summary, decisions, action items, and follow-ups are generated only when AI and cloud transcript processing are enabled in AI Orchestrator.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Transcription")
+        .alert("Could not save API key", isPresented: Binding(get: { keyError != nil }, set: { if !$0 { keyError = nil } })) {
+            Button("OK") { keyError = nil }
+        } message: { Text(keyError ?? "") }
         .onAppear {
             speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
         }
-        .confirmationDialog(cloudConfirmation == .audio ? "Allow cloud audio processing?" : "Allow cloud transcript processing?",
+        .confirmationDialog(cloudConfirmation == .reports ? "Allow cloud transcript processing?" : "Allow cloud audio processing?",
                             isPresented: Binding(get: { cloudConfirmation != nil }, set: { if !$0 { cloudConfirmation = nil } }),
                             titleVisibility: .visible) {
             Button("I understand and allow this processing") {
-                if cloudConfirmation == .audio { grantAudioConsent() } else { grantReportConsent() }
+                switch cloudConfirmation {
+                case .deepgramAudio: grantAudioConsent()
+                case .speechmaticsAudio: grantSpeechmaticsConsent()
+                case .reports: grantReportConsent()
+                case nil: break
+                }
                 cloudConfirmation = nil
             }
             Button("Cancel", role: .cancel) { cloudConfirmation = nil }
         } message: {
-            Text(cloudConfirmation == .audio
-                 ? "Third-party meeting audio will leave this Mac. Confirm participant notice/consent as required."
-                 : "Transcript text will be sent through local OpenClaw to GitHub Copilot/Gemini under the currently presented provider terms.")
+            Text(confirmationMessage)
         }
     }
 
-
-    /// Verifies the credit alert end-to-end from the running app, which is the
-    /// only context where notification authorization is real.
-    private func sendCreditAlertTest() async {
-        let outcome = await DeepgramCreditMonitor.notify(.creditExhausted,
-            detail: "Test alert. This is what you will see when the Deepgram account runs out of credit.")
-        switch outcome {
-        case .posted: creditAlertStatus = "Delivered — check Notification Centre"
-        case .throttled: creditAlertStatus = "Already alerted in the last 24 h"
-        case .notAuthorized: creditAlertStatus = "Blocked — allow Hall-e notifications in System Settings"
-        case .failed(let detail): creditAlertStatus = "Failed — \(detail)"
-        }
-        DeepgramCreditMonitor.resetThrottle()
-    }
 
     private func saveDeepgramKey() {
         let value = deepgramKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -168,7 +217,16 @@ struct TranscriptionSettingsView: View {
         do {
             try KeychainStore.set(value, account: KeychainStore.deepgramTranscriptionAccount)
             deepgramKey = ""; deepgramKeyStored = true
-        } catch { deepgramKeyStored = false }
+        } catch { keyError = "macOS Keychain could not save the key. Your existing key was preserved. Please try again." }
+    }
+
+    private func saveSpeechmaticsKey() {
+        let value = speechmaticsKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        do {
+            try KeychainStore.set(value, account: KeychainStore.speechmaticsTranscriptionAccount)
+            speechmaticsKey = ""; speechmaticsKeyStored = true
+        } catch { keyError = "macOS Keychain could not save the key. Your existing key was preserved. Please try again." }
     }
 
     private func grantAudioConsent() {
@@ -182,6 +240,21 @@ struct TranscriptionSettingsView: View {
         cloudAudioEnabled = false
     }
 
+    private func grantSpeechmaticsConsent() {
+        guard let region = speechmaticsRegion, speechmaticsTrainingOff else { return }
+        AppPreferences.speechmaticsAudioConsent = .grant(
+            processor: region.consentProcessor,
+            purpose: "prerecorded meeting transcription and speaker diarization; provider retention up to 7 days")
+        speechmaticsAudioEnabled = true
+    }
+
+    private func revokeSpeechmaticsConsent() {
+        if var consent = AppPreferences.speechmaticsAudioConsent {
+            consent.revoke(); AppPreferences.speechmaticsAudioConsent = consent
+        }
+        speechmaticsAudioEnabled = false
+    }
+
     private func grantReportConsent() {
         AppPreferences.cloudTranscriptConsent = .grant(processor: "OpenClaw + GitHub Copilot/Gemini",
                                                        purpose: "structured meeting briefing generation")
@@ -191,5 +264,18 @@ struct TranscriptionSettingsView: View {
     private func revokeReportConsent() {
         if var consent = AppPreferences.cloudTranscriptConsent { consent.revoke(); AppPreferences.cloudTranscriptConsent = consent }
         cloudReportsEnabled = false
+    }
+
+    private var confirmationMessage: String {
+        switch cloudConfirmation {
+        case .deepgramAudio:
+            "Meeting audio will be sent to Deepgram. Confirm participant notice/consent as required."
+        case .speechmaticsAudio:
+            "Meeting audio will be sent to Speechmatics in the selected region and may remain there for up to 7 days. Confirm participant notice/consent, region, and that Model Training is off."
+        case .reports:
+            "Transcript text will be sent through local OpenClaw to GitHub Copilot/Gemini under the currently presented provider terms."
+        case nil:
+            ""
+        }
     }
 }

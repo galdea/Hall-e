@@ -4,7 +4,7 @@ import Foundation
 
 @Suite("Project classifier (deterministic)")
 struct ClassifierTests {
-    private let projects = AliasStore.seed
+    private let projects = ClassificationFixtures.seed
     private func classify(_ input: ClassificationInput) -> MeetingClassificationResult {
         MeetingClassifier(projects: projects, rules: UserRuleStore()).classify(makeEvent(input))
     }
@@ -79,7 +79,7 @@ struct ClassifierTests {
     }
 
     @Test func exactEmailAliasClassifies() {
-        var projects = AliasStore.seed
+        var projects = ClassificationFixtures.seed
         let i = projects.firstIndex { $0.name == "Accurate" }!
         projects[i].aliases.append(ProjectAlias("ceo@acmecorp.com", .email, .strong))
         // A generic title, but the attendee email is pinned to Accurate.
@@ -90,7 +90,7 @@ struct ClassifierTests {
     }
 
     @Test func sharedKeywordIsDownweightedToInbox() {
-        var projects = AliasStore.seed
+        var projects = ClassificationFixtures.seed
         // Same keyword added to two projects (the "Cloudflare in several projects" case).
         for name in ["Accurate", "Rumbo"] {
             let i = projects.firstIndex { $0.name == name }!
@@ -105,7 +105,7 @@ struct ClassifierTests {
     }
 
     @Test func uniqueKeywordStillWinsOverSharedOne() {
-        var projects = AliasStore.seed
+        var projects = ClassificationFixtures.seed
         for name in ["Accurate", "Rumbo", "Oasis"] {
             let i = projects.firstIndex { $0.name == name }!
             projects[i].aliases.append(ProjectAlias("workshop", .keyword, .normal))

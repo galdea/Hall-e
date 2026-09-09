@@ -1,0 +1,26 @@
+name: Bug report
+description: Help us fix something that went wrong.
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks! Please do not include API keys, recordings, or private transcripts."
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Hall-e version, macOS version, and Mac architecture
+      placeholder: Hall-e 0.2.0, macOS 15, Apple silicon
+    validations:
+      required: true

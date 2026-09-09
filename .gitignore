@@ -5,3 +5,15 @@ dist/
 *.p12
 *.pem
 .swiftpm/
+
+# Local credentials and recordings
+.env
+.env.*
+!.env.example
+google-client.json
+client_secret*.json
+*.key
+*.mobileprovision
+*.m4a
+*.aiff
+*.mp3

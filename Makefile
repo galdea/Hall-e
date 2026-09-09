@@ -2,22 +2,28 @@ APP_NAME := Hall-e
 DIST := dist/$(APP_NAME).app
 INSTALL_DIR := /Applications/$(APP_NAME).app
 
-# Workaround for this machine's broken CLT SwiftPM (see scripts/fix-toolchain.sh)
+# Opt in only for the legacy broken local CLT installation.
+ifeq ($(TOOLCHAIN_WORKAROUND),1)
 export SWIFTPM_CUSTOM_LIBS_DIR := $(CURDIR)/.toolchain-fix
+TOOLCHAIN_DEP := toolchain-fix
+endif
 
-.PHONY: build test app install run cert toolchain-fix clean
+.PHONY: build test app release install run cert toolchain-fix clean
 
 toolchain-fix:
 	./scripts/fix-toolchain.sh
 
-build: toolchain-fix
+build: $(TOOLCHAIN_DEP)
 	swift build
 
-test: toolchain-fix
+test: $(TOOLCHAIN_DEP)
 	swift test
 
-app: toolchain-fix
+app: $(TOOLCHAIN_DEP)
 	./scripts/build.sh
+
+release:
+	./scripts/release.sh
 
 install: app
 	rm -rf "$(INSTALL_DIR)"

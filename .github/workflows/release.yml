@@ -1,0 +1,108 @@
+name: Test and package macOS
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (X.Y.Z)'
+        default: '0.2.0'
+        required: true
+        type: string
+      notarize:
+        description: 'Developer ID sign and notarize using repository secrets'
+        default: false
+        type: boolean
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Swift 6 toolchain
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+      - name: Test
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.0'
+        run: swift test --arch '${{ matrix.arch }}' -j 4
+      - name: Resolve version and signing policy
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_NOTARIZE: ${{ inputs.notarize }}
+          TAG_NOTARIZE: ${{ vars.RELEASE_NOTARIZE }}
+        run: |
+          version="${REQUESTED_VERSION:-0.2.0}"
+          notarize=0
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            [[ "$TAG_NOTARIZE" != 1 ]] || notarize=1
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$REQUESTED_NOTARIZE" == true ]]; then
+            notarize=1
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "NOTARIZE=$notarize" >> "$GITHUB_ENV"
+          if [[ "$notarize" == 1 ]]; then
+            echo 'SIGNING_MODE=developer-id' >> "$GITHUB_ENV"
+          else
+            echo 'SIGNING_MODE=adhoc' >> "$GITHUB_ENV"
+          fi
+      - name: Package ad-hoc archive
+        if: env.NOTARIZE == '0'
+        env:
+          ARCH: ${{ matrix.arch }}
+          BUILD_NUM: ${{ github.run_number }}
+        run: ./scripts/release.sh
+      - name: Package notarized archive
+        if: env.NOTARIZE == '1'
+        env:
+          ARCH: ${{ matrix.arch }}
+          BUILD_NUM: ${{ github.run_number }}
+          SIGN_ID: ${{ secrets.DEVELOPER_ID_SIGN_ID }}
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./scripts/release-ci.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hall-e-${{ env.VERSION }}-macOS14-${{ matrix.arch }}-${{ env.SIGNING_MODE }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Prepare downloadable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Hall-e $RELEASE_TAG" --notes "Download the archive matching your Mac. arm64 is Apple silicon; x86_64 is Intel. Archives marked adhoc are not Apple-notarized; see the installation guide in the README."
+          fi
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_TAG" packages/*.zip packages/*.sha256 --clobber

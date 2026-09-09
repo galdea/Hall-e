@@ -287,6 +287,14 @@ enum RecordingCoordinator {
         if job.status == .completed, let transcript = TranscriptStore.load(session) {
             return (session, transcript)
         }
+        if CloudFallbackPolicy.requiresReview(job.cloud) {
+            job.status = .ambiguousBilling
+            job.lastError = "The prior cloud upload has no confirmed outcome. Review it before submitting audio again."
+            session.transcriptionJob = job
+            session.transcriptStatus = .failed
+            session.save(); notifyRecordingChanged()
+            return nil
+        }
         job.beginAttempt()
         session.transcriptionJob = job
         session.transcriptStatus = .inProgress
@@ -300,13 +308,26 @@ enum RecordingCoordinator {
         }
 
         let languagePreference = AppPreferences.transcriptionLanguage
+        let preference = AppPreferences.transcriptionEngine
         let resolved = TranscriptionEngineResolver.resolve(
-            preference: AppPreferences.transcriptionEngine,
-            language: languagePreference
+            preference: preference,
+            language: languagePreference,
+            availability: cloudAvailability(),
+            checkpoint: job.cloud
         )
 
+        // A returned Speechmatics job ID is a durable remote checkpoint. Resume
+        // it regardless of a later global engine change; creating a different
+        // provider request here could double-charge the same recording.
+        if job.cloud?.provider == .speechmatics, job.cloud?.providerJobID != nil {
+            return await transcribeSpeechmatics(session: session, prior: prior)
+        }
+
         if case .deepgram = resolved {
-            return await transcribeDeepgram(session: session, prior: prior)
+            return await transcribeDeepgram(session: session, prior: prior, preference: preference)
+        }
+        if case .speechmatics = resolved {
+            return await transcribeSpeechmatics(session: session, prior: prior)
         }
 
         let persistence = TranscriptionCheckpointPersistence(session: session, transcript: prior)
@@ -331,6 +352,8 @@ enum RecordingCoordinator {
                     // The whole mixed file is uploaded once so speaker labels
                     // remain stable across the meeting. Handled above.
                     throw DeepgramError.invalidResponse("Deepgram track routing error.")
+                case .speechmatics:
+                    throw SpeechmaticsError.invalidResponse("Speechmatics track routing error.")
                 case .sfSpeech(let language):
                     result = try await LocalTranscriptionProvider().transcribe(
                         fileURL: input.url, sessionID: session.id, track: input.track,
@@ -373,8 +396,17 @@ enum RecordingCoordinator {
         return markJobFailed(session: snapshot.session, message: message)
     }
 
+    private static func cloudAvailability() -> CloudFallbackPolicy.Availability {
+        .init(deepgramConfigured: !DeepgramTranscriptionProvider.credentials().isEmpty,
+              deepgramConsented: AppPreferences.allowCloudAudioTranscription,
+              speechmaticsConfigured: AppPreferences.speechmaticsRegion?.isSupported == true
+                  && !(KeychainStore.get(account: KeychainStore.speechmaticsTranscriptionAccount) ?? "").isEmpty,
+              speechmaticsConsented: AppPreferences.allowSpeechmaticsAudioTranscription)
+    }
+
     private static func transcribeDeepgram(session initial: RecordingSession,
-                                           prior: Transcript) async -> (session: RecordingSession, transcript: Transcript)? {
+                                           prior: Transcript,
+                                           preference: TranscriptionEnginePreference) async -> (session: RecordingSession, transcript: Transcript)? {
         var session = initial
         let audioURL = session.playbackURL
         guard FileManager.default.fileExists(atPath: audioURL.path) else {
@@ -428,6 +460,7 @@ enum RecordingCoordinator {
                 state = .actionRequired; status = .actionRequired
                 if case .actionRequired(let http, let providerCode) = error { httpStatus = http; code = providerCode }
                 if case .creditExhausted = error { httpStatus = 402 }
+                if case .missingAPIKey = error { code = "missing_api_key" }
                 // Running out of money is the one failure Gabriel cannot discover
                 // by waiting, so it raises an alert rather than only a job state.
                 await DeepgramCreditMonitor.handle(error)
@@ -456,6 +489,17 @@ enum RecordingCoordinator {
             session.transcriptionJob = job
             session.transcriptStatus = .failed
             session.save(); notifyRecordingChanged()
+            // Persist the definite rejection before evaluating fallback. The
+            // provider has already exhausted its configured Deepgram credentials.
+            if CloudFallbackPolicy.fallback(preference: preference, failedEngine: .deepgram,
+                                             error: error, availability: cloudAvailability(),
+                                             checkpoint: job.cloud) == .speechmatics {
+                job.status = .running
+                job.lastError = nil
+                session.transcriptionJob = job
+                session.transcriptStatus = .inProgress
+                return await transcribeSpeechmatics(session: session, prior: prior)
+            }
             if status == .queued, let retryAfter {
                 scheduleCloudRetry(sessionID: session.id, after: max(0, retryAfter.timeIntervalSinceNow))
             }
@@ -466,6 +510,136 @@ enum RecordingCoordinator {
         } catch {
             return markJobFailed(session: session, message: TranscriptionErrorSanitizer.message(error))
         }
+    }
+
+    private static func transcribeSpeechmatics(
+        session initial: RecordingSession,
+        prior: Transcript
+    ) async -> (session: RecordingSession, transcript: Transcript)? {
+        var session = initial
+        let audioURL = session.playbackURL
+        guard FileManager.default.fileExists(atPath: audioURL.path) else {
+            return markJobFailed(session: session, message: "No mixed recording audio is available for Speechmatics.")
+        }
+        var job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+        let checkpointRegion = job.cloud?.providerRegion.flatMap(SpeechmaticsRegion.init(rawValue:))
+        guard let region = checkpointRegion ?? AppPreferences.speechmaticsRegion else {
+            return markJobFailed(session: session, message: SpeechmaticsError.regionRequired.localizedDescription)
+        }
+        let assetDuration = (try? await AVURLAsset(url: audioURL).load(.duration)).map(CMTimeGetSeconds) ?? 0
+        let duration = assetDuration.isFinite && assetDuration > 0
+            ? assetDuration : max(0, (session.endedAt ?? Date()).timeIntervalSince(session.startedAt))
+        let estimate = SpeechmaticsConfiguration.estimatedCostUSD(duration: duration)
+        let existingJobID = job.cloud?.provider == .speechmatics ? job.cloud?.providerJobID : nil
+        job.cloud = .init(state: existingJobID == nil ? .uploading : .awaitingResponse,
+                          requestFingerprint: job.cloud?.requestFingerprint ?? "pending-audio-hash",
+                          estimatedCostUSD: estimate, requestID: existingJobID,
+                          retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
+                          updatedAt: Date(), provider: .speechmatics,
+                          phase: existingJobID == nil ? .submitting : .polling,
+                          providerJobID: existingJobID, providerRegion: region.rawValue)
+        session.transcriptionJob = job
+        session.save(); notifyRecordingChanged()
+
+        do {
+            let provider = SpeechmaticsTranscriptionProvider(
+                configuration: .init(region: region), rawResponseDirectory: session.folderURL,
+                duration: duration, responseCache: AppPaths.speechmaticsResponseCacheDir)
+            var replacement = try await provider.transcribe(
+                fileURL: audioURL, sessionID: session.id, track: "mixed",
+                existingJobID: existingJobID,
+                onJobCreated: { jobID in persistSpeechmaticsJobID(sessionID: session.id, jobID: jobID) })
+
+            // Pull the job-ID checkpoint written by the callback into the final
+            // atomic completion update.
+            if let persisted = RecordingStore.allSessions().first(where: { $0.id == session.id }) {
+                session = persisted
+                job = persisted.transcriptionJob ?? job
+            }
+            replacement.status = .completed
+            job.status = .completed
+            job.completedAt = Date()
+            job.lastError = nil
+            let jobID = replacement.providerMetadata?.requestID ?? job.cloud?.providerJobID
+            job.cloud = .init(state: .completed,
+                              requestFingerprint: replacement.providerMetadata?.audioSHA256 ?? "unknown",
+                              estimatedCostUSD: estimate, requestID: jobID, retryAfter: nil,
+                              lastHTTPStatus: 200, lastErrorCode: nil, updatedAt: Date(),
+                              provider: .speechmatics, phase: .completed, providerJobID: jobID)
+            job.cloud?.providerRegion = region.rawValue
+            session.transcriptionJob = job
+            session.transcriptStatus = .completed
+            session.localeUsed = replacement.localeUsed
+            TranscriptStore.save(replacement, to: session)
+            session.save(); notifyRecordingChanged()
+            return (session, replacement)
+        } catch let error as SpeechmaticsError {
+            if let persisted = RecordingStore.allSessions().first(where: { $0.id == session.id }) {
+                session = persisted
+                job = persisted.transcriptionJob ?? job
+            }
+            var state: CloudTranscriptionState = .actionRequired
+            var status: TranscriptionJobStatus = .actionRequired
+            var phase: CloudTranscriptionPhase = .actionRequired
+            var retryAfter: Date?
+            var httpStatus: Int?
+            switch error {
+            case .consentRequired:
+                state = .consentBlocked; status = .consentBlocked
+            case .ambiguousSubmission:
+                state = .ambiguousBilling; status = .ambiguousBilling; phase = .ambiguousSubmission
+            case .retryable(let http, let date, _):
+                state = .retryableFailure; status = .retryableFailed
+                retryAfter = date; httpStatus = http
+                phase = job.cloud?.providerJobID == nil ? .actionRequired : .polling
+            case .actionRequired(let http, _):
+                httpStatus = http
+            case .missingAPIKey, .regionRequired, .modelTrainingConfirmationRequired,
+                 .spendLimitExceeded, .rejected, .invalidResponse:
+                break
+            }
+            if state == .retryableFailure, job.attemptCount < 5 {
+                status = .queued
+                if retryAfter == nil {
+                    let exponential = min(300.0, pow(2.0, Double(max(0, job.attemptCount - 1))) * 5.0)
+                    retryAfter = Date().addingTimeInterval(exponential + Double.random(in: 0...2))
+                }
+            } else if state == .retryableFailure {
+                state = .actionRequired; status = .actionRequired; phase = .actionRequired
+            }
+            job.status = status
+            job.lastError = error.localizedDescription
+            job.cloud = .init(state: state,
+                              requestFingerprint: job.cloud?.requestFingerprint ?? "pending-audio-hash",
+                              estimatedCostUSD: estimate, requestID: job.cloud?.providerJobID,
+                              retryAfter: retryAfter, lastHTTPStatus: httpStatus,
+                              lastErrorCode: nil, updatedAt: Date(), provider: .speechmatics,
+                              phase: phase, providerJobID: job.cloud?.providerJobID)
+            job.cloud?.providerRegion = region.rawValue
+            session.transcriptionJob = job
+            session.transcriptStatus = .failed
+            session.save(); notifyRecordingChanged()
+            if status == .queued, let retryAfter {
+                scheduleCloudRetry(sessionID: session.id, after: max(0, retryAfter.timeIntervalSinceNow))
+            }
+            _ = prior
+            return nil
+        } catch {
+            return markJobFailed(session: session, message: TranscriptionErrorSanitizer.message(error))
+        }
+    }
+
+    private static func persistSpeechmaticsJobID(sessionID: UUID, jobID: String) {
+        guard var session = RecordingStore.allSessions().first(where: { $0.id == sessionID }),
+              var job = session.transcriptionJob else { return }
+        job.cloud?.provider = .speechmatics
+        job.cloud?.providerJobID = jobID
+        job.cloud?.requestID = jobID
+        job.cloud?.state = .awaitingResponse
+        job.cloud?.phase = .polling
+        job.cloud?.updatedAt = Date()
+        session.transcriptionJob = job
+        session.save(); notifyRecordingChanged()
     }
 
     private static func scheduleCloudRetry(sessionID: UUID, after delay: TimeInterval) {
@@ -506,13 +680,12 @@ enum RecordingCoordinator {
         }
     }
 
-    /// Renders a transcript for an Obsidian note. Deepgram diarization is the
-    /// whole point of the migration, so speaker turns must survive into the note;
-    /// writing `plainText` here silently discarded them for calendar meetings.
+    /// Preserve diarized turns from either cloud provider in Obsidian notes.
+    /// Anonymous speaker IDs remain zero-based in storage and display from one.
     private static func transcriptBody(_ transcript: Transcript) -> String {
         if transcript.segments.contains(where: { $0.speaker != nil }) {
             return transcript.segments.map { segment in
-                let label = segment.speaker.map { "**Speaker \($0):**" } ?? "**Speaker:**"
+                let label = segment.speaker.map { "**Speaker \($0 + 1):**" } ?? "**Speaker:**"
                 return "\(label) \(segment.text)"
             }.joined(separator: "\n\n")
         }

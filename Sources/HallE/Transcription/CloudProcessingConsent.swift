@@ -32,8 +32,27 @@ enum CloudTranscriptionState: String, Codable, Equatable {
     case cancelled
 }
 
+enum CloudTranscriptionProvider: String, Codable, Equatable {
+    case deepgram
+    case speechmatics
+}
+
+/// Provider-side phase. `CloudTranscriptionState` remains the user-facing job
+/// state; this finer checkpoint prevents a Speechmatics create request from
+/// being repeated after a crash or lost response.
+enum CloudTranscriptionPhase: String, Codable, Equatable {
+    case submitting
+    case submitted
+    case polling
+    case retrieving
+    case validating
+    case completed
+    case ambiguousSubmission = "ambiguous-submission"
+    case actionRequired = "action-required"
+}
+
 struct CloudTranscriptionJob: Codable, Equatable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var state: CloudTranscriptionState
     var requestFingerprint: String
     var estimatedCostUSD: Double
@@ -42,4 +61,12 @@ struct CloudTranscriptionJob: Codable, Equatable {
     var lastHTTPStatus: Int?
     var lastErrorCode: String?
     var updatedAt: Date
+    /// Optional for backward-compatible decoding of pre-provider checkpoints.
+    /// A missing provider is the existing Deepgram path.
+    var provider: CloudTranscriptionProvider? = nil
+    var phase: CloudTranscriptionPhase? = nil
+    var providerJobID: String? = nil
+    /// Speechmatics job IDs are region-scoped and must be retrieved from the
+    /// same endpoint that accepted the upload.
+    var providerRegion: String? = nil
 }

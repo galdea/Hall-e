@@ -123,7 +123,15 @@ struct DeepgramTranscriptionProvider: TranscriptionProvider {
         let bytes = ((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)) ?? 0
         let estimate = DeepgramConfiguration.estimatedCostUSD(duration: duration)
         let requestFingerprint = fingerprint(sessionID: sessionID, digest: digest, bytes: bytes)
-        try DeepgramSpendLedger.authorize(estimateUSD: estimate, fingerprint: requestFingerprint)
+        do {
+            try CloudTranscriptionSpendLedger.authorize(
+                provider: .deepgram, estimateUSD: estimate, fingerprint: requestFingerprint,
+                rateUSDPerHour: (DeepgramConfiguration.transcriptionRatePerMinute
+                                 + DeepgramConfiguration.diarizationRatePerMinute) * 60,
+                rateObservedAt: "2026-08-09")
+        } catch CloudTranscriptionSpendError.limitExceeded(let projected, let limit) {
+            throw DeepgramError.spendLimitExceeded(projected: projected, limit: limit)
+        }
 
         // Try each account in turn, but only step past one that is out of credit.
         var exhausted: DeepgramError?
@@ -157,7 +165,7 @@ struct DeepgramTranscriptionProvider: TranscriptionProvider {
         do {
             (data, response) = try await session.upload(for: request, fromFile: fileURL)
         } catch let error as URLError where error.code == .timedOut || error.code == .networkConnectionLost {
-            DeepgramSpendLedger.markAmbiguous(fingerprint: requestFingerprint)
+            CloudTranscriptionSpendLedger.markAmbiguous(fingerprint: requestFingerprint)
             throw DeepgramError.ambiguousBilling("Deepgram may have received the audio, but Hall-e lost the response. Review before retrying to avoid duplicate billing.")
         } catch {
             throw DeepgramError.retryable(status: nil, retryAfter: nil, message: "Deepgram upload failed before a response was received.")
@@ -201,9 +209,9 @@ struct DeepgramTranscriptionProvider: TranscriptionProvider {
         catch { throw DeepgramError.invalidResponse("Deepgram returned an unreadable response; the active transcript was preserved.") }
         var transcript = try normalize(decoded, sessionID: sessionID, track: track, digest: digest, rawName: rawName)
         transcript.providerMetadata?.credential = credential.label
-        DeepgramSpendLedger.complete(estimateUSD: estimate,
-                                     fingerprint: requestFingerprint,
-                                     requestID: decoded.metadata?.requestID)
+        CloudTranscriptionSpendLedger.complete(provider: .deepgram, estimateUSD: estimate,
+                                                fingerprint: requestFingerprint,
+                                                requestID: decoded.metadata?.requestID)
         return transcript
     }
 
