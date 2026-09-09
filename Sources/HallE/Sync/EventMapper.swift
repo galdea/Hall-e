@@ -48,15 +48,16 @@ enum EventMapper {
     }
 
     static func firstMeetingURL(in text: String) -> String? {
-        let patterns = ["zoom.us/j/", "meet.google.com/", "teams.microsoft.com/", "teams.live.com/",
-                        "whereby.com/", "meet.jit.si/"]
-        // Extract URL-ish tokens and match against known providers.
-        let tokens = text.split { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "<" || $0 == ">" }
-        for token in tokens {
-            let s = String(token)
-            if s.contains("http"), patterns.contains(where: { s.contains($0) }) {
-                return s.trimmingCharacters(in: CharacterSet(charactersIn: "()[]\"',"))
-            }
+        let hosts = ["zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com",
+                     "teams.cloud.microsoft", "whereby.com", "meet.jit.si"]
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        let decoded = text.replacingOccurrences(of: "&amp;", with: "&")
+        let range = NSRange(decoded.startIndex..<decoded.endIndex, in: decoded)
+        for match in detector.matches(in: decoded, range: range) {
+            guard let url = match.url, url.scheme?.lowercased() == "https",
+                  let host = url.host?.lowercased(),
+                  hosts.contains(where: { host == $0 || ($0 == "zoom.us" && host.hasSuffix(".zoom.us")) }) else { continue }
+            return url.absoluteString
         }
         return nil
     }

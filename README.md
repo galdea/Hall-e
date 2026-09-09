@@ -62,7 +62,7 @@ The default **$25 monthly guard** estimates combined transcription spending in H
 
 ## Add more when you need it
 
-- **Google Calendar:** connect one or more accounts for your agenda and reminders. This currently requires importing your own Google Desktop OAuth client; [setup instructions](docs/calendar-setup.md).
+- **Calendars & invitations:** first-run setup guides you through Google, Outlook/Microsoft 365 (Exchange), and other calendars available in Apple Calendar. Choose which calendars Hall-e reads, including Teams meeting links. No mailbox or Teams-chat access. No developer credentials needed for the macOS route; [setup and compatibility details](docs/calendar-setup.md).
 - **Call capture:** supported desktop apps and the bundled Chrome extension can capture the other side of a call. Enable permissions and configure it in **Settings → Calls**. A microphone-only recording may not hear remote participants wearing headphones.
 - **Notes:** choose an ordinary notes folder. Obsidian can open it too, but isn't required.
 - **AI:** optional provider settings enable additional intelligence. The advanced structured-report integration has separate requirements; see [meeting pipeline](docs/operations/MEETING_PIPELINE.md). A transcription API key alone does not generate AI reports.

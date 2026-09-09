@@ -30,6 +30,8 @@
 	<string>© 2026 Gabriel</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Hall-e reads calendars you select to show meetings, invitation links, and reminders. It does not edit events or read your email.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hall-e records meeting audio only when you explicitly start a recording.</string>
 	<key>NSAudioCaptureUsageDescription</key>

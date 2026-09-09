@@ -6,11 +6,11 @@ struct CalendarSettingsView: View {
     var body: some View {
         Form {
             if appState.accounts.isEmpty {
-                ContentUnavailableView("No Google accounts", systemImage: "calendar.badge.exclamationmark",
+                ContentUnavailableView("No calendar accounts", systemImage: "calendar.badge.exclamationmark",
                                        description: Text("Connect an account before choosing calendars."))
             } else {
                 ForEach(appState.accounts) { account in
-                    Section(account.email) {
+                    Section(account.displayName ?? account.email) {
                         let calendars = appState.calendars(for: account.email)
                         if calendars.isEmpty { Text("No calendars loaded. Refresh from Accounts.").foregroundStyle(.secondary) }
                         ForEach(calendars) { calendar in
@@ -30,7 +30,10 @@ struct CalendarSettingsView: View {
         Task {
             try? await AppDatabase.shared.dbQueue.write { db in
                 try db.execute(sql: "UPDATE calendar_source SET isSelected = ? WHERE accountEmail = ? AND calendarId = ?", arguments: [selected, source.accountEmail, source.calendarId])
-                if !selected { try CalendarEvent.filter(CalendarEvent.Columns.accountEmail == source.accountEmail && CalendarEvent.Columns.calendarId == source.calendarId).deleteAll(db) }
+                if !selected {
+                    try CalendarEvent.filter(CalendarEvent.Columns.accountEmail == source.accountEmail && CalendarEvent.Columns.calendarId == source.calendarId).deleteAll(db)
+                    try UnifiedEvent.deleteAll(db)
+                }
             }
             await SyncCoordinator.shared.syncAll()
         }

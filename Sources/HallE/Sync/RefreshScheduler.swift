@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Network
+import EventKit
 
 /// Drives periodic and event-based calendar syncs while keeping CPU/battery low:
 /// a coarse timer, wake-from-sleep, and network-restored triggers. All syncs go
@@ -21,6 +22,18 @@ final class RefreshScheduler {
         started = true
 
         scheduleTimer()
+        NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard MacCalendarProvider.enabled else { return }
+                self?.kick(reason: "calendar-change")
+            }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard MacCalendarProvider.enabled else { return }
+                self?.kick(reason: "calendar-permission-check")
+            }
+        }
 
         // Initial sync shortly after launch (let DB observers settle first).
         Task { @MainActor in
@@ -64,7 +77,7 @@ final class RefreshScheduler {
     }
 
     private func kick(reason: String) {
-        guard isOnline else { Log.sync.info("skip sync (offline): \(reason, privacy: .public)"); return }
+        guard isOnline || MacCalendarProvider.enabled else { Log.sync.info("skip sync (offline): \(reason, privacy: .public)"); return }
         Log.sync.info("sync trigger: \(reason, privacy: .public)")
         Task { await SyncCoordinator.shared.syncAll() }
     }

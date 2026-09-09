@@ -21,3 +21,9 @@ Recordings can be deleted in Hall-e. Locally cached provider responses, exported
 Only record and upload meetings when participants have received the notice or consent your situation requires.
 
 Provider references: [Deepgram model improvement](https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program), [Speechmatics security and compliance](https://docs.speechmatics.com/administration/security-and-compliance).
+
+## Calendars connected through macOS
+
+With explicit Calendar permission, Hall-e imports only calendars you select from macOS EventKit. macOS handles Google/Microsoft/other account sign-in. Hall-e does not receive account passwords and does not read email or Teams chats. Imported event titles, times, locations, notes, attendees, responses, and meeting URLs are cached locally for the agenda, project organization, and reminders. Calendar event content may be processed by separately enabled optional AI features under their existing controls. Calendar permission is named Full Access by macOS; Hall-e performs no event writes.
+
+Disconnecting removes the imported Mac-calendar cache, leaving source events and macOS accounts unchanged. Separately created recordings, notes, and project assignments remain. Revoking macOS Calendar permission clears imported cache on the next refresh or return to Hall-e. Do not connect the same calendar through both the macOS and advanced Google paths if you want to avoid possible duplicate meetings.

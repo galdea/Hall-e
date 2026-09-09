@@ -9,6 +9,8 @@ struct AccountsSettingsView: View {
 
     var body: some View {
         Form {
+            MacCalendarSettingsSection()
+            DisclosureGroup("Advanced: direct Google Calendar connection") {
             Section {
                 if appState.googleClientConfigured {
                     Label("Google OAuth client imported", systemImage: "checkmark.seal.fill")
@@ -33,10 +35,10 @@ struct AccountsSettingsView: View {
             }
 
             Section("Connected Accounts") {
-                if appState.accounts.isEmpty {
+                if appState.accounts.filter({ $0.email != MacCalendarProvider.accountID }).isEmpty {
                     Text("No accounts connected yet.").foregroundStyle(.secondary)
                 } else {
-                    ForEach(appState.accounts) { account in
+                    ForEach(appState.accounts.filter { $0.email != MacCalendarProvider.accountID }) { account in
                         HStack {
                             Circle().fill(Color(hex: account.colorHex) ?? .accentColor)
                                 .frame(width: 10, height: 10)
@@ -69,6 +71,8 @@ struct AccountsSettingsView: View {
                     }
                 }
                 .disabled(isAuthorizing || !appState.googleClientConfigured)
+            }
+
             }
 
             if let errorMessage {

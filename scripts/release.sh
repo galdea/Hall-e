@@ -2,7 +2,7 @@
 # Build and package locally; never publishes a GitHub release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export VERSION="${VERSION:-0.2.1}"
+export VERSION="${VERSION:-0.2.2}"
 export ARCH="${ARCH:-$(uname -m)}"
 export SIGNING_MODE="${SIGNING_MODE:-adhoc}"
 NOTARIZE="${NOTARIZE:-0}"

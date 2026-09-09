@@ -15,11 +15,11 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 5) {
-                ForEach(0..<4) { index in
+                ForEach(0..<5) { index in
                     Capsule().fill(index <= step ? Color.accentColor : Color.secondary.opacity(0.2)).frame(height: 4)
                 }
             }.padding(20)
-            if step == 2 {
+            if step == 2 || step == 3 {
                 VStack(alignment: .leading, spacing: 12) { stepContent }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.horizontal, 24).padding(.bottom, 12)
@@ -36,8 +36,8 @@ struct OnboardingView: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                 Spacer()
                 if step > 0 { Button(copy("Back", "Atrás")) { step -= 1 } }
-                Button(step == 3 ? copy("Open Hall-e", "Abrir Hall-e") : copy("Continue", "Continuar")) {
-                    if step == 3 { onClose(true) } else { step += 1 }
+                Button(step == 4 ? copy("Open Hall-e", "Abrir Hall-e") : copy("Continue", "Continuar")) {
+                    if step == 4 { onClose(true) } else { step += 1 }
                 }.buttonStyle(.borderedProminent)
             }.padding(20)
         }
@@ -72,6 +72,10 @@ struct OnboardingView: View {
                 .frame(maxHeight: .infinity)
             Text(copy("You can also record now and set up transcription later. Your audio stays on your Mac until you enable a provider.", "También puedes grabar ahora y configurar la transcripción después. El audio permanece en tu Mac hasta que actives un proveedor."))
                 .font(.caption).foregroundStyle(.secondary)
+        case 3:
+            header("calendar", copy("Connect your meeting accounts", "Conecta tus cuentas de reuniones"), copy("Bring in Google, Outlook/Microsoft 365, and other calendars from your Mac, including Teams invitations.", "Conecta Google, Outlook/Microsoft 365 y otros calendarios de tu Mac, incluidas invitaciones de Teams."))
+            AccountsSettingsView()
+                .frame(maxHeight: .infinity)
         default:
             header("checkmark.circle", copy("Start using Hall-e", "Empieza a usar Hall-e"), copy("Use Start recording in the workspace. Find audio and transcripts under Meetings & recordings → Recordings.", "Usa Iniciar grabación en el espacio de trabajo. Encuentra audio y transcripciones en Reuniones y grabaciones → Grabaciones."))
             if !micGranted { Text(copy("Microphone access is still needed before recording.", "Aún necesitas acceso al micrófono para grabar.")).foregroundStyle(.orange) }

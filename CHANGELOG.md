@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — Your calendars, including Teams invitations
+
+- First-run account setup uses macOS Internet Accounts for Google, Microsoft Exchange/Outlook, and other calendars available in Apple Calendar.
+- Explicit calendar selection, refresh, permission recovery, and local-cache disconnect controls.
+- Import event details and invitation responses; recognize Teams meeting links, including the newer Teams domain.
+- Keep advanced direct Google OAuth available; no email or Teams-chat access.
+
 ## 0.2.1 — Bring your own key, step by step
 
 - First-run setup explains personal provider accounts and eligible trial credit.

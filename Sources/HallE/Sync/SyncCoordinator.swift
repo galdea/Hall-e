@@ -40,6 +40,8 @@ actor SyncCoordinator {
     }
 
     private func performSync(timeMin: Date, timeMax: Date, isPrimaryWindow: Bool) async {
+        do { try await MacCalendarProvider.shared.refreshSources() }
+        catch { Log.sync.error("Could not refresh Mac calendars: \(error.localizedDescription, privacy: .public)") }
         let db = AppDatabase.shared.dbQueue
         let accounts: [ConnectedAccount]
         let sources: [CalendarSource]
@@ -52,7 +54,10 @@ actor SyncCoordinator {
             Log.sync.error("sync read failed: \(error, privacy: .public)")
             return
         }
-        guard !accounts.isEmpty else { return }
+        guard !accounts.isEmpty else {
+            await rebuildAfterSourceChange()
+            return
+        }
 
         await MainActor.run { AppState.shared.updateSyncStatus(isSyncing: true, error: nil) }
         defer { Task { @MainActor in AppState.shared.updateSyncStatus(isSyncing: false) } }
@@ -145,12 +150,19 @@ actor SyncCoordinator {
         var lastError: String?
         for cal in calendars {
             do {
-                let gevents = try await api.events(calendarId: cal.calendarId, timeMin: timeMin, timeMax: timeMax)
-                let mapped = gevents.compactMap {
-                    EventMapper.map($0, accountEmail: account.email, calendarId: cal.calendarId, fetchedAt: fetchedAt)
+                let mapped: [CalendarEvent]
+                if account.email == MacCalendarProvider.accountID {
+                    mapped = try await MacCalendarProvider.shared.events(calendarID: cal.calendarId, from: timeMin, to: timeMax, fetchedAt: fetchedAt)
+                } else {
+                    let gevents = try await api.events(calendarId: cal.calendarId, timeMin: timeMin, timeMax: timeMax)
+                    mapped = gevents.compactMap {
+                        EventMapper.map($0, accountEmail: account.email, calendarId: cal.calendarId, fetchedAt: fetchedAt)
+                    }
                 }
                 // Transactional window replace for this (account, calendar).
                 try await AppDatabase.shared.dbQueue.write { db in
+                    // A user may deselect or disconnect while fetching. Do not restore that cache.
+                    guard try CalendarSource.fetchOne(db, key: ["accountEmail": account.email, "calendarId": cal.calendarId])?.isSelected == true else { return }
                     try CalendarEvent
                         .filter(CalendarEvent.Columns.accountEmail == account.email
                                 && CalendarEvent.Columns.calendarId == cal.calendarId

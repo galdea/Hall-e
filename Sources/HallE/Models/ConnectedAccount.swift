@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-/// A connected Google account (one OAuth grant). Refresh token lives in Keychain,
-/// keyed by `email`; this row holds only non-secret metadata.
+/// Calendar account metadata. Google uses its email and a Keychain OAuth grant;
+/// the macOS calendar bridge uses a reserved local ID and no app-owned credentials.
 struct ConnectedAccount: Codable, Identifiable, Hashable, FetchableRecord, PersistableRecord {
     var email: String
     var displayName: String?

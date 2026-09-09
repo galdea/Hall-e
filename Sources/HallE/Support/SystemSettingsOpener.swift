@@ -4,6 +4,16 @@ import AppKit
 /// prompt for (macOS only shows the TCC dialog once; after a denial the user
 /// must flip the switch themselves).
 enum SystemSettingsOpener {
+    static func openInternetAccounts() {
+        if !open("x-apple.systempreferences:com.apple.Internet-Accounts-Settings.extension") {
+            _ = open("x-apple.systempreferences:com.apple.preferences.internetaccounts")
+        }
+    }
+
+    static func openCalendarPrivacy() {
+        open("x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")
+    }
+
     static func openMicrophonePrivacy() {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     }
