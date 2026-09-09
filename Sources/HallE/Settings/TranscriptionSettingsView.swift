@@ -40,6 +40,7 @@ struct TranscriptionSettingsView: View {
                     .font(.caption)
             }
 
+            if !isOnboarding {
             Section("Transcription") {
                 Picker("Provider", selection: $engine) {
                     ForEach(TranscriptionEnginePreference.allCases) { value in
@@ -57,6 +58,8 @@ struct TranscriptionSettingsView: View {
 
                 Text("Choose Automatic and connect either provider below. We recommend both: Hall-e can switch from Deepgram to Speechmatics when Deepgram reports exhausted credit. Each provider needs your permission.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
             }
 
             Section("1. Connect Deepgram") {
@@ -145,6 +148,14 @@ struct TranscriptionSettingsView: View {
             }
 
             Section("Setup checklist") {
+                if isOnboarding {
+                    Picker("Provider", selection: $engine) {
+                        ForEach(TranscriptionEnginePreference.allCases) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .onChange(of: engine) { _, value in AppPreferences.transcriptionEngine = value }
+                }
                 setupStatus(deepgramKeyStored && cloudAudioEnabled,
                             ready: "Deepgram configured", pending: "Deepgram not configured")
                 setupStatus(speechmaticsKeyStored && speechmaticsAudioEnabled && speechmaticsRegion?.isSupported == true && speechmaticsTrainingOff,
