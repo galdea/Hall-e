@@ -80,17 +80,64 @@ struct RecordingLifecycleTests {
                               sourceActive: nil).isEmpty)
     }
 
-    @Test func silencePromptsOnceUntilVoiceReturns() {
+    @Test func silencePromptsAtTwentyAndStopsAtForty() {
         var state = RecordingLifecycleState(startedAt: start, scheduledEndAt: nil)
-        _ = state.observe(now: start.addingTimeInterval(6), audioPowerDB: -70, sourceActive: nil)
-        #expect(state.observe(now: start.addingTimeInterval(27), audioPowerDB: -70,
-                              sourceActive: nil) == [.promptForSilence])
-        #expect(state.observe(now: start.addingTimeInterval(50), audioPowerDB: -70,
-                              sourceActive: nil).isEmpty)
-        _ = state.observe(now: start.addingTimeInterval(51), audioPowerDB: -20, sourceActive: nil)
-        _ = state.observe(now: start.addingTimeInterval(52), audioPowerDB: -70, sourceActive: nil)
-        #expect(state.observe(now: start.addingTimeInterval(73), audioPowerDB: -70,
-                              sourceActive: nil) == [.promptForSilence])
+        for second in 0..<20 {
+            #expect(state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil).isEmpty)
+        }
+        #expect(state.observe(now: start.addingTimeInterval(20), audioPowerDB: -70, sourceActive: nil) == [.promptForSilence])
+        for second in 21..<40 {
+            #expect(state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil).isEmpty)
+        }
+        #expect(state.observe(now: start.addingTimeInterval(40), audioPowerDB: -70, sourceActive: nil) == [.stop(.silencePrompt)])
+    }
+
+    @Test func voiceAtDeadlineCancelsAutomaticStop() {
+        var state = RecordingLifecycleState(startedAt: start, scheduledEndAt: nil)
+        for second in 0..<40 { _ = state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil) }
+        #expect(state.observe(now: start.addingTimeInterval(40), audioPowerDB: -20, sourceActive: nil) == [.cancelSilencePrompt])
+        #expect(state.silencePromptedAt == nil)
+    }
+
+    @Test func keepSuppressesUntilVoiceResumes() {
+        var state = RecordingLifecycleState(startedAt: start, scheduledEndAt: nil)
+        for second in 0...20 { _ = state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil) }
+        state.keepAfterSilence()
+        for second in 21...80 { #expect(state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil).isEmpty) }
+        _ = state.observe(now: start.addingTimeInterval(81), audioPowerDB: -20, sourceActive: nil)
+        for second in 82..<102 { _ = state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil) }
+        #expect(state.observe(now: start.addingTimeInterval(102), audioPowerDB: -70, sourceActive: nil) == [.promptForSilence])
+    }
+
+    @Test func missingAudioOrObservationGapCancelsCountdown() {
+        for missingAudio in [true, false] {
+            var state = RecordingLifecycleState(startedAt: start, scheduledEndAt: nil)
+            for second in 0...20 { _ = state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil) }
+            let actions = state.observe(now: start.addingTimeInterval(missingAudio ? 21 : 60), audioPowerDB: missingAudio ? .nan : -70, sourceActive: nil)
+            #expect(actions == [.cancelSilencePrompt])
+            #expect(state.silencePromptedAt == nil)
+        }
+    }
+
+    @Test func wakeRequiresANewObservedSilenceWindow() {
+        var state = RecordingLifecycleState(startedAt: start, scheduledEndAt: nil)
+        for second in 0...20 { _ = state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil) }
+        state.resetSilenceObservation()
+        #expect(state.silencePromptedAt == nil)
+        for second in 21..<41 { #expect(state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil).isEmpty) }
+        #expect(state.observe(now: start.addingTimeInterval(41), audioPowerDB: -70, sourceActive: nil) == [.promptForSilence])
+    }
+
+    @Test func customIntervalsAndPromptOnlyMode() {
+        var policy = RecordingLifecyclePolicy()
+        policy.silenceDuration = 5; policy.silencePromptTimeout = 7
+        var state = RecordingLifecycleState(startedAt: start, scheduledEndAt: nil)
+        for second in 0..<5 { _ = state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil, policy: policy) }
+        #expect(state.observe(now: start.addingTimeInterval(5), audioPowerDB: -70, sourceActive: nil, policy: policy) == [.promptForSilence])
+        policy.silenceAutoStop = false
+        for second in 6...30 { #expect(state.observe(now: start.addingTimeInterval(Double(second)), audioPowerDB: -70, sourceActive: nil, policy: policy).isEmpty) }
+        policy.silenceEnabled = false
+        #expect(state.observe(now: start.addingTimeInterval(31), audioPowerDB: -70, sourceActive: nil, policy: policy) == [.cancelSilencePrompt])
     }
 
     @Test func endedAudioSourceUsesStableConfirmation() {
@@ -134,6 +181,22 @@ struct RecordingLifecycleTests {
                                                             now: start.addingTimeInterval(600)))
         #expect(MeetingArtifactAvailability.showsArtifacts(session: session, eventEnd: event.endTs,
                                                            now: event.endTs))
+    }
+
+    @Test func interruptedCaptureRetainsIdentityAndRequiresReview() throws {
+        var original = RecordingSession(event: Self.event(start: start, duration: 600), notePath: nil)
+        original.state = .recording
+        original.startedAt = start
+        original.micStartedAt = start
+        let recovered = try #require(RecordingRecovery.interrupted(original, audioDuration: 42, now: start.addingTimeInterval(100)))
+        #expect(recovered.id == original.id)
+        #expect(recovered.folderPath == original.folderPath)
+        #expect(recovered.micFileName == original.micFileName)
+        #expect(recovered.endedAt == start.addingTimeInterval(42))
+        #expect(recovered.transcriptionJob?.status == .retryableFailed)
+        #expect(RecordingRecovery.interrupted(recovered, audioDuration: 42, now: start) == nil)
+        original.state = .completed
+        #expect(RecordingRecovery.interrupted(original, audioDuration: 42, now: start) == nil)
     }
 
     private static func event(start: Date, duration: TimeInterval) -> UnifiedEvent {

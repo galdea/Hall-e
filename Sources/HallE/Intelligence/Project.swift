@@ -42,6 +42,16 @@ struct Project: Codable, Identifiable, Hashable {
 
     /// Folder name for the Obsidian project note (display name is fine).
     var obsidianFolderName: String { name }
+
+    /// Historical names remain valid links after renaming a project; files on
+    /// disk do not need a destructive rename or frontmatter rewrite.
+    var referenceNames: [String] {
+        Array(Set([id, name] + aliases.filter { $0.kind == .projectName }.map(\.text)))
+    }
+    func matchesReference(_ reference: String?) -> Bool {
+        guard let reference else { return false }
+        return referenceNames.contains { $0.caseInsensitiveCompare(reference) == .orderedSame }
+    }
 }
 
 /// The fixed JSON contract for a classification result.

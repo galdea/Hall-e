@@ -19,7 +19,7 @@ enum MeetingLauncher {
     @discardableResult
     static func join(_ event: UnifiedEvent) -> Bool {
         guard let link = event.meetingURL, let url = URL(string: link) else { return false }
-        NSWorkspace.shared.open(url)
+        guard NSWorkspace.shared.open(url) else { return false }
         if MeetingLaunchPolicy.shouldAutoRecord(event) {
             RecordingCoordinator.startAutomaticRecording(for: event)
         }

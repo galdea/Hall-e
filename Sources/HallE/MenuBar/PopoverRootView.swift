@@ -46,6 +46,7 @@ struct PopoverPeriodSelection: Equatable {
 /// matching agenda content — all in one component.
 struct PopoverRootView: View {
     @State private var appState = AppState.shared
+    @State private var recorder = RecordingService.shared
     @State private var mode: PopoverMode = {
         ProcessInfo.processInfo.environment["HALLE_DEBUG_POPOVER_MODE"]
             .flatMap(PopoverMode.init(rawValue:)) ?? .day
@@ -72,6 +73,8 @@ struct PopoverRootView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            quickActions
+            Divider()
             modeBar
             Divider()
             if let error = appState.lastSyncError { syncError(error) }
@@ -94,6 +97,46 @@ struct PopoverRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .hallePopoverWillShow)) { _ in
             goToToday()
         }
+    }
+
+    private func openMeeting(_ event: UnifiedEvent) {
+        NotificationCenter.default.post(name: .halleOpenMeeting, object: nil,
+                                        userInfo: ["dedupKey": event.dedupKey])
+    }
+
+    private var quickActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                if let event = WorkspaceNavigation.nextMeeting(in: appState.agenda, now: context.date) {
+                    HStack {
+                        Button { openMeeting(event) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(event.startTs <= context.date ? "Now" : "Next meeting")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text(event.title).lineLimit(1)
+                                Text(event.startTs, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.buttonStyle(.plain)
+                        Spacer()
+                        if let link = event.meetingURL, URL(string: link) != nil {
+                            Button("Join") { MeetingLauncher.join(event) }.buttonStyle(.borderedProminent)
+                        }
+                    }
+                }
+            }
+            HStack {
+                if recorder.isRecording {
+                    Label(recorder.currentSession?.eventTitle ?? "Recording", systemImage: "record.circle.fill")
+                        .foregroundStyle(.red).lineLimit(1)
+                    Spacer()
+                    Button("Stop recording") { recorder.stop() }
+                } else {
+                    Button("Start recording…") { WorkspaceNavigation.startRecording() }
+                    Spacer()
+                }
+            }.font(.caption)
+        }.padding(.horizontal, 14).padding(.vertical, 8)
     }
 
     // MARK: - Header
@@ -155,7 +198,7 @@ struct PopoverRootView: View {
     private var content: some View {
         switch mode {
         case .day:
-            AgendaView(events: appState.agenda, hasAccounts: !appState.accounts.isEmpty)
+            AgendaView(events: appState.agenda, hasAccounts: !appState.accounts.isEmpty, onSelect: openMeeting)
         case .week:
             weekView
         case .month:
@@ -181,7 +224,7 @@ struct PopoverRootView: View {
                             Text("—").font(.caption).foregroundStyle(.tertiary).padding(.horizontal, 14)
                         } else {
                             ForEach(timeline.allDay + timeline.hourGroups.flatMap(\.events)) {
-                                EventRowView(event: $0)
+                                EventRowView(event: $0, onSelect: openMeeting)
                             }
                         }
                     }
@@ -211,7 +254,7 @@ struct PopoverRootView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(dayTimeline.allDay + dayTimeline.hourGroups.flatMap(\.events)) {
-                            EventRowView(event: $0)
+                            EventRowView(event: $0, onSelect: openMeeting)
                         }
                     }
                     .padding(.bottom, 8)

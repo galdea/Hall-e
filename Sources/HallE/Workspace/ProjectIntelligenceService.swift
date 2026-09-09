@@ -72,8 +72,8 @@ actor ProjectIntelligenceService {
 
     func makeContext(project: Project) async throws -> ProjectAssistantContext {
         let values = try await AppDatabase.shared.dbQueue.read { db in
-            let vault = try VaultDocument.filter(VaultDocument.Columns.project == project.name).fetchAll(db)
-            let actions = try IndexedActionItem.filter(IndexedActionItem.Columns.project == project.name).fetchAll(db)
+            let vault = try VaultDocument.filter(project.referenceNames.contains(VaultDocument.Columns.project)).fetchAll(db)
+            let actions = try IndexedActionItem.filter(project.referenceNames.contains(IndexedActionItem.Columns.project)).fetchAll(db)
             let meetings = try UnifiedEvent.fetchAll(db)
             let sources = try ProjectSourceRecord.filter(ProjectSourceRecord.Columns.projectId == project.id).fetchAll(db)
             let documents = try ProjectSourceDocument.filter(ProjectSourceDocument.Columns.projectId == project.id).fetchAll(db)
@@ -91,9 +91,8 @@ actor ProjectIntelligenceService {
 
     private func fallbackSnapshot(project: Project, context: ProjectAssistantContext) async throws -> ProjectSnapshotPayload {
         let counts = try await AppDatabase.shared.dbQueue.read { db -> (Int, Int, Int) in
-            let meetings = try UnifiedEvent.filter(UnifiedEvent.Columns.projectId == project.name
-                || UnifiedEvent.Columns.projectId == project.id).fetchCount(db)
-            let actions = try IndexedActionItem.filter(IndexedActionItem.Columns.project == project.name
+            let meetings = try UnifiedEvent.filter(project.referenceNames.contains(UnifiedEvent.Columns.projectId)).fetchCount(db)
+            let actions = try IndexedActionItem.filter(project.referenceNames.contains(IndexedActionItem.Columns.project)
                 && IndexedActionItem.Columns.isCompleted == false).fetchCount(db)
             let sources = try ProjectSourceRecord.filter(ProjectSourceRecord.Columns.projectId == project.id).fetchCount(db)
             return (meetings, actions, sources)

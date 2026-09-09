@@ -5,10 +5,16 @@ import SwiftUI
 final class WorkspaceWindowController {
     static let shared = WorkspaceWindowController()
     private var window: NSWindow?
+    private let model = WorkspaceViewModel()
+
+    func showMeeting(dedupKey: String) {
+        model.openMeeting(dedupKey: dedupKey)
+        show()
+    }
 
     func show() {
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let controller = NSHostingController(rootView: WorkspaceRootView())
+        let controller = NSHostingController(rootView: WorkspaceRootView(model: model))
         let window = NSWindow(contentViewController: controller)
         window.title = "Hall-e"
         window.setContentSize(NSSize(width: 1180, height: 760))

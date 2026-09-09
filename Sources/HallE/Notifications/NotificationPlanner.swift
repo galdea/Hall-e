@@ -20,6 +20,38 @@ enum NotificationPlanner {
         var toCancelIdentifiers: [String]
     }
 
+    struct PendingContent: Equatable {
+        var title: String
+        var body: String
+        var meetingURL: String?
+        var htmlLink: String?
+        var leadMinutes: Int?
+        var sound: String?
+    }
+
+    static func needsReplacement(_ pending: PendingContent, desired: DesiredNotification,
+                                 leadMinutes: Int, sound: String) -> Bool {
+        pending.title != desired.title || pending.body != desired.body
+            || (pending.meetingURL ?? "") != (desired.meetingURL ?? "")
+            || (pending.htmlLink ?? "") != (desired.htmlLink ?? "")
+            || pending.leadMinutes != leadMinutes || pending.sound != sound
+    }
+
+    static func occurrence(from identifier: String) -> (key: String, start: Date)? {
+        guard identifier.hasPrefix("mtg|"), !identifier.hasSuffix("|snooze"),
+              let split = identifier.lastIndex(of: "|"),
+              let epoch = Double(identifier[identifier.index(after: split)...]) else { return nil }
+        return (String(identifier[identifier.index(identifier.startIndex, offsetBy: 4)..<split]),
+                Date(timeIntervalSince1970: epoch))
+    }
+
+    static func snoozableOccurrences(from events: [UnifiedEvent], now: Date, showDeclined: Bool) -> Set<String> {
+        Set(events.filter {
+            !$0.isAllDay && $0.status != "cancelled" && $0.endTs > now
+                && (showDeclined || $0.effectiveResponse != "declined")
+        }.map { identifier(dedupKey: $0.dedupKey, startTs: $0.startTs) })
+    }
+
     /// Notification identifier is stable per (meeting, start) so a rescheduled
     /// meeting (new start) replaces the old pending request.
     static func identifier(dedupKey: String, startTs: Date) -> String {
@@ -40,6 +72,7 @@ enum NotificationPlanner {
             let fireAt = max(e.startTs.addingTimeInterval(-lead), now.addingTimeInterval(1))
             let time = e.startTs.formatted(date: .omitted, time: .shortened)
             var parts = ["Starts at \(time)"]
+            if let project = e.projectId { parts.append("Project: \(project)") }
             if e.meetingURL != nil { parts.append("has a meeting link") }
             if let label = accountLabel(e) { parts.append("via \(label)") }
             return DesiredNotification(

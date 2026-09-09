@@ -21,6 +21,8 @@ final class StatusItemController: NSObject {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         statusItem.isVisible = true
+        NotificationCenter.default.addObserver(self, selector: #selector(openMeetingNotification(_:)),
+                                               name: .halleOpenMeeting, object: nil)
 
         popover.contentSize = NSSize(width: 460, height: 620)
         // Debug runs keep the popover pinned (and floated, below) so it can be
@@ -85,18 +87,32 @@ final class StatusItemController: NSObject {
 
     private func showMenu() {
         let menu = NSMenu()
+        if let event = WorkspaceNavigation.nextMeeting(in: AppState.shared.agenda) {
+            let meeting = menu.addItem(withTitle: "Next meeting: \(event.title)", action: #selector(openMeetingItem(_:)), keyEquivalent: "")
+            meeting.target = self
+            meeting.representedObject = event.dedupKey
+            if let link = event.meetingURL, URL(string: link) != nil {
+                let join = menu.addItem(withTitle: "Join", action: #selector(joinMeeting(_:)), keyEquivalent: "")
+                join.target = self
+                join.representedObject = event
+            }
+            menu.addItem(.separator())
+        }
         if RecordingService.shared.isRecording {
-            let stop = menu.addItem(withTitle: "■ Stop recording", action: #selector(stopRecording), keyEquivalent: "")
+            let active = menu.addItem(withTitle: "Recording: \(RecordingService.shared.currentSession?.eventTitle ?? "Recording")", action: nil, keyEquivalent: "")
+            active.isEnabled = false
+            let stop = menu.addItem(withTitle: "Stop recording", action: #selector(stopRecording), keyEquivalent: "")
             stop.target = self
             menu.addItem(.separator())
         } else {
+            menu.addItem(withTitle: "Start recording…", action: #selector(startRecording), keyEquivalent: "").target = self
             menu.addItem(withTitle: "Record WhatsApp call…", action: #selector(recordWhatsAppCall), keyEquivalent: "").target = self
             menu.addItem(.separator())
         }
-        menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
         menu.addItem(withTitle: "Open Workspace…", action: #selector(openWorkspace), keyEquivalent: "w").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Hall-e", action: #selector(quit), keyEquivalent: "q").target = self
 
@@ -106,6 +122,27 @@ final class StatusItemController: NSObject {
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
     }
+
+    @objc private func openMeetingNotification(_ notification: Notification) {
+        guard let key = notification.userInfo?["dedupKey"] as? String,
+              !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        Task { @MainActor in
+            popover.performClose(nil)
+            WorkspaceWindowController.shared.showMeeting(dedupKey: key)
+        }
+    }
+
+    @objc private func openMeetingItem(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        WorkspaceWindowController.shared.showMeeting(dedupKey: key)
+    }
+
+    @objc private func joinMeeting(_ sender: NSMenuItem) {
+        guard let event = sender.representedObject as? UnifiedEvent else { return }
+        MeetingLauncher.join(event)
+    }
+
+    @objc private func startRecording() { WorkspaceNavigation.startRecording() }
 
     @objc private func refresh() {
         NotificationCenter.default.post(name: .halleManualRefresh, object: nil)
@@ -131,6 +168,7 @@ final class StatusItemController: NSObject {
 }
 
 extension Notification.Name {
+    static let halleOpenMeeting = Notification.Name("cl.gabriel.hall-e.openMeeting")
     static let halleManualRefresh = Notification.Name("cl.gabriel.hall-e.manualRefresh")
     static let hallePopoverWillShow = Notification.Name("cl.gabriel.hall-e.popoverWillShow")
 }

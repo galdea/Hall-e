@@ -1,5 +1,7 @@
 import Foundation
+import AppKit
 import Observation
+import GRDB
 
 enum WorkspaceRoute: String, CaseIterable, Identifiable, Hashable {
     case today, inbox, projects, meetings, actions, people, search
@@ -72,8 +74,24 @@ struct ProjectActivityItem: Identifiable, Hashable {
 @Observable
 final class WorkspaceViewModel {
     let appState: AppState
-    var route: WorkspaceRoute = .today
+    var route: WorkspaceRoute = .today {
+        didSet { if route != oldValue { selection = nil } }
+    }
     var selection: WorkspaceSelection?
+    var requestedMeeting: UnifiedEvent?
+
+    func openMeeting(dedupKey: String) {
+        guard !dedupKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        route = .meetings
+        selection = .meeting(dedupKey)
+        requestedMeeting = appState.agenda.first { $0.dedupKey == dedupKey }
+        if requestedMeeting == nil {
+            requestedMeeting = try? AppDatabase.shared.dbQueue.read { db in
+                try UnifiedEvent.fetchOne(db, key: dedupKey)
+            }
+        }
+    }
+
     var searchQuery = "" { didSet { scheduleSearch() } }
     var searchResults: [VaultDocument] = []
     var isSearching = false
@@ -106,12 +124,12 @@ final class WorkspaceViewModel {
     }
 
     func activity(for project: Project) -> [ProjectActivityItem] {
-        var items = appState.agenda.filter { $0.projectId == project.name || $0.projectId == project.id }.map {
+        var items = appState.agenda.filter { project.matchesReference($0.projectId) }.map {
             ProjectActivityItem(id: "meeting-\($0.dedupKey)", kind: .meeting, title: $0.title,
                                 detail: $0.descriptionText, date: $0.startTs,
                                 selection: .meeting($0.dedupKey))
         }
-        items += appState.vaultDocuments.filter { $0.project == project.name }.map {
+        items += appState.vaultDocuments.filter { project.matchesReference($0.project) }.map {
             ProjectActivityItem(id: "note-\($0.path)", kind: .note, title: $0.title,
                                 detail: $0.path, date: $0.modifiedAt, selection: .document($0.path))
         }
@@ -196,6 +214,36 @@ final class WorkspaceViewModel {
             guard !Task.isCancelled else { return }
             self?.searchResults = docs
             self?.isSearching = false
+        }
+    }
+}
+
+/// Shared actions keep the status menu and popover consistent.
+@MainActor
+enum WorkspaceNavigation {
+    static func nextMeeting(in events: [UnifiedEvent], now: Date = Date()) -> UnifiedEvent? {
+        events.filter {
+            !$0.isAllDay && $0.endTs > now && $0.status != "cancelled" && $0.effectiveResponse != "declined"
+        }.sorted { $0.startTs == $1.startTs ? $0.dedupKey < $1.dedupKey : $0.startTs < $1.startTs }.first
+    }
+
+    static func startRecording() {
+        guard !RecordingService.shared.isRecording else { return }
+        let alert = NSAlert()
+        alert.messageText = "Start recording?"
+        alert.informativeText = "Hall-e records locally. Tell every participant before recording."
+        alert.addButton(withTitle: "Start recording")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let now = Date()
+        let event = UnifiedEvent(
+            dedupKey: "manual:\(UUID().uuidString)", title: "Recording — \(HalleDate.time(now))",
+            startTs: now, endTs: now, isAllDay: false, status: "confirmed",
+            winnerAccountEmail: AppPreferences.primaryAccountEmail ?? "", sourcesJSON: "[]")
+        Task {
+            await RecordingService.shared.start(for: event, notePath: nil, sourceKind: .manual) { session in
+                Task { await RecordingCoordinator.finishCall(session: session, event: event) }
+            }
         }
     }
 }

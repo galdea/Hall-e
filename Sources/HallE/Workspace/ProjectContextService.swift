@@ -19,8 +19,8 @@ struct ProjectContextPreview: Equatable {
 struct ProjectContextService {
     func preview(project: Project, documents: [VaultDocument], actions: [IndexedActionItem],
                  options: ProjectContextExportOptions = .init()) -> ProjectContextPreview {
-        let docs = documents.filter { $0.project == project.name }.prefix(options.maximumDocuments)
-        let openActions = actions.filter { $0.project == project.name && !$0.isCompleted }
+        let docs = documents.filter { project.matchesReference($0.project) }.prefix(options.maximumDocuments)
+        let openActions = actions.filter { project.matchesReference($0.project) && !$0.isCompleted }
         let output = markdown(project: project, documents: documents, actions: actions, options: options)
         return ProjectContextPreview(projectID: project.id,
                                      documentCount: options.includeNotes ? docs.count : 0,
@@ -39,8 +39,8 @@ struct ProjectContextService {
 
     func markdown(project: Project, documents: [VaultDocument], actions: [IndexedActionItem],
                   options: ProjectContextExportOptions) -> String {
-        let projectDocs = documents.filter { $0.project == project.name }
-        let projectActions = actions.filter { $0.project == project.name && !$0.isCompleted }
+        let projectDocs = documents.filter { project.matchesReference($0.project) }
+        let projectActions = actions.filter { project.matchesReference($0.project) && !$0.isCompleted }
         var lines = [
             "# \(project.name) — Hall-e context",
             "",

@@ -10,6 +10,7 @@ final class CallDetectionCoordinator {
 
     private let debouncer = CallPromptDebouncer()
     private var timer: Timer?
+    private var activeBrowserCalls: [CallIdentity: Set<Int>] = [:]
     private var activeDesktopCalls: Set<CallIdentity> = []
 
     private init() {}
@@ -30,6 +31,7 @@ final class CallDetectionCoordinator {
         timer?.invalidate()
         timer = nil
         activeDesktopCalls.removeAll()
+        activeBrowserCalls.removeAll()
     }
 
     /// Kept internal so model-level tests and debug tools can feed a validated
@@ -39,11 +41,23 @@ final class CallDetectionCoordinator {
         switch launch.type {
         case .opened:
             guard AppPreferences.enabledCallSources.contains("chrome") else { return }
+            activeBrowserCalls[identity, default: []].insert(launch.tabID ?? -1)
+            if RecordingService.shared.confirmBrowserCall(identity: identity) { return }
             offerCapture(identity: identity, launch: launch)
         case .ended, .tabClosed:
+            activeBrowserCalls[identity]?.remove(launch.tabID ?? -1)
             debouncer.end(identity: identity, tabID: launch.tabID)
-            stopIfRecording(identity: identity)
+            if activeBrowserCalls[identity]?.isEmpty != false {
+                activeBrowserCalls.removeValue(forKey: identity)
+                stopIfRecording(identity: identity)
+            }
         }
+    }
+
+    func browserIdentity(for event: UnifiedEvent) -> CallIdentity? {
+        guard let link = event.meetingURL, let url = URL(string: link),
+              let identity = CallIdentity.make(url: url), activeBrowserCalls[identity]?.isEmpty == false else { return nil }
+        return identity
     }
 
     private func poll() {
@@ -67,7 +81,8 @@ final class CallDetectionCoordinator {
         let relevantExisting = activeDesktopCalls.filter { $0.provider == provider }
         for ended in relevantExisting.subtracting(currentlyActive) {
             debouncer.end(identity: ended, tabID: nil)
-            stopIfRecording(identity: ended)
+            // Audio-process inactivity can mean mute or a quiet participant.
+            // The recording's voice-silence countdown owns this decision.
         }
         activeDesktopCalls.subtract(relevantExisting)
         activeDesktopCalls.formUnion(currentlyActive)

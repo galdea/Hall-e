@@ -35,7 +35,7 @@ enum RecordingCoordinator {
         let notePath = ensureNote(for: event, kind: localEvent == nil ? .meeting : .call)
         let source = identity.provider.recordingSource
         Task {
-            await RecordingService.shared.startCall(for: event, notePath: notePath, sourceKind: source) { session in
+            let sessionID = await RecordingService.shared.startCall(for: event, notePath: notePath, sourceKind: source) { session in
                 Task {
                     if let localID = session.localCaptureEventID {
                         await LocalCaptureEventStore.shared.finish(id: localID)
@@ -47,7 +47,7 @@ enum RecordingCoordinator {
                     }
                 }
             }
-            RecordingService.shared.attachCall(identityKey: identity.key, localCaptureEventID: localEvent?.id)
+            if let sessionID { RecordingService.shared.attachCall(sessionID: sessionID, identityKey: identity.key, localCaptureEventID: localEvent?.id) }
         }
     }
 

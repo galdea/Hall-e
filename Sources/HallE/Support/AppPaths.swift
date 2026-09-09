@@ -6,6 +6,15 @@ enum AppPaths {
 
     /// ~/Library/Application Support/Hall-e
     static var appSupport: URL {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1" {
+            let root = ProcessInfo.processInfo.environment["HALLE_DEBUG_DATA_DIR"]
+                .map { URL(fileURLWithPath: $0, isDirectory: true) }
+                ?? FileManager.default.temporaryDirectory.appendingPathComponent("Hall-e-Preview-\(ProcessInfo.processInfo.processIdentifier)")
+            try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            return root
+        }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("Hall-e", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

@@ -41,7 +41,7 @@ struct AppPreferences {
     }
 
     static var notificationLeadMinutes: Int {
-        get { d.object(forKey: Key.notificationLeadMinutes) as? Int ?? 15 }
+        get { d.object(forKey: Key.notificationLeadMinutes) as? Int ?? 5 }
         set { d.set(newValue, forKey: Key.notificationLeadMinutes) }
     }
 
@@ -71,7 +71,7 @@ struct AppPreferences {
     }
 
     static var stopRecordingAtScheduledEnd: Bool {
-        get { d.object(forKey: Key.stopRecordingAtScheduledEnd) as? Bool ?? true }
+        get { d.object(forKey: Key.stopRecordingAtScheduledEnd) as? Bool ?? false }
         set { d.set(newValue, forKey: Key.stopRecordingAtScheduledEnd) }
     }
 

@@ -114,6 +114,7 @@ actor SyncCoordinator {
                 .filter(UnifiedEvent.Columns.startTs > Date())
                 .filter(sql: "projectId IS NULL")
                 .filter(sql: "dedupKey NOT IN (SELECT dedupKey FROM event_project_assignment)")
+                .filter(sql: "NOT EXISTS (SELECT 1 FROM recurring_project_assignment r WHERE r.seriesId = unified_event.iCalUID AND r.effectiveFrom <= unified_event.startTs)")
                 .order(UnifiedEvent.Columns.startTs)
                 .limit(8)
                 .fetchAll(db)
@@ -125,6 +126,9 @@ actor SyncCoordinator {
                   let project = result.project else { continue }
             try? await AppDatabase.shared.dbQueue.write { db in
                 if var u = try UnifiedEvent.fetchOne(db, key: event.dedupKey) {
+                    let assignments = Dictionary(uniqueKeysWithValues: try EventProjectAssignment.fetchAll(db).map { ($0.dedupKey, $0) })
+                    let recurring = try RecurringProjectAssignment.fetchAll(db)
+                    guard case .none = ProjectAssignmentResolver.decision(for: u, occurrenceAssignments: assignments, recurringAssignments: recurring), u.projectId == nil else { return }
                     u.projectId = project
                     u.projectConfidence = result.confidence
                     try u.update(db)
@@ -193,16 +197,17 @@ actor SyncCoordinator {
                 // Classify each event (user pins → deterministic rules).
                 let classifier = MeetingClassifier()
                 let assignments = Dictionary(uniqueKeysWithValues: try EventProjectAssignment.fetchAll(db).map {
-                    ($0.dedupKey, $0.projectId)
+                    ($0.dedupKey, $0)
                 })
+                let recurringAssignments = try RecurringProjectAssignment.fetchAll(db)
                 // Range-additive: only replace unified events in this window, so
                 // other browsed periods (week/month navigation) stay cached.
                 try UnifiedEvent
                     .filter(UnifiedEvent.Columns.startTs >= timeMin && UnifiedEvent.Columns.startTs < timeMax)
                     .deleteAll(db)
                 for var u in unified {
-                    if let pinned = assignments[u.dedupKey] {
-                        u.projectId = pinned
+                    if case let .assigned(pinned) = ProjectAssignmentResolver.decision(for: u, occurrenceAssignments: assignments, recurringAssignments: recurringAssignments) {
+                        u.projectId = pinned.map { AliasStore.shared.projectName(for: $0) ?? $0 }
                         u.projectConfidence = pinned == nil ? nil : 1
                     } else {
                         let result = classifier.classify(u)

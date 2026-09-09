@@ -3,7 +3,7 @@ import AppKit
 import GRDB
 
 struct WorkspaceRootView: View {
-    @State private var model = WorkspaceViewModel()
+    @State var model = WorkspaceViewModel()
     @State private var language = AppLanguageStore.shared
     @State private var recorder = RecordingService.shared
 
@@ -44,13 +44,12 @@ struct WorkspaceRootView: View {
                 routeRow(.today); routeRow(.inbox)
             }
             Section(L10n.text("sidebar.organize")) {
-                routeRow(.projects); routeRow(.meetings); routeRow(.actions); routeRow(.people)
+                routeRow(.projects); routeRow(.meetings); routeRow(.actions)
             }
-            Section(L10n.text("sidebar.library")) { routeRow(.search) }
+            Section("Directory") { routeRow(.people); routeRow(.search) }
         }
         .navigationTitle(L10n.text("app.name"))
         .navigationSplitViewColumnWidth(min: 180, ideal: 205, max: 250)
-        .onChange(of: model.route) { _, _ in model.selection = nil }
     }
 
     private func routeRow(_ route: WorkspaceRoute) -> some View {
@@ -81,7 +80,7 @@ struct WorkspaceRootView: View {
     @ViewBuilder private var detailContent: some View {
         switch model.selection {
         case .meeting(let key):
-            if let event = model.appState.agenda.first(where: { $0.dedupKey == key }) {
+            if let event = model.appState.agenda.first(where: { $0.dedupKey == key }) ?? model.requestedMeeting.flatMap({ $0.dedupKey == key ? $0 : nil }) {
                 MeetingInspectorView(event: event, model: model)
             } else { missingSelection }
         case .project(let id):
@@ -209,8 +208,8 @@ struct ProjectsWorkspaceView: View {
                                 Text("No generated brief yet").font(.caption).foregroundStyle(.secondary)
                             }
                             HStack(spacing: 8) {
-                                Label("\(model.appState.actionItems.filter { $0.project == project.name && !$0.isCompleted }.count)", systemImage: "checklist")
-                                Label("\(model.appState.agenda.filter { $0.projectId == project.name || $0.projectId == project.id }.count)", systemImage: "calendar")
+                                Label("\(model.appState.actionItems.filter { project.matchesReference($0.project) && !$0.isCompleted }.count)", systemImage: "checklist")
+                                Label("\(model.appState.agenda.filter { project.matchesReference($0.projectId) }.count)", systemImage: "calendar")
                                 Label("\(model.sources(for: project).count)", systemImage: "externaldrive")
                                 if let latest = model.activity(for: project).first {
                                     Text("· active \(latest.date.formatted(.relative(presentation: .named)))")
@@ -250,9 +249,24 @@ struct MeetingsWorkspaceView: View {
             Divider()
             if filter == .recordings { recordingsList } else { meetingsList }
         }
+        .onAppear { revealSelectedMeeting() }
+        .onChange(of: model.selection) { _, _ in revealSelectedMeeting() }
     }
+
+    private func revealSelectedMeeting() {
+        guard case .meeting(let key) = model.selection,
+              let event = model.appState.agenda.first(where: { $0.dedupKey == key })
+                ?? model.requestedMeeting.flatMap({ $0.dedupKey == key ? $0 : nil }) else { return }
+        filter = event.endTs < Date() ? .past : .upcoming
+        query = ""
+    }
+
     private var filteredEvents: [UnifiedEvent] {
-        model.appState.agenda.filter {
+        var events = model.appState.agenda
+        if let requested = model.requestedMeeting, !events.contains(where: { $0.dedupKey == requested.dedupKey }) {
+            events.append(requested)
+        }
+        return events.filter {
             (filter == .upcoming ? $0.endTs >= Date() : $0.endTs < Date()) &&
             (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || ($0.projectId?.localizedCaseInsensitiveContains(query) ?? false))
         }.sorted { filter == .upcoming ? $0.startTs < $1.startTs : $0.startTs > $1.startTs }

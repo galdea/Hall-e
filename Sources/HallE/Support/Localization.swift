@@ -40,11 +40,11 @@ enum L10n {
         let language = AppPreferences.appLanguage
         let bundle: Bundle
         if language != "system",
-           let path = Bundle.module.path(forResource: language, ofType: "lproj"),
+           let path = AppResources.bundle.path(forResource: language, ofType: "lproj"),
            let localized = Bundle(path: path) {
             bundle = localized
         } else {
-            bundle = .module
+            bundle = AppResources.bundle
         }
         return bundle.localizedString(forKey: key, value: key, table: nil)
     }
@@ -54,4 +54,16 @@ enum L10n {
         let locale = code == "system" ? Locale.autoupdatingCurrent : Locale(identifier: code)
         return String(format: text(key), locale: locale, arguments: arguments)
     }
+}
+
+/// Signed app bundles keep resources under Contents/Resources. SwiftPM's
+/// generated accessor otherwise falls back to an absolute build-cache path.
+enum AppResources {
+    static let bundle: Bundle = {
+        if let url = Bundle.main.resourceURL?.appendingPathComponent("HallE_HallE.bundle"),
+           let bundled = Bundle(url: url) {
+            return bundled
+        }
+        return Bundle.module
+    }()
 }

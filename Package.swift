@@ -22,6 +22,7 @@ let package = Package(
                 .process("Resources/en.lproj"),
                 .process("Resources/es.lproj"),
                 .copy("Resources/CallCaptureExtension"),
+                .copy("Resources/GentleRing.wav"),
             ],
             swiftSettings: [
                 // Swift 5 language mode: strict-concurrency errors from AppKit

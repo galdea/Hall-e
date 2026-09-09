@@ -6,22 +6,28 @@ cd "$(dirname "$0")/.."
 
 # Broken-CLT workaround (see scripts/fix-toolchain.sh)
 ./scripts/fix-toolchain.sh >/dev/null
-export SWIFTPM_CUSTOM_LIBS_DIR="$PWD/.toolchain-fix"
+export SWIFTPM_CUSTOM_LIBS_DIR="$(cd .toolchain-fix && pwd -P)"
 
 VERSION="${VERSION:-0.1.0}"
 BUILD_NUM="$(date +%Y%m%d%H%M)"
 SIGN_ID="${SIGN_ID:-Hall-e Dev}"
 CONFIG="${CONFIG:-release}"
+# Canonical paths prevent Swift's module cache from seeing the same build
+# directory under two names when packaging from an isolated worktree.
+BUILD_DIR="${BUILD_DIR:-$PWD/.build}"
+mkdir -p "$BUILD_DIR"
+BUILD_DIR="$(cd "$BUILD_DIR" && pwd -P)"
 
-swift build -c "$CONFIG" --product HallE
-swift build -c "$CONFIG" --product CallCaptureNativeHost
+swift build --scratch-path "$BUILD_DIR" --disable-build-manifest-caching -j 4 -c "$CONFIG" --product HallE
+swift build --scratch-path "$BUILD_DIR" --disable-build-manifest-caching -j 4 -c "$CONFIG" --product CallCaptureNativeHost
 
 APP="dist/Hall-e.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp ".build/$CONFIG/HallE" "$APP/Contents/MacOS/Hall-e"
-cp ".build/$CONFIG/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
+cp "$BUILD_DIR/$CONFIG/HallE" "$APP/Contents/MacOS/Hall-e"
+cp "$BUILD_DIR/$CONFIG/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
+cp "Sources/HallE/Resources/GentleRing.wav" "$APP/Contents/Resources/GentleRing.wav"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" \
     BundleResources/Info.plist > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
@@ -30,8 +36,8 @@ if [ -f BundleResources/AppIcon.icns ]; then
   cp BundleResources/AppIcon.icns "$APP/Contents/Resources/"
 fi
 # SPM resource bundle, if the target ever declares resources
-if [ -d ".build/$CONFIG/HallE_HallE.bundle" ]; then
-  cp -R ".build/$CONFIG/HallE_HallE.bundle" "$APP/Contents/Resources/"
+if [ -d "$BUILD_DIR/$CONFIG/HallE_HallE.bundle" ]; then
+  cp -R "$BUILD_DIR/$CONFIG/HallE_HallE.bundle" "$APP/Contents/Resources/"
 fi
 
 codesign --force --sign "$SIGN_ID" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"

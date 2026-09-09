@@ -109,7 +109,7 @@ enum ChromeNativeHostInstaller {
     /// and contains no user data.
     @discardableResult
     static func prepareExtension(destination: URL = AppPaths.browserExtensionDirectory) throws -> URL {
-        guard let bundled = Bundle.module.url(forResource: "CallCaptureExtension", withExtension: nil) else {
+        guard let bundled = AppResources.bundle.url(forResource: "CallCaptureExtension", withExtension: nil) else {
             throw InstallError.extensionNotBundled
         }
         let fm = FileManager.default

@@ -268,6 +268,16 @@ final class AppDatabase: Sendable {
             try db.create(indexOn: "local_capture_event", columns: ["identityKey"])
         }
 
+        migrator.registerMigration("v6_recurring_project_assignments") { db in
+            try db.create(table: "recurring_project_assignment") { t in
+                t.column("seriesId", .text).notNull()
+                t.column("effectiveFrom", .datetime).notNull()
+                t.column("projectId", .text)
+                t.column("updatedAt", .datetime).notNull()
+                t.primaryKey(["seriesId", "effectiveFrom"])
+            }
+        }
+
         return migrator
     }
 }

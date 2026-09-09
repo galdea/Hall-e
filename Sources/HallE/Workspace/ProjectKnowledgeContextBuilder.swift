@@ -12,15 +12,15 @@ struct ProjectKnowledgeContextBuilder {
                sourceDocuments: [ProjectSourceDocument], includeRawTranscripts: Bool,
                includeExternalContent: Bool = true) -> ProjectAssistantContext {
         let enabledSourceIDs = Set(sources.filter { $0.projectId == project.id && $0.includeInAI }.map(\.id))
-        let projectVault = vaultDocuments.filter { $0.project == project.name }.prefix(maximumVaultDocuments)
+        let projectVault = vaultDocuments.filter { project.matchesReference($0.project) }.prefix(maximumVaultDocuments)
         let projectExternal = sourceDocuments.filter {
             $0.projectId == project.id && enabledSourceIDs.contains($0.sourceId)
         }.sorted { ($0.occurredAt ?? $0.importedAt) > ($1.occurredAt ?? $1.importedAt) }
             .prefix(includeExternalContent ? maximumExternalDocuments : 0)
         let projectMeetings = meetings.filter {
-            $0.projectId == project.name || $0.projectId == project.id
+            project.matchesReference($0.projectId)
         }.sorted { $0.startTs > $1.startTs }.prefix(maximumMeetings)
-        let projectActions = actions.filter { $0.project == project.name && !$0.isCompleted }
+        let projectActions = actions.filter { project.matchesReference($0.project) && !$0.isCompleted }
         let sourceNames = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0.displayName) })
 
         var citations: [ProjectCitation] = []

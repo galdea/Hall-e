@@ -79,7 +79,7 @@ agenda, right-click for Refresh / Settings / Quit.
 
 | Permission | When | Why |
 |---|---|---|
-| Notifications | first reminder is scheduled | 15-min meeting reminders |
+| Notifications | first reminder is scheduled | 5-min meeting reminders |
 | Microphone | first time you start a recording | meeting audio capture |
 | Speech Recognition | first transcription | on-device transcription |
 
@@ -122,7 +122,7 @@ unused item, or ⌘-drag one off) or use a menu-bar manager like
 
 ## What works today (core platform)
 
-- Menu-bar app (agent-style, no Dock icon), polished popover, 10-section Settings.
+- Menu-bar app (agent-style, no Dock icon), polished popover, grouped, searchable Settings.
 - Multiple Google accounts via OAuth 2.0 PKCE + loopback; tokens in Keychain.
 - Windowed calendar sync (today −1d … +7d) with per-account error isolation,
   backoff, and offline tolerance.
@@ -130,17 +130,33 @@ unused item, or ⌘-drag one off) or use a menu-bar manager like
   meeting invited to two accounts shows once with both source dots.
 - Hourly agenda with All-day / Now / Next sections, current-meeting highlight, join
   buttons, status styling, calm empty states.
-- 15-minute local notifications with a ledger (no duplicate reminders across
+- 5-minute local notifications with a ledger (no duplicate reminders across
   resyncs), actions (Join / Open agenda / Prepare note / Snooze), and cancel-on-
   change.
 - Periodic + wake + network-restored refresh; launch-at-login.
 - Completed calendar events expose inline recording playback and searchable transcripts.
-- Optional exact calendar-end auto-stop, WhatsApp call-end detection, and a 20-second
-  silence prompt that never stops without confirmation.
+- Optional exact calendar-end auto-stop, explicit browser call-end detection, and local
+  voice detection: after 20 seconds without voice, a 20-second countdown offers Stop
+  or Keep recording before automatically stopping. Speech cancels the countdown.
+  Both intervals and automatic stopping are configurable in Settings → Capture → Recording.
+  Missing audio/analysis pauses automatic stopping to protect ongoing conversations.
 - Data-rich Projects workspace with health, status, activity, risks, next steps,
   suggested agendas, linked-source freshness, and cited assistant conversations.
 - Selective ChatGPT export import, incremental WhatsApp chat import, and project-folder-
   scoped Codex session indexing.
+
+## Meeting workflow
+
+- Reminders default to five minutes with a gentle ring; choose gentle, silent, or system sound.
+  Existing custom reminder timing is preserved.
+- Open a reminder or meeting to select an existing project or create and assign one.
+  Assignment applies to this occurrence unless you explicitly include future recurring meetings.
+- Calendar end is informational by default; explicitly saved exact-end preferences remain respected.
+- Settings group General, Meetings, Capture, Intelligence, Storage & Privacy, and Advanced.
+  The workspace opens on Today; the menu bar exposes the next meeting and active recording.
+- Interrupted recordings retain their audio and surface for review/retry. Quitting during capture
+  waits for recording finalization. Voice analysis uses Apple's local Sound Analysis classifier;
+  microphone-only online calls pause silence auto-stop when remote audio cannot be observed.
 
 ## In progress / roadmap
 

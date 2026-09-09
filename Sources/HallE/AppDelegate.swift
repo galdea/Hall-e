@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RecordingStore.reconcileStaleTranscripts()
         RecordingStore.enqueueLegacyFailuresForRetryOnce()
         RecordingStore.enqueueAppleSpeechFallbacksForRetryOnce()
+        RecordingRecovery.reconcileInterruptedCaptures()
         Log.rec.info("transcription recovery startup: \(RecordingStore.queuedSessions().count, privacy: .public) queued job(s)")
         // Deepgram needs no local model, so there is nothing to prepare before
         // queued jobs resume — and no launch path that can start a download.
@@ -139,6 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let recorder = RecordingService.shared
+        guard recorder.isRecording || recorder.state == .stopping else { return .terminateNow }
+        recorder.finishBeforeTermination { sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
 
     /// Install a minimal main menu. An LSUIElement app has none by default, so the
     /// standard text-editing key equivalents (⌘X/⌘C/⌘V/⌘A, undo/redo) never reach

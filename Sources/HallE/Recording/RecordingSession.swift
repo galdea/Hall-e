@@ -136,13 +136,16 @@ struct RecordingSession: Codable, Identifiable {
 
     func save() {
         do {
-            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folderURL.path)
-            let data = try JSONEncoder().encode(self)
-            try data.write(to: sessionFileURL, options: [.atomic])
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sessionFileURL.path)
+            try persist()
         } catch {
             Log.rec.error("session save failed for \(slug, privacy: .public): \(error, privacy: .public)")
         }
+    }
+
+    func persist() throws {
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folderURL.path)
+        try JSONEncoder().encode(self).write(to: sessionFileURL, options: [.atomic])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sessionFileURL.path)
     }
 }

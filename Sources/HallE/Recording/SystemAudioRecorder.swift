@@ -33,6 +33,7 @@ final class SystemAudioRecorder {
     private let powerLock = NSLock()
     private var latestPowerDB: Float = -160
     private var latestPowerAt = Date.distantPast
+    private var voiceMonitor: VoiceActivityMonitor?
 
     /// Start capturing `targetBundleID`'s output to `url`. Falls back to a global
     /// tap (excluding our own process) if the target process can't be resolved.
@@ -63,6 +64,7 @@ final class SystemAudioRecorder {
                                                  mElement: kAudioObjectPropertyElementMain)
         try check("get tap format", AudioObjectGetPropertyData(tapID, &fmtAddr, 0, nil, &size, &asbd))
         guard let format = AVAudioFormat(streamDescription: &asbd) else { throw CaptureError.badFormat }
+        voiceMonitor = try? VoiceActivityMonitor(format: format)
 
         // Private aggregate device: real default output as the main sub-device
         // (a tap-only aggregate silently yields zero samples) + our tap.
@@ -94,6 +96,7 @@ final class SystemAudioRecorder {
                   let buffer = AVAudioPCMBuffer(pcmFormat: fmt, bufferListNoCopy: inInputData, deallocator: nil)
             else { return }
             self.updatePower(from: buffer)
+            self.voiceMonitor?.consume(buffer)
             try? file.write(from: buffer)
         }
         try check("AudioDeviceCreateIOProcIDWithBlock", st)
@@ -119,7 +122,7 @@ final class SystemAudioRecorder {
         }
         // The IOProc block reads `file` on `ioQueue`; clear it there so any
         // in-flight callback finishes its write before the file closes.
-        ioQueue.sync { file = nil }
+        ioQueue.sync { file = nil; voiceMonitor = nil }
         powerLock.lock(); latestPowerDB = -160; powerLock.unlock()
     }
 
@@ -128,15 +131,23 @@ final class SystemAudioRecorder {
         return Date().timeIntervalSince(latestPowerAt) > 1.5 ? -160 : latestPowerDB
     }
 
+    func currentVoiceActivity() -> Bool? { voiceMonitor?.hasVoice }
+    func invalidateVoiceActivity() { voiceMonitor?.invalidate() }
+
     private func updatePower(from buffer: AVAudioPCMBuffer) {
         guard let channels = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
         guard frames > 0, channelCount > 0 else { return }
         var sum: Float = 0
-        for channel in 0..<channelCount {
-            let samples = channels[channel]
-            for index in 0..<frames { sum += samples[index] * samples[index] }
+        if buffer.format.isInterleaved {
+            let samples = channels[0]
+            for index in 0..<(frames * channelCount) { sum += samples[index] * samples[index] }
+        } else {
+            for channel in 0..<channelCount {
+                let samples = channels[channel]
+                for index in 0..<frames { sum += samples[index] * samples[index] }
+            }
         }
         let rms = sqrt(sum / Float(frames * channelCount))
         let db = rms > 0 ? 20 * log10(rms) : -160

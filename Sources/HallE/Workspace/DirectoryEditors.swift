@@ -6,6 +6,9 @@ struct ProjectEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var aliases: String
+    @State private var saveError: String?
+    @State private var saving = false
+    @State private var createdID: String?
 
     init(project: Project?, onSave: @escaping () -> Void) {
         self.project = project; self.onSave = onSave
@@ -19,15 +22,30 @@ struct ProjectEditorView: View {
             Text("Classification keywords, one per line").font(.headline)
             TextEditor(text: $aliases).font(.body.monospaced()).frame(minHeight: 180).overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
             Text("The stable project ID will not change when you rename this label.").font(.caption).foregroundStyle(.secondary)
+            if let saveError { Text(saveError).foregroundStyle(.red) }
             HStack { Spacer(); Button(L10n.text("common.cancel")) { dismiss() }; Button("Save") { save() }.buttonStyle(.borderedProminent).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-        }.padding(20).frame(width: 480)
+        }.padding(20).frame(width: 480).disabled(saving).interactiveDismissDisabled(saving)
     }
     private func save() {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let id = project?.id ?? stableSlug(clean) + "-" + String(UUID().uuidString.prefix(6)).lowercased()
+        let id = project?.id ?? createdID ?? stableSlug(clean) + "-" + String(UUID().uuidString.prefix(6)).lowercased()
+        createdID = id
         let entries = aliases.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.map { ProjectAlias($0, .keyword, .normal) }
-        AliasStore.shared.update(Project(id: id, name: clean, aliases: entries, isArchived: project?.isArchived ?? false))
-        onSave(); dismiss()
+        saving = true
+        saveError = nil
+        Task { @MainActor in
+            do {
+                // Preserve alias kinds/strengths for unchanged editor lines.
+                let preserved = entries.flatMap { entry -> [ProjectAlias] in
+                    let original = project?.aliases.filter { $0.text == entry.text } ?? []
+                    return original.isEmpty ? [entry] : original
+                }
+                try AliasStore.shared.updateThrowing(Project(id: id, name: clean, aliases: preserved, isArchived: project?.isArchived ?? false))
+                try await ProjectAssignmentStore.shared.refreshDisplayName(projectID: id, previousName: project?.name)
+                onSave(); dismiss()
+            } catch { saveError = error.localizedDescription }
+            saving = false
+        }
     }
     private func stableSlug(_ value: String) -> String {
         value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)

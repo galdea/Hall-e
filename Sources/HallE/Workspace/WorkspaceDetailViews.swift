@@ -16,6 +16,7 @@ struct SyncHealthButton: View {
 struct MeetingInspectorView: View {
     let event: UnifiedEvent
     let model: WorkspaceViewModel
+    @State private var showProjectChooser = false
     @State private var appState = AppState.shared
 
     var body: some View {
@@ -35,10 +36,9 @@ struct MeetingInspectorView: View {
                 }
 
                 inspectorSection("Project", symbol: "folder") {
-                    Picker("Project", selection: Binding(get: { event.projectId ?? "" }, set: assignProject)) {
-                        Text("Unclassified").tag("")
-                        ForEach(model.projects) { Text($0.name).tag($0.name) }
-                    }.labelsHidden()
+                    Button { showProjectChooser = true } label: {
+                        Label(AliasStore.shared.projectName(for: event.projectId) ?? event.projectId ?? "Choose project…", systemImage: "folder.badge.gearshape")
+                    }
                     if let confidence = event.projectConfidence { Text("Classification confidence: \(confidence.formatted(.percent.precision(.fractionLength(0))))").font(.caption).foregroundStyle(.secondary) }
                 }
 
@@ -61,7 +61,12 @@ struct MeetingInspectorView: View {
                     }
                 }
 
-                let related = model.appState.actionItems.filter { $0.eventId == event.dedupKey || ($0.project != nil && $0.project == event.projectId) }
+                let meetingProject = AliasStore.shared.project(resolving: event.projectId)
+                let related = model.appState.actionItems.filter { action in
+                    action.eventId == event.dedupKey || (meetingProject.map {
+                        AliasStore.shared.references(action.project, project: $0)
+                    } ?? false)
+                }
                 inspectorSection("Open commitments", symbol: "checklist") {
                     if related.isEmpty { Text("No indexed commitments").foregroundStyle(.secondary) }
                     ForEach(related.prefix(8)) { Text($0.task).font(.callout) }
@@ -74,6 +79,9 @@ struct MeetingInspectorView: View {
                 }
             }.padding(20)
         }.navigationTitle("Meeting")
+        .sheet(isPresented: $showProjectChooser) {
+            MeetingProjectChooser(event: event) { model.refreshDirectory() }
+        }
     }
 
     private func inspectorSection<Content: View>(_ title: String, symbol: String, @ViewBuilder content: () -> Content) -> some View {
@@ -81,20 +89,6 @@ struct MeetingInspectorView: View {
             Label(title, systemImage: symbol).font(.headline)
             content()
         }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-    private func assignProject(_ name: String) {
-        // Async write keeps SQLite off the main actor (this runs in a Picker setter).
-        Task {
-            try? await AppDatabase.shared.dbQueue.write { db in
-                let assignment = EventProjectAssignment(dedupKey: event.dedupKey,
-                                                         projectId: name.isEmpty ? nil : name,
-                                                         updatedAt: Date())
-                try assignment.save(db)
-                try db.execute(sql: "UPDATE unified_event SET projectId = ?, projectConfidence = ? WHERE dedupKey = ?",
-                               arguments: [name.isEmpty ? nil : name, name.isEmpty ? nil : 1.0, event.dedupKey])
-            }
-            await ProjectIntelligenceService.shared.scheduleRefreshAll()
-        }
     }
     private func stateLabel(now: Date) -> String { event.startTs <= now && now < event.endTs ? L10n.text("agenda.now") : event.startTs > now ? L10n.text("agenda.next") : "Ended" }
     private func stateTone(now: Date) -> HalleStatusTone { event.startTs <= now && now < event.endTs ? .recording : event.startTs > now ? .info : .neutral }
@@ -112,9 +106,9 @@ struct ProjectDetailView: View {
     let model: WorkspaceViewModel
     @State private var tab: Tab = .overview
     @State private var showPreview = false
-    private var documents: [VaultDocument] { model.appState.vaultDocuments.filter { $0.project == project.name } }
-    private var actions: [IndexedActionItem] { model.appState.actionItems.filter { $0.project == project.name } }
-    private var meetings: [UnifiedEvent] { model.appState.agenda.filter { $0.projectId == project.name || $0.projectId == project.id }.sorted { $0.startTs > $1.startTs } }
+    private var documents: [VaultDocument] { model.appState.vaultDocuments.filter { AliasStore.shared.references($0.project, project: project) } }
+    private var actions: [IndexedActionItem] { model.appState.actionItems.filter { AliasStore.shared.references($0.project, project: project) } }
+    private var meetings: [UnifiedEvent] { model.appState.agenda.filter { AliasStore.shared.references($0.projectId, project: project) }.sorted { $0.startTs > $1.startTs } }
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {

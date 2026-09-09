@@ -76,4 +76,42 @@ struct NotificationPlannerTests {
         #expect(plan.toSchedule.count == 1)
         #expect(plan.toSchedule[0].identifier != oldId)
     }
+    @Test func fiveMinuteReminderAndLateArrival() {
+        let start = now.addingTimeInterval(600)
+        let desired = NotificationPlanner.desired(from: [event("k", start: start)], now: now, leadMinutes: 5,
+                                                  showDeclined: false, accountLabel: { _ in nil })
+        #expect(desired.first?.fireAt == start.addingTimeInterval(-300))
+        let late = NotificationPlanner.desired(from: [event("k", start: now.addingTimeInterval(60))], now: now,
+                                               leadMinutes: 5, showDeclined: false, accountLabel: { _ in nil })
+        #expect(late.first?.fireAt == now.addingTimeInterval(1))
+    }
+
+    @Test func pendingContentChangesRequireReplacement() throws {
+        let desired = try #require(NotificationPlanner.desired(from: [event("k", start: now.addingTimeInterval(600))], now: now,
+            leadMinutes: 5, showDeclined: false, accountLabel: { _ in nil }).first)
+        var pending = NotificationPlanner.PendingContent(title: desired.title, body: desired.body,
+            meetingURL: desired.meetingURL, htmlLink: desired.htmlLink, leadMinutes: 5, sound: "gentle")
+        #expect(!NotificationPlanner.needsReplacement(pending, desired: desired, leadMinutes: 5, sound: "gentle"))
+        #expect(NotificationPlanner.needsReplacement(pending, desired: desired, leadMinutes: 10, sound: "gentle"))
+        #expect(NotificationPlanner.needsReplacement(pending, desired: desired, leadMinutes: 5, sound: "silent"))
+        pending.meetingURL = "https://meet.google.com/changed"
+        #expect(NotificationPlanner.needsReplacement(pending, desired: desired, leadMinutes: 5, sound: "gentle"))
+    }
+
+    @Test func occurrenceParserHandlesDelimiterInsideKeyAndRejectsSnooze() {
+        let identifier = NotificationPlanner.identifier(dedupKey: "a|b", startTs: now)
+        #expect(NotificationPlanner.occurrence(from: identifier)?.key == "a|b")
+        #expect(NotificationPlanner.occurrence(from: identifier)?.start == now)
+        #expect(NotificationPlanner.occurrence(from: identifier + "|snooze") == nil)
+        #expect(NotificationPlanner.occurrence(from: "halle-recording-prompt") == nil)
+    }
+    @Test func snoozesSurviveMeetingStartButNotCancellationOrReschedule() {
+        let started = event("k", start: now.addingTimeInterval(-60))
+        let id = NotificationPlanner.identifier(dedupKey: "k", startTs: started.startTs)
+        #expect(NotificationPlanner.snoozableOccurrences(from: [started], now: now, showDeclined: false).contains(id))
+        var cancelled = started; cancelled.status = "cancelled"
+        #expect(NotificationPlanner.snoozableOccurrences(from: [cancelled], now: now, showDeclined: false).isEmpty)
+        var moved = started; moved.startTs = now.addingTimeInterval(600)
+        #expect(!NotificationPlanner.snoozableOccurrences(from: [moved], now: now, showDeclined: false).contains(id))
+    }
 }

@@ -7,6 +7,10 @@ struct RecordingSettingsView: View {
     @State private var speechStatus = SFSpeechRecognizer.authorizationStatus()
     @State private var autoRecordCalendar = AppPreferences.autoRecordCalendarMeetings
     @State private var stopAtScheduledEnd = AppPreferences.stopRecordingAtScheduledEnd
+    @State private var detectSilence = AppPreferences.silenceDetectionEnabled
+    @State private var autoStopSilence = AppPreferences.silenceAutoStopEnabled
+    @State private var silenceSeconds = AppPreferences.recordingSilenceSeconds
+    @State private var confirmationSeconds = AppPreferences.recordingConfirmationSeconds
     @State private var retitling = false
     @State private var retitleResult: String?
 
@@ -35,12 +39,30 @@ struct RecordingSettingsView: View {
                 Label("Audio is saved locally, outside your vault", systemImage: "internaldrive")
                 Label("Manual recordings show a consent reminder", systemImage: "exclamationmark.bubble")
                 Label("Completed meetings show playback and transcript controls in the calendar", systemImage: "play.circle")
-                Label("Scheduled end prompts stop automatically after 60 seconds", systemImage: "calendar.badge.clock")
-                Label("20 seconds of voice silence prompts you to stop or keep recording", systemImage: "speaker.slash")
+                Label("Keep recording after the meeting ends unless exact-end stopping is enabled", systemImage: "calendar.badge.clock")
                 Text("Recordings live in ~/Library/Application Support/Hall-e/Recordings and are linked to the meeting note via its recording_path.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Only Hall-e’s Join button triggers automatic recording. Calendar events without a meeting link, and meetings opened outside Hall-e, are not recorded automatically. Enable this only when recording is permitted and participants are informed.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Silence and automatic stop") {
+                Toggle("Ask to stop when no voice is detected", isOn: $detectSilence)
+                    .onChange(of: detectSilence) { _, value in AppPreferences.silenceDetectionEnabled = value }
+                Stepper("Ask after \(Int(silenceSeconds)) seconds without voice", value: $silenceSeconds, in: 5...300, step: 5)
+                    .onChange(of: silenceSeconds) { _, value in AppPreferences.recordingSilenceSeconds = value }
+                    .disabled(!detectSilence)
+                Toggle("Stop automatically if I do not respond", isOn: $autoStopSilence)
+                    .onChange(of: autoStopSilence) { _, value in AppPreferences.silenceAutoStopEnabled = value }
+                    .disabled(!detectSilence)
+                Stepper("Allow \(Int(confirmationSeconds)) seconds to respond", value: $confirmationSeconds, in: 5...120, step: 5)
+                    .onChange(of: confirmationSeconds) { _, value in AppPreferences.recordingConfirmationSeconds = value }
+                    .disabled(!detectSilence || !autoStopSilence)
+                Text("Speech resuming cancels the countdown. Keep recording dismisses the prompt until speech resumes and another quiet period occurs. Voice detection runs on this Mac; unavailable audio analysis never counts as silence.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Reset silence defaults") {
+                    detectSilence = true; autoStopSilence = true; silenceSeconds = 20; confirmationSeconds = 20
+                }
             }
 
             Section("Library") {
