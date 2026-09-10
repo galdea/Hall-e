@@ -9,7 +9,7 @@ it also remains available in the menu bar. Microphone and other access prompts
 still require user consent. No account or key is needed for supported local
 transcription. Setup checks the language model and offers an optional audio test.
 
-`VERSION=0.3.0 make release` builds both executables sequentially, bundles English
+`VERSION=0.3.1 make release` builds both executables sequentially, bundles English
 and Spanish strings, the Chrome extension, reminder sound, and dependency resource
 bundles, signs the app ad-hoc, and creates versioned DMG and ZIP packages plus a
 SHA-256 checksum for each in `dist/`. The DMG contains
@@ -53,7 +53,7 @@ With the certificate in your keychain:
 
 ```sh
 SIGNING_MODE=developer-id SIGN_ID='Developer ID Application: Your Name (TEAMID)' \
-  VERSION=0.3.0 ./scripts/release.sh
+  VERSION=0.3.1 ./scripts/release.sh
 ```
 
 Both executables receive hardened runtime and secure timestamps; the main app
@@ -119,6 +119,28 @@ Interactive microphone/system-audio permission prompts and a real call still
 require a human check; CI does not grant those permissions.
 
 ## Updating and sharing
+
+### Cloud connection checks (v0.3.1 and later)
+
+For cloud setup, paste a provider key, select a Speechmatics region when applicable,
+and choose **Save & test**. The key is saved only after a successful read-only
+authentication check. Failed or cancelled replacement checks preserve the existing
+key, and a concurrent change from another settings window is not overwritten.
+Allow the provider to process audio separately, then make a short recording to
+check end-to-end transcription. Authentication does not prove available credit or
+model entitlement. Existing keys can be retested without replacing them.
+
+The checks use [Deepgram's authentication endpoint](https://developers.deepgram.com/guides/fundamentals/authenticating)
+and [Speechmatics' regional job-list authentication](https://docs.speechmatics.com/get-started/authentication).
+They send no audio and do not create paid transcription jobs. The selected region
+is part of Speechmatics verification and audio consent.
+
+Pushing `main` produces CI staging artifacts; a version tag publishes installers
+only after both architecture jobs pass. Redeploy the landing page with the new
+versioned links only after both public downloads are available. Existing release
+assets are preserved; v0.3.0 installers do not contain the connection-check flow.
+
+### Installing an update
 
 Use **Settings → About & support → Check for updates / share Hall-e** to open the
 latest release. Share that public release link with colleagues. There is no

@@ -69,13 +69,15 @@ enum KeychainStore {
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
-    static func delete(account: String) {
+    @discardableResult
+    static func delete(account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     // MARK: - Account key conventions

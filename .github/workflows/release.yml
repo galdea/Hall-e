@@ -8,7 +8,7 @@ on:
     inputs:
       version:
         description: 'Version (X.Y.Z)'
-        default: '0.3.0'
+        default: '0.3.1'
         required: true
         type: string
       notarize:
@@ -55,7 +55,7 @@ jobs:
           REQUESTED_NOTARIZE: ${{ inputs.notarize }}
           TAG_NOTARIZE: ${{ vars.RELEASE_NOTARIZE }}
         run: |
-          version="${REQUESTED_VERSION:-0.3.0}"
+          version="${REQUESTED_VERSION:-0.3.1}"
           notarize=0
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -138,7 +138,7 @@ jobs:
 
           ## Your first meeting
 
-          Follow four guided setup steps, allow microphone and speech recognition, choose your meeting language, and try the optional eight-second audio check. Supported local transcription needs no account or API key; setup checks language-model availability. Connected cloud providers remain optional and require explicit consent.
+          Follow four guided setup steps, allow the microphone, and choose your meeting language. For cloud transcription, connect your own Deepgram or Speechmatics key with **Save & test**, then allow audio processing. Speechmatics also requires a processing region and confirmation that Model Training is off. The connection check sends no audio and creates no paid transcription job; provider credit and model access still depend on your account. Supported local transcription instead needs Speech Recognition permission and an on-device language model, with no account or API key. Try the optional eight-second audio check.
 
           Choose **Start recording**, name your meeting, and select **Microphone + your meeting app** for online calls. Join the call first and tell participants before recording. If app audio is unavailable, Hall-e shows a microphone-only warning and a retry action. Notes save automatically on your Mac; export your notes and transcript together as Markdown.
 

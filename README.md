@@ -20,7 +20,7 @@ The name borrows a little from **HAL**, from *2001: A Space Odyssey*, and a lot 
 
 1. Download the **DMG** from [the latest release](https://github.com/galdea/Hall-e/releases/latest). Choose **arm64** for Apple silicon or **x86_64** for Intel; check **Apple menu → About This Mac**. Requires **macOS 14 or later**; capturing another app's audio requires **14.2+**.
 2. Open the DMG, drag **Hall-e** to **Applications**, eject the disk image, and open Hall-e. A ZIP alternative is available too.
-3. Follow four short setup steps: choose your language, allow the microphone, set up local speech recognition, and try the optional **eight-second audio check**. Setup can be resumed later.
+3. Follow four short setup steps: choose your language, allow the microphone, then choose local speech recognition or connect your own cloud transcription key with **Save & test** and allow audio processing. Try the optional **eight-second audio check**. Setup can be resumed later.
 4. Choose **Start recording**, name your meeting, and select **Microphone only** for an in-person conversation or **Microphone + your meeting app** for an online call. Join the call first and tell participants you are recording.
 5. Stop when you finish. Your audio, transcript, and autosaved notes are together in **Meetings & recordings → Recordings**. Export notes and transcript as one Markdown file.
 
@@ -41,11 +41,13 @@ In **Settings → Transcription → Connect optional cloud transcription**, you 
 
 1. Click **Sign up / open Deepgram** or **Sign up / open Speechmatics**. Create your own account in the browser.
 2. Open **API Keys** in the provider’s console and create a key for Hall-e. Deepgram keys belong to a project; choose transcription access. Copy the secret key while it is visible. The setup screen includes each provider’s key-creation guide.
-3. Return to Hall-e, click **Paste**, then **Save**. Hall-e reads the clipboard only when you click Paste and keeps the key hidden.
-4. Allow that provider to transcribe audio. For Speechmatics, select US or EU processing and confirm that you turned **Model Training off** in its portal.
+3. Return to Hall-e and click **Paste**. For Speechmatics, select US or EU processing first. Choose **Save & test** (or **Replace & test**). Hall-e checks authentication before saving; a failed replacement preserves your existing key. The clipboard is read only when you click Paste, and the key stays hidden.
+4. Allow that provider to transcribe audio. For Speechmatics, confirm that you turned **Model Training off** in its portal.
 5. Select **Automatic** or the connected provider, then make a short recording to confirm your key and available credit work. You can add the second provider later.
 
-Provider charges, trial allowances, expiry, and model access depend on your account. Check the provider's dashboard before processing audio; Hall-e does not verify your balance when saving a key. Signup and billing stay with the provider.
+Existing keys can be checked with **Test saved Deepgram key** or **Test saved Speechmatics key**. Connection checks use read-only requests and do not upload audio or create transcription jobs. Onboarding distinguishes a saved key from one accepted by the selected provider and region. These checks do not verify your balance or access to every model. Provider charges, trial allowances, expiry, and model access depend on your account; signup and billing stay with the provider.
+
+**Save & test is available starting with v0.3.1.** When updating from v0.3.0, use the saved-key test to verify your existing connection without replacing the key. Older installers only check credentials during the first transcription.
 
 In **Automatic** mode, new recordings use local Apple Speech when no cloud provider is configured and authorized. With cloud connected, Automatic prefers Deepgram; Speechmatics can work on its own or as a backup when Deepgram explicitly reports exhausted credit. Each provider needs its own permission. Choose **On this Mac (Apple Speech)** to keep new transcription local even with cloud accounts connected. Existing accepted remote jobs retain their provider, avoiding duplicate submissions.
 

@@ -95,10 +95,9 @@ struct TranscriptionJob: Codable, Equatable {
     }
 
     mutating func queueForRetry() {
-        if cloud?.provider == .speechmatics, cloud?.phase == .ambiguousSubmission,
-           cloud?.providerJobID == nil {
+        if CloudFallbackPolicy.requiresReview(cloud) {
             status = .ambiguousBilling
-            lastError = "Speechmatics submission is ambiguous and cannot be uploaded again automatically."
+            lastError = "The previous cloud submission has no confirmed outcome. Review the provider job before uploading again."
             return
         }
         let resumableSpeechmatics = cloud?.provider == .speechmatics && cloud?.providerJobID != nil
@@ -110,10 +109,10 @@ struct TranscriptionJob: Codable, Equatable {
         if resumableSpeechmatics {
             cloud?.state = .awaitingResponse
             cloud?.phase = .polling
-            cloud?.updatedAt = Date()
-        } else {
-            cloud = nil
         }
+        // Retry retains provider routing, region, and any Retry-After deadline.
+        // Only an explicit new transcription discards these checkpoints.
+        cloud?.updatedAt = Date()
         for index in tracks.indices {
             if tracks[index].status == .failed { tracks[index].status = .queued }
             tracks[index].lastError = nil
@@ -139,6 +138,16 @@ struct TranscriptionJob: Codable, Equatable {
         startedAt = Date()
         lastError = nil
     }
+
+    /// Automatic recovery respects the provider's backoff even after relaunch.
+    func isDueForAutomaticRetry(at now: Date = Date()) -> Bool {
+        status == .queued && (cloud?.retryAfter.map { $0 <= now } ?? true)
+    }
+
+    mutating func recordUnexpectedFailure(_ message: String) {
+        status = CloudFallbackPolicy.requiresReview(cloud) ? .ambiguousBilling : .retryableFailed
+        lastError = message
+    }
 }
 
 enum TranscriptionErrorSanitizer {
@@ -155,17 +164,27 @@ enum TranscriptionErrorSanitizer {
 
     static func guidance(for message: String?) -> String {
         let text = (message ?? "").lowercased()
-        if text.contains("authorized") || text.contains("permission") {
-            return "Allow Speech Recognition in System Settings, then retry."
-        }
-        if text.contains("credit") {
-            return "Top up the active transcription provider, or select Speechmatics after configuring it in Settings → Transcription."
-        }
-        if text.contains("ambiguous") || text.contains("will not be uploaded again") {
+        if text.contains("ambiguous") || text.contains("will not be uploaded again")
+            || text.contains("no confirmed outcome") || text.contains("lost the response") {
             return "The recording is safe. Reveal the audio and review the provider job before choosing a new transcription attempt."
         }
-        if text.contains("speechmatics") || text.contains("api key") || text.contains("processing region") {
+        if text.contains("credit") {
+            return "Check the balance of the active transcription provider in its dashboard, then retry."
+        }
+        if text.contains("spend guard") || text.contains("spend limit") {
+            return "Review the monthly spending guard in Settings → Transcription, then retry."
+        }
+        if text.contains("deepgram") {
+            return "Check your Deepgram key and audio permission in Settings → Transcription, test the connection, then retry."
+        }
+        if text.contains("speechmatics") || text.contains("processing region") {
             return "Configure the Speechmatics key, region, Model Training confirmation, and consent in Settings → Transcription, then retry."
+        }
+        if text.contains("api key") {
+            return "Check your selected provider's key in Settings → Transcription, test the connection, then retry."
+        }
+        if text.contains("authorized") || text.contains("permission") {
+            return "Allow Speech Recognition in System Settings, then retry."
         }
         if text.contains("locale") || text.contains("on-device") {
             return "Install an on-device dictation language in System Settings → Keyboard → Dictation, then retry."
@@ -173,6 +192,6 @@ enum TranscriptionErrorSanitizer {
         if text.contains("audio") || text.contains("decode") || text.contains("file") {
             return "The audio could not be read. Reveal it, confirm it plays, then retry."
         }
-        return "The recording is safe. Retry when Speech Recognition is available."
+        return "The recording is safe. Check the selected transcription provider and your connection, then retry."
     }
 }

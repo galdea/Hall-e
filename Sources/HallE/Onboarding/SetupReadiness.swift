@@ -7,6 +7,8 @@ struct SetupReadiness {
     var localModelAvailable: Bool
     var engine: TranscriptionEnginePreference
     var cloud: CloudFallbackPolicy.Availability
+    var deepgramVerified = false
+    var speechmaticsVerified = false
 
     var usesLocalTranscription: Bool {
         switch engine {
@@ -19,9 +21,14 @@ struct SetupReadiness {
     var transcriptionReady: Bool {
         switch engine {
         case .sfSpeech: return speechGranted && localModelAvailable
-        case .deepgram: return cloud.deepgramAvailable
-        case .speechmatics: return cloud.speechmaticsAvailable
-        case .auto: return cloud.deepgramAvailable || cloud.speechmaticsAvailable || (speechGranted && localModelAvailable)
+        case .deepgram: return cloud.deepgramAvailable && deepgramVerified
+        case .speechmatics: return cloud.speechmaticsAvailable && speechmaticsVerified
+        case .auto:
+            // Match actual provider precedence. A working local model or backup
+            // must not hide an unverified primary selected by Automatic.
+            if cloud.deepgramAvailable { return deepgramVerified }
+            if cloud.speechmaticsAvailable { return speechmaticsVerified }
+            return speechGranted && localModelAvailable
         }
     }
 

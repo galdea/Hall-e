@@ -10,7 +10,12 @@ final class RecordingService: NSObject {
     static let shared = RecordingService()
 
     private(set) var state: RecordingState = .idle {
-        didSet { NotificationCenter.default.post(name: .halleRecordingChanged, object: nil) }
+        didSet {
+            NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
+            if state.canProcessQueuedTranscriptions {
+                Task { await RecordingCoordinator.resumeQueuedJobsWhenIdle() }
+            }
+        }
     }
     private(set) var currentSession: RecordingSession?
     private(set) var elapsed: TimeInterval = 0
@@ -44,6 +49,10 @@ final class RecordingService: NSObject {
     }
 
     var isRecording: Bool { if case .recording = state { return true }; return false }
+
+    var canProcessQueuedTranscriptions: Bool {
+        state.canProcessQueuedTranscriptions
+    }
 
     override init() {
         super.init()

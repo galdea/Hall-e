@@ -29,7 +29,8 @@ import Testing
     @Test func cloudUsersDoNotNeedSpeechPermission() {
         let readiness = SetupReadiness(microphoneGranted: true, speechGranted: false,
                                        localModelAvailable: false, engine: .auto,
-                                       cloud: .init(deepgramConfigured: true, deepgramConsented: true))
+                                       cloud: .init(deepgramConfigured: true, deepgramConsented: true),
+                                       deepgramVerified: true)
         #expect(readiness.readyToMeet)
         #expect(!readiness.usesLocalTranscription)
     }
@@ -43,5 +44,37 @@ import Testing
         #expect(SetupReadiness.restoredStep(-2) == 0)
         #expect(SetupReadiness.restoredStep(2) == 2)
         #expect(SetupReadiness.restoredStep(99) == 3)
+    }
+
+    @Test func savedButUntestedKeyCannotFinishOnboarding() {
+        let readiness = SetupReadiness(microphoneGranted: true, speechGranted: true,
+                                       localModelAvailable: true, engine: .deepgram,
+                                       cloud: .init(deepgramConfigured: true, deepgramConsented: true))
+        #expect(!readiness.readyToMeet)
+    }
+
+    @Test func automaticDoesNotHideUntestedPrimaryBehindVerifiedBackupOrLocalSpeech() {
+        var readiness = SetupReadiness(microphoneGranted: true, speechGranted: true,
+                                       localModelAvailable: true, engine: .auto,
+                                       cloud: .init(deepgramConfigured: true, deepgramConsented: true,
+                                                    speechmaticsConfigured: true, speechmaticsConsented: true),
+                                       speechmaticsVerified: true)
+        #expect(!readiness.readyToMeet)
+        readiness.deepgramVerified = true
+        #expect(readiness.readyToMeet)
+        readiness.cloud.deepgramConsented = false
+        #expect(readiness.readyToMeet)
+        #expect(!readiness.usesLocalTranscription)
+    }
+
+    @Test func speechmaticsNeedsBothVerificationAndRegionConsent() {
+        var readiness = SetupReadiness(microphoneGranted: true, speechGranted: false,
+                                       localModelAvailable: false, engine: .speechmatics,
+                                       cloud: .init(speechmaticsConfigured: true, speechmaticsConsented: true))
+        #expect(!readiness.readyToMeet)
+        readiness.speechmaticsVerified = true
+        #expect(readiness.readyToMeet)
+        readiness.cloud.speechmaticsConsented = false
+        #expect(!readiness.readyToMeet)
     }
 }

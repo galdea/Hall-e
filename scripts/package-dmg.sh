@@ -33,7 +33,10 @@ WELCOME TO HALL-E / BIENVENIDO A HALL-E
 
 1. Drag Hall-e to Applications, then eject this disk image.
 2. Open Hall-e from Applications and follow the four setup steps.
-3. Allow the microphone and speech recognition. Try the short audio check.
+3. Allow the microphone. Choose local speech recognition, or connect your own
+   Deepgram/Speechmatics key with Save & test and allow audio processing.
+   For Speechmatics, choose a region and confirm Model Training is off.
+   Try the short audio check.
 4. Choose Start recording. For an online meeting, choose microphone + your
    meeting app, and join the call before recording.
 
@@ -42,7 +45,10 @@ your Mac. Cloud providers are optional and require your own account and consent.
 
 1. Arrastra Hall-e a Aplicaciones y expulsa esta imagen de disco.
 2. Abre Hall-e desde Aplicaciones y sigue los cuatro pasos de configuración.
-3. Autoriza el micrófono y el reconocimiento de voz. Prueba el audio.
+3. Autoriza el micrófono. Elige reconocimiento de voz local o conecta tu clave
+   de Deepgram/Speechmatics con Save & test y autoriza el procesamiento de audio.
+   Para Speechmatics, elige una región y confirma que Model Training esté apagado.
+   Prueba el audio.
 4. Elige Iniciar grabación. Para una reunión en línea, selecciona micrófono +
    la app de la reunión y entra a la llamada antes de grabar.
 

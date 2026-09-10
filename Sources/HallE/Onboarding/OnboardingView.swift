@@ -13,6 +13,8 @@ struct OnboardingView: View {
     @State private var engine = AppPreferences.transcriptionEngine
     @State private var localLocale: String?
     @State private var cloud = CloudFallbackPolicy.Availability()
+    @State private var deepgramVerified = false
+    @State private var speechmaticsVerified = false
     @State private var audioCheck = SetupAudioCheck()
     @State private var showingCloudSetup = false
     @State private var requestingPermission = false
@@ -24,7 +26,8 @@ struct OnboardingView: View {
     private func copy(_ en: String, _ es: String) -> String { PublicUICopy.text(en, es) }
     private var readiness: SetupReadiness {
         .init(microphoneGranted: micGranted, speechGranted: speechGranted,
-              localModelAvailable: localLocale != nil, engine: engine, cloud: cloud)
+              localModelAvailable: localLocale != nil, engine: engine, cloud: cloud,
+              deepgramVerified: deepgramVerified, speechmaticsVerified: speechmaticsVerified)
     }
     private var stepTitles: [String] {
         [copy("Welcome", "Bienvenida"), copy("Microphone", "Micrófono"),
@@ -232,5 +235,9 @@ struct OnboardingView: View {
                       deepgramConsented: AppPreferences.allowCloudAudioTranscription,
                       speechmaticsConfigured: AppPreferences.speechmaticsRegion?.isSupported == true && KeychainStore.exists(account: KeychainStore.speechmaticsTranscriptionAccount),
                       speechmaticsConsented: AppPreferences.allowSpeechmaticsAudioTranscription)
+        deepgramVerified = CloudCredentialValidation.savedKeyIsVerified(target: .deepgram)
+        speechmaticsVerified = AppPreferences.speechmaticsRegion.map {
+            CloudCredentialValidation.savedKeyIsVerified(target: .speechmatics($0))
+        } ?? false
     }
 }

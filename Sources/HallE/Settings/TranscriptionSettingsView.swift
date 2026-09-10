@@ -22,6 +22,11 @@ struct TranscriptionSettingsView: View {
     @State private var keyError: String?
     @State private var cloudExpanded = false
     @State private var speechLocale: String?
+    @State private var deepgramVerified = false
+    @State private var speechmaticsVerified = false
+    @State private var checkingTarget: CloudCredentialTarget?
+    @State private var credentialCheckTask: Task<Void, Never>?
+    @State private var credentialCheckID: UUID?
 
     private enum CloudConfirmation: String, Identifiable {
         case deepgramAudio, speechmaticsAudio, reports
@@ -78,18 +83,23 @@ struct TranscriptionSettingsView: View {
                 HStack {
                     SecureField("Deepgram API key", text: $deepgramKey)
                     Button("Paste") { pasteKey(into: $deepgramKey) }
-                        .help("Paste your copied Deepgram key; nothing is saved until you press Save.")
-                    Button(deepgramKeyStored ? "Replace" : "Save") { saveDeepgramKey() }
+                        .help("Paste your copied Deepgram key, then choose Save & test.")
+                    Button(deepgramKeyStored ? "Replace & test" : "Save & test") { saveDeepgramKey() }
                         .disabled(deepgramKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if deepgramKeyStored {
                         Button("Remove", role: .destructive) {
-                            KeychainStore.delete(account: KeychainStore.deepgramTranscriptionAccount)
+                            guard removeKey(target: .deepgram) else { return }
                             deepgramKeyStored = false
+                            deepgramVerified = false
                         }
                     }
+                }.disabled(checkingTarget != nil)
+                if deepgramKeyStored {
+                    Button("Test saved Deepgram key") { checkKey(target: .deepgram) }
+                        .disabled(checkingTarget != nil)
                 }
-                Text(deepgramKeyStored ? "Key saved. Next: allow transcription below." : "Paste your own key above, then press Save.")
-                    .font(.caption).foregroundStyle(deepgramKeyStored ? .green : .secondary)
+                Text(deepgramVerified ? "Saved key accepted by Deepgram." : "Paste your key and choose Save & test. Existing keys can be tested above.")
+                    .font(.caption).foregroundStyle(deepgramVerified ? .green : .secondary)
 
                 Toggle("Allow meeting audio to be uploaded to Deepgram", isOn: Binding(
                     get: { cloudAudioEnabled },
@@ -100,9 +110,9 @@ struct TranscriptionSettingsView: View {
                 Text("Audio is sent only for transcription. Speaker 1, Speaker 2, and similar labels distinguish voices; they do not identify people by name. Model improvement is opted out.")
                     .font(.caption).foregroundStyle(.secondary)
 
-                setupStatus(deepgramKeyStored && cloudAudioEnabled,
-                            ready: "Deepgram setup complete · key validity is checked on your first transcription.",
-                            pending: deepgramKeyStored ? "Allow audio processing to finish setup." : "Save your key to continue.")
+                setupStatus(deepgramVerified && cloudAudioEnabled,
+                            ready: "Deepgram key checked and audio processing allowed.",
+                            pending: !deepgramVerified ? "Test your key to finish connection setup." : "Allow audio processing to finish setup.")
 
             }
 
@@ -113,18 +123,30 @@ struct TranscriptionSettingsView: View {
                 HStack {
                     SecureField("Speechmatics API key", text: $speechmaticsKey)
                     Button("Paste") { pasteKey(into: $speechmaticsKey) }
-                        .help("Paste your copied Speechmatics key; nothing is saved until you press Save.")
-                    Button(speechmaticsKeyStored ? "Replace" : "Save") { saveSpeechmaticsKey() }
-                        .disabled(speechmaticsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help("Choose a region, paste your Speechmatics key, then choose Save & test.")
+                    Button(speechmaticsKeyStored ? "Replace & test" : "Save & test") { saveSpeechmaticsKey() }
+                        .disabled(speechmaticsKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || speechmaticsRegion?.isSupported != true)
                     if speechmaticsKeyStored {
                         Button("Remove", role: .destructive) {
-                            KeychainStore.delete(account: KeychainStore.speechmaticsTranscriptionAccount)
+                            guard KeychainStore.delete(account: KeychainStore.speechmaticsTranscriptionAccount) else {
+                                keyError = "macOS Keychain could not remove the Speechmatics key. Please try again."
+                                return
+                            }
+                            for region in SpeechmaticsRegion.allCases {
+                                CloudCredentialValidation.invalidate(target: .speechmatics(region))
+                            }
                             speechmaticsKeyStored = false
+                            speechmaticsVerified = false
                         }
                     }
+                }.disabled(checkingTarget != nil)
+                if speechmaticsKeyStored {
+                    Button("Test saved Speechmatics key") {
+                        if let region = speechmaticsRegion { checkKey(target: .speechmatics(region)) }
+                    }.disabled(checkingTarget != nil || speechmaticsRegion?.isSupported != true)
                 }
-                Text(speechmaticsKeyStored ? "Key saved. Next: choose a region and allow transcription below." : "Paste your own key above, then press Save.")
-                    .font(.caption).foregroundStyle(speechmaticsKeyStored ? .green : .secondary)
+                Text(speechmaticsVerified ? "Saved key accepted in the selected Speechmatics region." : "Choose a region below, then save and test your key.")
+                    .font(.caption).foregroundStyle(speechmaticsVerified ? .green : .secondary)
 
                 Text("Choose where Speechmatics processes your audio. Keep the same region for existing jobs.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -137,7 +159,9 @@ struct TranscriptionSettingsView: View {
                 .onChange(of: speechmaticsRegion) { _, value in
                     if value != AppPreferences.speechmaticsRegion { revokeSpeechmaticsConsent() }
                     AppPreferences.speechmaticsRegion = value
+                    refreshCredentialChecks()
                 }
+                .disabled(checkingTarget != nil)
 
                 Toggle("I confirmed Model Training is off in Speechmatics", isOn: $speechmaticsTrainingOff)
                     .onChange(of: speechmaticsTrainingOff) { _, value in
@@ -157,6 +181,12 @@ struct TranscriptionSettingsView: View {
             }
 
             Section("Setup checklist") {
+                if let checkingTarget {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Checking \(checkingTarget.name)…")
+                    }
+                }
                 if isOnboarding {
                     Picker("Provider", selection: $engine) {
                         ForEach(TranscriptionEnginePreference.allCases) { value in
@@ -165,13 +195,13 @@ struct TranscriptionSettingsView: View {
                     }
                     .onChange(of: engine) { _, value in AppPreferences.transcriptionEngine = value }
                 }
-                setupStatus(deepgramKeyStored && cloudAudioEnabled,
-                            ready: "Deepgram configured", pending: "Deepgram not configured")
-                setupStatus(speechmaticsKeyStored && speechmaticsAudioEnabled && speechmaticsRegion?.isSupported == true && speechmaticsTrainingOff,
-                            ready: "Speechmatics configured", pending: "Speechmatics needs a key, region, training setting, and audio permission")
-                Text("For cloud transcription, one configured provider is enough. Automatic can use either provider, with credit-exhaustion fallback when both are configured. Saving a key does not upload audio or verify your balance. On this Mac keeps new transcription local.")
+                setupStatus(deepgramVerified && cloudAudioEnabled,
+                            ready: "Deepgram key checked and authorized", pending: "Deepgram needs a checked key and audio permission")
+                setupStatus(speechmaticsVerified && speechmaticsAudioEnabled && speechmaticsRegion?.isSupported == true && speechmaticsTrainingOff,
+                            ready: "Speechmatics key checked and authorized", pending: "Speechmatics needs a checked key, region, training setting, and audio permission")
+                Text("For cloud transcription, one provider is enough. Save & test checks authentication without uploading audio or creating a paid job. It does not verify your balance or guarantee access to every transcription model. On this Mac keeps new transcription local.")
                     .font(.caption).foregroundStyle(.secondary)
-                Text("Next: finish setup and make a short recording. Its transcript confirms that your key and provider credit work. You can change keys anytime in Settings → Transcription.")
+                Text("Next: finish setup and make a short recording to confirm end-to-end transcription and provider credit. You can change keys anytime in Settings → Transcription.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -226,7 +256,14 @@ struct TranscriptionSettingsView: View {
         } message: { Text(keyError ?? "") }
         .onAppear {
             refreshSpeechReadiness()
+            refreshCredentialChecks()
             cloudExpanded = deepgramKeyStored || speechmaticsKeyStored || engine == .deepgram || engine == .speechmatics
+        }
+        .onDisappear {
+            credentialCheckTask?.cancel()
+            credentialCheckTask = nil
+            credentialCheckID = nil
+            checkingTarget = nil
         }
         .onChange(of: scenePhase) { _, phase in if phase == .active { refreshSpeechReadiness() } }
         .confirmationDialog(cloudConfirmation == .reports ? "Allow cloud transcript processing?" : "Allow cloud audio processing?",
@@ -311,21 +348,61 @@ struct TranscriptionSettingsView: View {
     }
 
     private func saveDeepgramKey() {
-        let value = deepgramKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        do {
-            try KeychainStore.set(value, account: KeychainStore.deepgramTranscriptionAccount)
-            deepgramKey = ""; deepgramKeyStored = true
-        } catch { keyError = "macOS Keychain could not save the key. Your existing key was preserved. Please try again." }
+        checkKey(target: .deepgram, replacement: deepgramKey)
     }
 
     private func saveSpeechmaticsKey() {
-        let value = speechmaticsKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        do {
-            try KeychainStore.set(value, account: KeychainStore.speechmaticsTranscriptionAccount)
-            speechmaticsKey = ""; speechmaticsKeyStored = true
-        } catch { keyError = "macOS Keychain could not save the key. Your existing key was preserved. Please try again." }
+        guard let region = speechmaticsRegion else { return }
+        checkKey(target: .speechmatics(region), replacement: speechmaticsKey)
+    }
+
+    private func refreshCredentialChecks() {
+        deepgramKeyStored = KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount)
+        speechmaticsKeyStored = KeychainStore.exists(account: KeychainStore.speechmaticsTranscriptionAccount)
+        deepgramVerified = CloudCredentialValidation.savedKeyIsVerified(target: .deepgram)
+        speechmaticsVerified = speechmaticsRegion.map {
+            CloudCredentialValidation.savedKeyIsVerified(target: .speechmatics($0))
+        } ?? false
+    }
+
+    private func removeKey(target: CloudCredentialTarget) -> Bool {
+        guard KeychainStore.delete(account: target.account) else {
+            keyError = "macOS Keychain could not remove the \(target.name) key. Please try again."
+            return false
+        }
+        CloudCredentialValidation.invalidate(target: target)
+        return true
+    }
+
+    private func checkKey(target: CloudCredentialTarget, replacement: String? = nil) {
+        guard checkingTarget == nil else { return }
+        checkingTarget = target
+        keyError = nil
+        let checkID = UUID()
+        credentialCheckID = checkID
+        credentialCheckTask = Task { @MainActor in
+            defer {
+                if credentialCheckID == checkID {
+                    refreshCredentialChecks()
+                    checkingTarget = nil
+                    credentialCheckTask = nil
+                    credentialCheckID = nil
+                }
+            }
+            do {
+                try await CloudCredentialValidation.checkAndSave(target: target, replacement: replacement)
+                try Task.checkCancellation()
+                if replacement != nil {
+                    switch target {
+                    case .deepgram: deepgramKey = ""; deepgramKeyStored = true
+                    case .speechmatics: speechmaticsKey = ""; speechmaticsKeyStored = true
+                    }
+                }
+            } catch {
+                guard !Task.isCancelled, credentialCheckID == checkID else { return }
+                keyError = error.localizedDescription
+            }
+        }
     }
 
     private func grantAudioConsent() {

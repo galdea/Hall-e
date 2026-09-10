@@ -8,6 +8,8 @@ import AVFoundation
 @MainActor
 enum RecordingCoordinator {
     private static var recovering = false
+    private static var scheduledCloudRetries: [UUID: Task<Void, Never>] = [:]
+    private static var activeSessions = Set<UUID>()
 
     static func startRecording(for event: UnifiedEvent) {
         guard RecordingService.shared.isRecording == false else { return }
@@ -74,7 +76,9 @@ enum RecordingCoordinator {
 
     /// Runs after a meeting recording stops, and also for a retry after relaunch.
     static func transcribeAndMerge(session incoming: RecordingSession, event: UnifiedEvent) async {
-        var session = incoming
+        guard activeSessions.insert(incoming.id).inserted else { return }
+        defer { activeSessions.remove(incoming.id) }
+        var session = RecordingStore.allSessions().first(where: { $0.id == incoming.id }) ?? incoming
         if let playback = await RecordingMixdownService.makePlaybackMix(for: session) {
             session.playbackFileName = playback
             session.save(); notifyRecordingChanged()
@@ -154,7 +158,9 @@ enum RecordingCoordinator {
     }
 
     static func finishCall(session incoming: RecordingSession, event: UnifiedEvent) async {
-        var session = incoming
+        guard activeSessions.insert(incoming.id).inserted else { return }
+        defer { activeSessions.remove(incoming.id) }
+        var session = RecordingStore.allSessions().first(where: { $0.id == incoming.id }) ?? incoming
         if let playback = await RecordingMixdownService.makePlaybackMix(for: session) {
             session.playbackFileName = playback
             session.save(); notifyRecordingChanged()
@@ -219,14 +225,16 @@ enum RecordingCoordinator {
     }
 
     static func retry(session: RecordingSession) {
-        guard let queued = RecordingStore.queueRetry(slug: session.slug) else { return }
+        guard !activeSessions.contains(session.id) else { return }
+        guard RecordingStore.queueRetry(slug: session.slug) != nil else { return }
         notifyRecordingChanged()
-        Task { await resume(queued) }
+        Task { await resumeQueuedJobsWhenIdle() }
     }
 
     static func retryAll() {
         let sessions = RecordingStore.allSessions().filter {
-            ($0.transcriptionJob ?? .legacy(status: $0.transcriptStatus)).status == .retryableFailed
+            !activeSessions.contains($0.id)
+                && ($0.transcriptionJob ?? .legacy(status: $0.transcriptStatus)).status == .retryableFailed
         }
         for session in sessions { _ = RecordingStore.queueRetry(slug: session.slug) }
         notifyRecordingChanged()
@@ -237,9 +245,10 @@ enum RecordingCoordinator {
     /// completed-job short circuit and transcript file so a new engine/language
     /// cannot accidentally reuse the old result.
     static func retranscribe(session: RecordingSession) {
-        guard let queued = RecordingStore.queueRetranscription(slug: session.slug) else { return }
+        guard !activeSessions.contains(session.id) else { return }
+        guard RecordingStore.queueRetranscription(slug: session.slug) != nil else { return }
         notifyRecordingChanged()
-        Task { await resume(queued) }
+        Task { await resumeQueuedJobsWhenIdle() }
     }
 
     static func resumeQueuedJobsWhenIdle() async {
@@ -247,22 +256,40 @@ enum RecordingCoordinator {
             Log.rec.info("transcription recovery skipped: another recovery is active")
             return
         }
-        guard !RecordingService.shared.isRecording else {
+        guard RecordingService.shared.canProcessQueuedTranscriptions else {
             Log.rec.info("transcription recovery skipped: recorder is active")
             return
         }
         recovering = true
         defer { recovering = false }
-        let sessions = RecordingStore.queuedSessions()
-        Log.rec.info("transcription recovery beginning for \(sessions.count, privacy: .public) queued job(s)")
-        for session in sessions {
-            guard !RecordingService.shared.isRecording else { return }
+        // Avoid a busy loop if metadata cannot be saved. A later persisted
+        // attempt may still become due while another recording is processing.
+        var attemptedCounts: [UUID: Int] = [:]
+        while RecordingService.shared.canProcessQueuedTranscriptions {
+            let sessions = RecordingStore.queuedSessions().filter {
+                !activeSessions.contains($0.id)
+                    && attemptedCounts[$0.id] != ($0.transcriptionJob?.attemptCount ?? 0)
+            }
+            for session in sessions {
+                if let date = session.transcriptionJob?.cloud?.retryAfter, date > Date(),
+                   scheduledCloudRetries[session.id] == nil {
+                    scheduleCloudRetry(sessionID: session.id, after: date.timeIntervalSinceNow)
+                }
+            }
+            guard let session = sessions.first(where: {
+                ($0.transcriptionJob ?? .legacy(status: $0.transcriptStatus)).isDueForAutomaticRetry()
+            }) else { return }
+            attemptedCounts[session.id] = session.transcriptionJob?.attemptCount ?? 0
             Log.rec.info("transcription recovery starting \(session.slug, privacy: .public)")
             await resume(session)
         }
     }
 
     private static func resume(_ session: RecordingSession) async {
+        guard RecordingService.shared.canProcessQueuedTranscriptions,
+              !activeSessions.contains(session.id),
+              let session = RecordingStore.allSessions().first(where: { $0.id == session.id }),
+              (session.transcriptionJob ?? .legacy(status: session.transcriptStatus)).isDueForAutomaticRetry() else { return }
         let event = session.eventSnapshot ?? recoveryEvent(for: session)
         if session.localCaptureEventID != nil || session.sourceKind == .whatsAppCall || session.eventDedupKey.hasPrefix("whatsapp:") {
             await finishCall(session: session, event: event)
@@ -646,11 +673,15 @@ enum RecordingCoordinator {
     }
 
     private static func scheduleCloudRetry(sessionID: UUID, after delay: TimeInterval) {
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(delay))
-            guard !RecordingService.shared.isRecording,
-                  let queued = RecordingStore.allSessions().first(where: { $0.id == sessionID && $0.transcriptionJob?.status == .queued }) else { return }
-            await resume(queued)
+        scheduledCloudRetries[sessionID]?.cancel()
+        scheduledCloudRetries[sessionID] = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(max(0, delay))) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            scheduledCloudRetries[sessionID] = nil
+            // An active recording defers this durable queue; the transition
+            // back to idle wakes it again. Use the same serialized drain as launch.
+            await resumeQueuedJobsWhenIdle()
         }
     }
 
@@ -664,10 +695,11 @@ enum RecordingCoordinator {
     }
 
     private static func markJobFailed(session initial: RecordingSession, message: String) -> (session: RecordingSession, transcript: Transcript)? {
-        var session = initial
+        // The provider may already have saved a remote job ID while awaiting
+        // network or disk I/O. Never overwrite it with the pre-upload snapshot.
+        var session = RecordingStore.allSessions().first(where: { $0.id == initial.id }) ?? initial
         var job = session.transcriptionJob ?? .legacy(status: .failed)
-        job.status = .retryableFailed
-        job.lastError = message
+        job.recordUnexpectedFailure(message)
         session.transcriptionJob = job
         session.transcriptStatus = .failed
         session.save(); notifyRecordingChanged()

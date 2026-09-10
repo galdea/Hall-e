@@ -3,6 +3,13 @@ import Foundation
 enum RecordingState: Codable, Equatable {
     case idle, preparing, recording, stopping, completed
     case failed(String)
+
+    var canProcessQueuedTranscriptions: Bool {
+        switch self {
+        case .preparing, .recording, .stopping: return false
+        case .idle, .completed, .failed: return true
+        }
+    }
 }
 
 enum TranscriptStatus: String, Codable {

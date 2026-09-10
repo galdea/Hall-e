@@ -58,7 +58,7 @@ enum DeepgramError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .consentRequired: "Cloud audio consent is required before uploading a recording."
-        case .missingAPIKey: "A rotated Deepgram API key is required in macOS Keychain."
+        case .missingAPIKey: "Add and test your Deepgram API key in Settings → Transcription."
         case .spendLimitExceeded(let projected, let limit):
             "Deepgram monthly spend guard would reach $\(String(format: "%.2f", projected)) (limit $\(String(format: "%.2f", limit)))."
         case .creditExhausted(let message): message

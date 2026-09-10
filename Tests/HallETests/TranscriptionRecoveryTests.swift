@@ -102,4 +102,123 @@ struct TranscriptionRecoveryTests {
         #expect(LocalTranscriptionProvider.firstAvailableRecognizer(language: "es",
                                                                      isAvailable: { _ in false }) == nil)
     }
+
+    @Test func providerBackoffSurvivesRelaunch() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let job = TranscriptionJob(status: .queued, cloud: .init(
+            state: .retryableFailure, requestFingerprint: "fixture", estimatedCostUSD: 0,
+            requestID: nil, retryAfter: now.addingTimeInterval(60), lastHTTPStatus: 429,
+            lastErrorCode: nil, updatedAt: now))
+        let restored = try JSONDecoder().decode(TranscriptionJob.self, from: JSONEncoder().encode(job))
+        #expect(!restored.isDueForAutomaticRetry(at: now))
+        #expect(restored.isDueForAutomaticRetry(at: now.addingTimeInterval(60)))
+        var completed = restored
+        completed.status = .completed
+        #expect(!completed.isDueForAutomaticRetry(at: now.addingTimeInterval(120)))
+        #expect(TranscriptionJob.legacy(status: .pending).isDueForAutomaticRetry(at: now))
+    }
+
+    @Test func recoveryWaitsForCaptureToFinishAndResumesAfterFailure() {
+        for state in [RecordingState.preparing, .recording, .stopping] {
+            #expect(!state.canProcessQueuedTranscriptions)
+        }
+        for state in [RecordingState.idle, .completed, .failed("Microphone disconnected")] {
+            #expect(state.canProcessQueuedTranscriptions)
+        }
+    }
+
+    @Test func manualRetryPreservesProviderAndBackoffAfterConfigurationChanges() {
+        let now = Date()
+        for provider in [CloudTranscriptionProvider.deepgram, .speechmatics] {
+            var job = TranscriptionJob(status: .retryableFailed, cloud: .init(
+                state: .retryableFailure, requestFingerprint: "fixture", estimatedCostUSD: 0.1,
+                requestID: nil, retryAfter: now.addingTimeInterval(60), lastHTTPStatus: 429,
+                lastErrorCode: nil, updatedAt: now, provider: provider, providerRegion: "eu1"))
+            job.queueForRetry()
+            #expect(job.status == .queued)
+            #expect(!job.isDueForAutomaticRetry(at: now))
+            #expect(job.cloud?.provider == provider)
+            #expect(job.cloud?.providerRegion == "eu1")
+            #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .auto,
+                availability: .init(), checkpoint: job.cloud) == (provider == .deepgram ? .deepgram : .speechmatics))
+            job.resetForRetranscription()
+            #expect(job.cloud == nil)
+        }
+    }
+
+    @Test func acceptedJobManualRetryStillHonorsRateLimit() {
+        let now = Date()
+        let deadline = now.addingTimeInterval(30)
+        var job = TranscriptionJob(status: .retryableFailed, cloud: .init(
+            state: .retryableFailure, requestFingerprint: "fixture", estimatedCostUSD: 0.1,
+            requestID: "accepted", retryAfter: deadline, lastHTTPStatus: 429,
+            lastErrorCode: nil, updatedAt: now, provider: .speechmatics,
+            phase: .polling, providerJobID: "accepted", providerRegion: "eu1"))
+        job.queueForRetry()
+        #expect(job.cloud?.providerJobID == "accepted")
+        #expect(job.cloud?.retryAfter == deadline)
+        #expect(!job.isDueForAutomaticRetry(at: now))
+        #expect(job.isDueForAutomaticRetry(at: deadline))
+    }
+
+    @Test func preUploadSetupFailureStillAllowsConnectingAProviderLater() {
+        var job = TranscriptionJob(status: .consentBlocked, cloud: .init(
+            state: .consentBlocked, requestFingerprint: "fixture", estimatedCostUSD: 0,
+            requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil, updatedAt: Date()))
+        job.queueForRetry()
+        let availability = CloudFallbackPolicy.Availability(speechmaticsConfigured: true, speechmaticsConsented: true)
+        #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .auto,
+            availability: availability, checkpoint: job.cloud) == .speechmatics)
+    }
+
+    @Test(arguments: [CloudTranscriptionState.uploading, .awaitingResponse, .ambiguousBilling])
+    func unknownDeepgramOutcomeCannotBeClearedByRetry(state: CloudTranscriptionState) {
+        let checkpoint = CloudTranscriptionJob(
+            state: state, requestFingerprint: "paid-or-in-flight", estimatedCostUSD: 0.1,
+            requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil, updatedAt: Date())
+        var job = TranscriptionJob(status: .retryableFailed, cloud: checkpoint)
+        job.queueForRetry()
+        #expect(job.status == .ambiguousBilling)
+        #expect(job.cloud == checkpoint)
+        #expect(!job.isDueForAutomaticRetry())
+    }
+
+    @Test func unexpectedFailurePreservesAcceptedJobAndOriginalRegion() {
+        let checkpoint = CloudTranscriptionJob(
+            state: .awaitingResponse, requestFingerprint: "fixture", estimatedCostUSD: 0.1,
+            requestID: "accepted-job", retryAfter: nil, lastHTTPStatus: 200,
+            lastErrorCode: nil, updatedAt: Date(), provider: .speechmatics,
+            phase: .polling, providerJobID: "accepted-job", providerRegion: "eu1")
+        var job = TranscriptionJob(status: .running, cloud: checkpoint)
+        job.recordUnexpectedFailure("Local persistence failed")
+        #expect(job.status == .retryableFailed)
+        #expect(job.cloud == checkpoint)
+        job.queueForRetry()
+        #expect(job.status == .queued)
+        #expect(job.cloud?.providerJobID == "accepted-job")
+        #expect(job.cloud?.providerRegion == "eu1")
+        #expect(job.cloud?.phase == .polling)
+    }
+
+    @Test func unexpectedFailureWithoutAcceptedIDRequiresReview() {
+        var job = TranscriptionJob(status: .running, cloud: .init(
+            state: .uploading, requestFingerprint: "fixture", estimatedCostUSD: 0.1,
+            requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
+            updatedAt: Date(), provider: .speechmatics, phase: .submitting))
+        job.recordUnexpectedFailure("Connection interrupted")
+        #expect(job.status == .ambiguousBilling)
+        job.queueForRetry()
+        #expect(job.status == .ambiguousBilling)
+    }
+
+    @Test func providerPermissionErrorsDoNotSendUsersToLocalSpeechSettings() {
+        let deepgram = TranscriptionErrorSanitizer.guidance(for: "Deepgram API key is unauthorized")
+        #expect(deepgram.contains("Deepgram"))
+        #expect(!deepgram.contains("Speech Recognition"))
+        let speechmatics = TranscriptionErrorSanitizer.guidance(for: "Speechmatics audio permission denied")
+        #expect(speechmatics.contains("Speechmatics"))
+        #expect(!speechmatics.contains("Speech Recognition"))
+        #expect(TranscriptionErrorSanitizer.guidance(for: "Cloud transcription spend guard exceeded")
+            .contains("spending guard"))
+    }
 }
