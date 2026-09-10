@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>Hall-e</AssemblyName>
+    <RootNamespace>HallE.Windows</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/hall-e.ico</ApplicationIcon>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
+    <Using Include="System.Windows.Automation" />
+    <ProjectReference Include="../HallE.Core/HallE.Core.csproj" />
+    <PackageReference Include="NAudio" Version="2.4.0" />
+    <PackageReference Include="System.Speech" Version="10.0.9" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
+    <Resource Include="Assets/hall-e.png" />
+  </ItemGroup>
+</Project>

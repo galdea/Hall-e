@@ -27,6 +27,11 @@ for (const architecture of ['arm64', 'x86_64']) {
     throw new Error(`${architecture} download link does not match release v${releaseVersion}: ${anchorMatch[1]}`);
   }
 }
+const windowsVersion = html.match(/<span data-windows-version>([^<]+)<\/span>/)?.[1];
+if (!windowsVersion || !/^\d+\.\d+\.\d+$/.test(windowsVersion)) throw new Error('Missing valid Windows preview version.');
+const windowsURL = html.match(/<a[^>]*data-download="windows-x64"[^>]*href="([^"]+)"/i)?.[1];
+const expectedWindowsURL = `https://github.com/galdea/Hall-e/releases/download/win-v${windowsVersion}/Hall-e-${windowsVersion}-windows-x64-setup.exe`;
+if (windowsURL !== expectedWindowsURL) throw new Error('Windows installer link does not match the displayed version.');
 await rm(output, { recursive: true, force: true });
 await cp(source, output, { recursive: true });
 console.log(`Built Hall-e download site with ${assets.size} verified local assets: ${output}`);

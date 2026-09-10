@@ -12,21 +12,24 @@
 
 </div>
 
-Hall-e is an open-source macOS assistant for recording meetings, turning conversations into readable transcripts, and keeping work organized by project.
+Hall-e is an open-source meeting assistant for recording meetings, turning conversations into readable transcripts, and keeping work organized by project. The established macOS app now has a separate native **Windows preview**.
+
+**Windows 11 (Intel/AMD x64):** [Download the Windows 0.1.0 installer](https://github.com/galdea/Hall-e/releases/download/win-v0.1.0/Hall-e-0.1.0-windows-x64-setup.exe). It bundles the runtime and installs for your Windows account. See the [Windows installation guide, supported features, and unsigned-app guidance](windows/README.md). This initial edition includes recording, notes, projects, playback, transcription, and export; advanced Mac integrations are not included. The remaining guide below describes the macOS edition.
 
 The name borrows a little from **HAL**, from *2001: A Space Odyssey*, and a lot of heart from **WALL-E**. Smart, helpful, and nice. The airlock stays open. 🌱
 
 ## Install, open, meet
 
 1. Download the **DMG** from [the latest release](https://github.com/galdea/Hall-e/releases/latest). Choose **arm64** for Apple silicon or **x86_64** for Intel; check **Apple menu → About This Mac**. Requires **macOS 14 or later**; capturing another app's audio requires **14.2+**.
-2. Open the DMG, drag **Hall-e** to **Applications**, eject the disk image, and open Hall-e. A ZIP alternative is available too.
-3. Follow four short setup steps: choose your language, allow the microphone, then choose local speech recognition or connect your own cloud transcription key with **Save & test** and allow audio processing. Try the optional **eight-second audio check**. Setup can be resumed later.
-4. Choose **Start recording**, name your meeting, and select **Microphone only** for an in-person conversation or **Microphone + your meeting app** for an online call. Join the call first and tell participants you are recording.
-5. Stop when you finish. Your audio, transcript, and autosaved notes are together in **Meetings & recordings → Recordings**. Export notes and transcript as one Markdown file.
+2. Open the DMG, drag **Hall-e** to **Applications**, eject the disk image, and try to open Hall-e from Applications. A ZIP alternative is available too.
+3. If macOS says Apple cannot verify Hall-e, close that message and open **System Settings → Privacy & Security**. Scroll to **Security**, click **Open Anyway** beside Hall-e, authenticate with Touch ID or your Mac login password, then click **Open**. This approves Hall-e specifically; do not disable Gatekeeper globally.
+4. Follow four short setup steps: choose your language, allow the microphone, then choose local speech recognition or connect your own cloud transcription key with **Save & test** and allow audio processing. Try the optional **eight-second audio check**. Setup can be resumed later.
+5. Choose **Start recording**, name your meeting, and select **Microphone only** for an in-person conversation or **Microphone + your meeting app** for an online call. Join the call first and tell participants you are recording.
+6. Stop when you finish. Your audio, transcript, and autosaved notes are together in **Meetings & recordings → Recordings**. Export notes and transcript as one Markdown file.
 
 **No account or API key is needed for supported on-device transcription.** No terminal, calendar account, browser extension, Obsidian, or separate AI subscription is required to record and take notes. Local speech depends on macOS permission and an available language model; setup checks readiness and lets you test it. When unavailable, keep recording and transcribe later, or connect an optional cloud provider. Cloud transcription requires internet access, your own provider account and credit, and explicit permission.
 
-**Release signing:** archives marked `adhoc` are not Apple-notarized. macOS may block the first launch; after verifying the download, use **System Settings → Privacy & Security → Open Anyway** if offered. Managed Macs may disallow this. Archives explicitly marked `notarized` have completed Apple's checks. See [installation and release details](docs/release.md).
+**Release signing:** archives marked `adhoc` are not Apple-notarized. macOS may block the first launch; the **Open Anyway** option appears in **Privacy & Security** after you first try to open Hall-e. Authenticate with Touch ID or your Mac login password when macOS asks. Managed Macs may disallow this. Archives explicitly marked `notarized` have completed Apple's checks. See [installation and release details](docs/release.md).
 
 ## Optional cloud transcription
 

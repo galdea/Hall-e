@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+.packages/
+artifacts/
+*.user
+*.pfx
+*.p12

@@ -1,0 +1,165 @@
+<Window x:Class="HallE.Windows.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings — Hall-e"
+        Width="760"
+        Height="790"
+        MinWidth="680"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Loaded="SettingsWindow_Loaded">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Background="#091F18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="22,17">
+            <StackPanel>
+                <TextBlock Text="Settings" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock Text="Local speech is optional. Cloud providers are used only after a validated key and explicit provider consent."
+                           Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0" />
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="22,18,22,22">
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Transcription defaults" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Recording and notes do not depend on transcription and work without API keys."
+                                   Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,4,0,14" />
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="14" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Default provider" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                <ComboBox x:Name="ProviderComboBox" AutomationProperties.Name="Default transcription provider" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Meeting language" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                <ComboBox x:Name="LanguageComboBox" IsEditable="True" IsTextSearchEnabled="True"
+                                          AutomationProperties.Name="Meeting transcription language" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Background="#0A1E18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="11" Margin="0,13,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Installed Windows local speech models" FontWeight="SemiBold" FontSize="12" />
+                                <TextBlock x:Name="LocalModelsTextBlock" Text="Checking installed speech models…" Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Deepgram" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Save &amp; test checks authentication only. It does not upload meeting audio. The key is saved with Windows user-level protected storage only after validation succeeds."
+                                   Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,4,0,11" />
+
+                        <CheckBox x:Name="DeepgramConsentCheckBox"
+                                  Content="I consent to send meeting audio to Deepgram only when I explicitly start Deepgram transcription."
+                                  Margin="0,0,0,10" AutomationProperties.Name="Consent to Deepgram meeting audio upload" />
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <PasswordBox x:Name="DeepgramKeyPasswordBox" AutomationProperties.Name="Deepgram API key" />
+                            <Button x:Name="DeepgramSaveTestButton" Grid.Column="1" Content="Save &amp; test" Margin="8,0,0,0"
+                                    Click="DeepgramSaveTestButton_Click" />
+                            <Button x:Name="DeepgramTestSavedButton" Grid.Column="2" Content="Test saved" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0"
+                                    Click="DeepgramTestSavedButton_Click" />
+                            <Button x:Name="DeepgramRemoveButton" Grid.Column="3" Content="Remove" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                    Click="DeepgramRemoveButton_Click" />
+                        </Grid>
+                        <TextBlock x:Name="DeepgramStatusTextBlock" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,7,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Speechmatics" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Choose the processing region before validation. Hall-e preserves a saved remote job ID so retry can resume polling instead of duplicating an upload."
+                                   Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,4,0,11" />
+
+                        <CheckBox x:Name="SpeechmaticsConsentCheckBox"
+                                  Content="I consent to send meeting audio to Speechmatics only when I explicitly start Speechmatics transcription."
+                                  Margin="0,0,0,8" AutomationProperties.Name="Consent to Speechmatics meeting audio upload" />
+                        <CheckBox x:Name="SpeechmaticsTrainingDisabledCheckBox"
+                                  Content="I confirm training use is disabled for Hall-e Speechmatics transcription."
+                                  Margin="0,0,0,12" AutomationProperties.Name="Confirm Speechmatics training is disabled" />
+
+                        <Grid Margin="0,0,0,9">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Processing region" Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center" />
+                            <ComboBox x:Name="SpeechmaticsRegionComboBox" Grid.Column="1" AutomationProperties.Name="Speechmatics processing region" />
+                        </Grid>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <PasswordBox x:Name="SpeechmaticsKeyPasswordBox" AutomationProperties.Name="Speechmatics API key" />
+                            <Button x:Name="SpeechmaticsSaveTestButton" Grid.Column="1" Content="Save &amp; test" Margin="8,0,0,0"
+                                    Click="SpeechmaticsSaveTestButton_Click" />
+                            <Button x:Name="SpeechmaticsTestSavedButton" Grid.Column="2" Content="Test saved" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0"
+                                    Click="SpeechmaticsTestSavedButton_Click" />
+                            <Button x:Name="SpeechmaticsRemoveButton" Grid.Column="3" Content="Remove" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                    Click="SpeechmaticsRemoveButton_Click" />
+                        </Grid>
+                        <TextBlock x:Name="SpeechmaticsStatusTextBlock" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,7,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Recording permissions" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Microphone-only capture is always the default. Selecting microphone + all computer audio does not grant permanent permission: Hall-e asks for a separate confirmation before every such recording."
+                                   Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,4,0,12" />
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Windows microphone privacy" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                    Click="OpenMicrophoneSettingsButton_Click" />
+                            <Button Content="Windows sound settings" Style="{StaticResource SecondaryButton}"
+                                    Click="OpenSoundSettingsButton_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#0A1E18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="13">
+                    <TextBlock Text="Windows preview scope: meeting capture, projects, local search, notes, playback and optional transcription. Hall-e does not claim complete macOS feature parity in this edition."
+                               Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Background="#091F18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="22,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="SettingsStatusTextBlock" Text="Keys are never stored in Hall-e settings.json." Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Cancel" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" IsCancel="True" />
+                <Button x:Name="SaveSettingsButton" Grid.Column="2" Content="Save settings" Click="SaveSettingsButton_Click" IsDefault="True" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

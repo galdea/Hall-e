@@ -127,7 +127,7 @@ jobs:
           if ls packages/*-notarized.dmg >/dev/null 2>&1; then
             trust_note='These downloads are Developer ID signed and Apple-notarized.'
           else
-            trust_note='These downloads are ad-hoc signed and are not Apple-notarized. After verifying the download source, macOS may require System Settings → Privacy & Security → Open Anyway on first launch. Managed Macs may require IT approval.'
+            trust_note='These downloads are ad-hoc signed and are not Apple-notarized. After verifying the download source, try to open Hall-e once. If macOS blocks it, close the warning, open System Settings → Privacy & Security, scroll to Security, click Open Anyway beside Hall-e, authenticate with Touch ID or your Mac login password, then click Open. This approves Hall-e specifically; do not disable Gatekeeper globally. Managed Macs may require IT approval.'
           fi
           cat > release-notes.md <<EOF
           ## Download and start

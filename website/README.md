@@ -23,7 +23,7 @@ npm run dev
 
 The preview defaults to `http://127.0.0.1:4173`. If that port is in use, run
 `PORT=4175 npm run dev` and open `http://127.0.0.1:4175`. Build validates local
-assets and both installer links, then copies only `public/` to `dist/`. No app
+assets and all three installer links, then copies only `public/` to `dist/`. No app
 code, credentials, or recordings are part of the public deployment.
 
 ## Cloudflare Pages
@@ -47,11 +47,10 @@ npx wrangler@4.130.0 pages project create hall-e --production-branch main --forc
 ```
 
 Do not add `--force` to deployment commands. After publishing, verify the public
-page, its stylesheet and script, and both installer links. A successful project
+page, its stylesheet and script, and all three installer links. A successful project
 creation alone does not mean the site has been deployed.
 
-No GitHub Actions run is needed for this static-site deployment. The existing
-Swift release workflow is unchanged.
+No GitHub Actions run is needed for this static-site deployment.
 
 ## Releases
 
@@ -60,6 +59,11 @@ release assets are public. For a new release, verify both public assets and upda
 accessible labels, release version, signing notice, and minimum macOS requirement
 in `public/index.html`, then run the checks and deploy. Versioned links keep
 working even if the GitHub API is rate-limited or JavaScript is unavailable.
+
+The separate Windows 11 x64 preview targets `win-v0.1.0`. Publish its verified
+installer before deploying its website link. Windows preview releases do not
+replace the macOS latest release. The Windows guide explains the unsigned
+installer and security-policy limitations alongside the download button.
 
 Installation instructions reflect the repository's README and release guide.
 Apple's first-launch guidance: https://support.apple.com/en-us/102445.

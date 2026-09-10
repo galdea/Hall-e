@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <Version>0.1.0</Version>
+    <Authors>Hall-e contributors</Authors>
+    <Company>IMBA</Company>
+    <Copyright>Copyright Hall-e contributors. MIT licensed.</Copyright>
+  </PropertyGroup>
+</Project>

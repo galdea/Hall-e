@@ -120,6 +120,13 @@ h1 span { color: var(--mint); }
 .download-button.primary:hover { background: #e3f6d3; border-color: #e3f6d3; box-shadow: 0 0 35px #b1eeb21c; transform: translateY(-2px); }
 .download-button.secondary { background: #18272060; color: #d1dec8; }
 .download-button.secondary:hover { background: #233c2d; border-color: #839f78; transform: translateY(-2px); }
+.windows-download { margin-top: 18px; }
+.preview-badge { display: inline-block; margin-left: 7px; padding: 3px 6px; border: 1px solid #617b62; border-radius: 3px; color: #b8cea9; font-size: 9px; letter-spacing: .08em; vertical-align: middle; }
+.windows-install { margin-top: 10px; text-align: left; font-size: 12px; line-height: 1.7; color: #a8bca7; }
+.windows-install summary { cursor: pointer; text-align: center; color: #c1d4b8; }
+.windows-install[open] { padding: 14px; border: 1px solid #446150; border-radius: 5px; }
+.windows-install p { margin: 10px 0; }
+.windows-install a { display: inline-block; margin: 5px 12px 0 0; text-decoration: underline; text-underline-offset: 3px; }
 .chip-icon, .download-arrow { flex-shrink: 0; }
 .download-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .download-text > strong { font-size: 16px; font-weight: 600; }
@@ -130,7 +137,8 @@ h1 span { color: var(--mint); }
 .detail-dot { color: #596f5d; }
 .download-details a { text-decoration: underline; text-decoration-color: #536c59; text-underline-offset: 4px; }
 .download-details a:hover, .first-launch a:hover { color: var(--mint); }
-.first-launch { margin: 10px 0 0; font-size: 10px; color: #819789; }
+.first-launch { margin: 11px auto 0; max-width: 560px; font-size: 11px; line-height: 1.55; color: #91a596; }
+.first-launch > strong { color: #bccdbb; font-weight: 600; }
 .first-launch a { color: #a8bca7; text-decoration: underline; text-underline-offset: 3px; }
 .footer { border-top: 1px solid #344a373f; gap: 23px; font-size: 11px; color: #8ea58e; }
 .footer-note { display: inline-flex; align-items: center; gap: 7px; }

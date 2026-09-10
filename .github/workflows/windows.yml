@@ -1,0 +1,52 @@
+name: Build and verify Windows
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hall-e-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: windows-nuget-${{ hashFiles('windows/**/*.csproj') }}
+      - name: Verify local meeting storage
+        run: dotnet run --project windows/HallE.Core.Tests/HallE.Core.Tests.csproj -c Release
+      - name: Build self-contained Windows installer
+        run: ./windows/scripts/package.ps1
+      - name: Verify credentials, recovery, and upload consent
+        run: dotnet run --project windows/HallE.Windows.Tests/HallE.Windows.Tests.csproj -c Release
+      - name: Verify installation and real-window startup
+        run: ./windows/scripts/smoke-install.ps1 -Installer windows/artifacts/release/Hall-e-0.1.0-windows-x64-setup.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-validation
+          path: windows/artifacts/qa/
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hall-e-0.1.0-windows-x64
+          path: windows/artifacts/release/*
+          if-no-files-found: error
+          retention-days: 7

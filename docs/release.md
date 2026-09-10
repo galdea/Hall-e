@@ -26,11 +26,14 @@ Intel produces the same meaningful bundle build number; CI uses the same rule.
 
 Ad-hoc signing requires no personal certificate or Apple account. It is **not
 Developer ID signing or notarization**. Downloaded ad-hoc apps may be blocked by
-Gatekeeper; after checking the source and download, use System Settings → Privacy
-& Security → Open Anyway if macOS offers it. Managed Macs may prohibit this.
-Do not disable Gatekeeper globally. Ad-hoc updates may require renewed privacy or
-Keychain approval. For the smoothest public installation, maintainers should use
-Developer ID signing and notarization.
+Gatekeeper. After checking the source and download, try to open Hall-e once from
+Applications. If macOS blocks it, close that message, open System Settings →
+Privacy & Security, scroll to Security, and choose Open Anyway beside Hall-e.
+Authenticate with Touch ID or the Mac login password, then choose Open in the
+final confirmation. This exception applies to Hall-e; do not disable Gatekeeper
+globally. Managed Macs may prohibit this. Ad-hoc updates may require renewed
+privacy or Keychain approval. For the smoothest public installation, maintainers
+should use Developer ID signing and notarization.
 
 ## Build options
 
@@ -155,3 +158,7 @@ and, when enabled and supported, local recognition; it does not prove that remot
 meeting audio is being captured. Permission prompts and live audio need checking
 on the receiving Mac. On-device speech does not provide individual speaker labels
 or automatic AI meeting summaries; those are optional integrations.
+
+## Windows edition
+
+The separate Windows preview is published under `win-v0.1.0`, preserving the macOS `v*` release series and latest-release links. Download the [Windows installer and portable ZIP](https://github.com/galdea/Hall-e/releases/tag/win-v0.1.0). It supports Windows 11 Intel/AMD x64 and bundles its runtime. See [Windows setup, limitations, packaging, and verification](../windows/README.md). The installer is currently unsigned; Windows security policy can still block installation.

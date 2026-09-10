@@ -1,0 +1,355 @@
+<Window x:Class="HallE.Windows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Hall-e — Windows Preview"
+        Width="1280"
+        Height="820"
+        MinWidth="1020"
+        MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        Closing="MainWindow_Closing"
+        Loaded="MainWindow_Loaded">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="68" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="34" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#091F18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="20,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Image Width="36" Height="36" Source="Assets/hall-e.png" Stretch="Uniform" VerticalAlignment="Center"
+                       AutomationProperties.Name="Hall-e logo" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="11,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Hall-e" FontWeight="SemiBold" FontSize="21" />
+                        <Border Background="{StaticResource MintDarkBrush}" CornerRadius="6" Padding="7,3" Margin="10,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="Windows Preview" Foreground="{StaticResource MintBrush}" FontSize="11" FontWeight="SemiBold" />
+                        </Border>
+                    </StackPanel>
+                    <TextBlock Text="Local-first meeting capture and library" Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
+                </StackPanel>
+
+                <Button x:Name="OpenLibraryButton" Grid.Column="3" Content="Open library folder" Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,8,0" Click="OpenLibraryButton_Click" AutomationProperties.Name="Open Hall-e library folder" />
+                <Button x:Name="SettingsButton" Grid.Column="4" Content="Settings" Style="{StaticResource SecondaryButton}"
+                        Click="SettingsButton_Click" AutomationProperties.Name="Open Hall-e settings" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="315" MinWidth="265" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" MinWidth="610" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource CardBorder}" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Library" FontSize="19" FontWeight="SemiBold" Margin="4,0,0,12" />
+
+                    <TextBox x:Name="SearchTextBox" Grid.Row="1" Margin="0,0,0,9" TextChanged="SearchTextBox_TextChanged"
+                             AutomationProperties.Name="Search meetings" ToolTip="Search meeting titles, notes and transcripts" />
+
+                    <ComboBox x:Name="ProjectFilterComboBox" Grid.Row="2" Margin="0,0,0,10"
+                              SelectionChanged="ProjectFilterComboBox_SelectionChanged"
+                              AutomationProperties.Name="Filter meetings by project" />
+
+                    <ListBox x:Name="MeetingsListBox" Grid.Row="3" SelectionChanged="MeetingsListBox_SelectionChanged"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             AutomationProperties.Name="Meeting library">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="11" CornerRadius="8" Background="Transparent">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="{Binding Meeting.Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <TextBlock Grid.Row="1" Text="{Binding ProjectName}" Foreground="{StaticResource MintBrush}" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                        <Grid Grid.Row="2" Margin="0,5,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Meeting.DisplayDate}" Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
+                                            <TextBlock Grid.Column="1" Text="{Binding StatusLabel}" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="8,0,0,0" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="New recording" FontSize="19" FontWeight="SemiBold" />
+                                    <TextBlock Text="Microphone only is the default. Hall-e never starts capture on launch."
+                                               Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,3,0,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                                    <TextBlock x:Name="RecordingTimerTextBlock" Text="00:00:00" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                                    <TextBlock x:Name="RecordingStateTextBlock" Text="Ready" Foreground="{StaticResource MutedTextBrush}" FontSize="11" HorizontalAlignment="Right" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Grid.Row="1" Margin="0,16,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Title" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                    <TextBox x:Name="RecordTitleTextBox" MaxLength="160" AutomationProperties.Name="Recording title" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Project" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                    <ComboBox x:Name="RecordProjectComboBox" AutomationProperties.Name="Project for new recording" />
+                                </StackPanel>
+                                <Button Grid.Column="3" Content="+ Project" Style="{StaticResource SecondaryButton}" Margin="8,19,0,0"
+                                        Click="NewProjectButton_Click" AutomationProperties.Name="Create a new project" />
+                            </Grid>
+
+                            <Grid Grid.Row="2" Margin="0,13,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Microphone" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                    <ComboBox x:Name="MicrophoneComboBox" AutomationProperties.Name="Microphone device" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Capture" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,5" />
+                                    <RadioButton x:Name="MicrophoneOnlyRadio" Content="Microphone only" GroupName="CaptureMode" IsChecked="True"
+                                                 AutomationProperties.Name="Capture microphone only" />
+                                    <RadioButton x:Name="SystemAudioRadio" Content="Microphone + all computer audio" GroupName="CaptureMode" Margin="0,7,0,0"
+                                                 Checked="SystemAudioRadio_Checked" Unchecked="SystemAudioRadio_Unchecked"
+                                                 AutomationProperties.Name="Capture microphone and all computer audio" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Border x:Name="SystemAudioWarningBorder" Grid.Row="3" Background="#3A301A" BorderBrush="#715F2F" BorderThickness="1"
+                                    CornerRadius="8" Padding="11" Margin="0,12,0,0" Visibility="Collapsed">
+                                <TextBlock Foreground="{StaticResource WarningBrush}" FontSize="12"
+                                           Text="All-computer-audio capture records every sound playing on this PC during the meeting, potentially including other apps and notifications. Hall-e asks you to confirm again before each such recording." />
+                            </Border>
+
+                            <Grid Grid.Row="4" Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                    <TextBlock Text="Input level" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                    <ProgressBar x:Name="RecordingLevelProgressBar" Minimum="0" Maximum="100" Value="0"
+                                                 AutomationProperties.Name="Microphone input level" />
+                                </StackPanel>
+                                <Button x:Name="StartRecordingButton" Grid.Column="1" Content="Start recording" Margin="0,0,8,0"
+                                        Click="StartRecordingButton_Click" AutomationProperties.Name="Start recording" />
+                                <Button x:Name="StopRecordingButton" Grid.Column="2" Content="Stop" Style="{StaticResource DangerButton}" IsEnabled="False"
+                                        Click="StopRecordingButton_Click" AutomationProperties.Name="Stop recording" />
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <Border x:Name="MeetingDetailBorder" Style="{StaticResource CardBorder}" IsEnabled="False">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Selected meeting" Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
+                                    <TextBlock x:Name="SelectedMeetingDateTextBlock" Text="Choose a meeting from the library" FontSize="13" Margin="0,3,0,0" />
+                                </StackPanel>
+                                <TextBlock x:Name="SelectedMeetingStatusTextBlock" Grid.Column="1" Text="" Foreground="{StaticResource MintBrush}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0" />
+                            </Grid>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Meeting title" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                    <TextBox x:Name="SelectedTitleTextBox" MaxLength="160" AutomationProperties.Name="Selected meeting title" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Project" Foreground="{StaticResource MutedTextBrush}" FontSize="11" Margin="0,0,0,4" />
+                                    <ComboBox x:Name="SelectedProjectComboBox" AutomationProperties.Name="Selected meeting project" />
+                                </StackPanel>
+                                <Button Grid.Column="3" Content="Save" Style="{StaticResource SecondaryButton}" Margin="8,19,0,0"
+                                        Click="SaveMeetingMetadataButton_Click" AutomationProperties.Name="Save meeting title and project" />
+                            </Grid>
+
+                            <Border Background="#0A1E18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="11" Margin="0,14,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="PlayPauseButton" Content="Play audio" Style="{StaticResource SecondaryButton}" Click="PlayPauseButton_Click"
+                                            AutomationProperties.Name="Play or pause meeting audio" />
+                                    <ProgressBar x:Name="PlaybackProgressBar" Grid.Column="1" Minimum="0" Maximum="1" Value="0" Margin="12,0" VerticalAlignment="Center"
+                                                 AutomationProperties.Name="Audio playback progress" />
+                                    <TextBlock x:Name="PlaybackTimeTextBlock" Grid.Column="2" Text="00:00 / 00:00" Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="TranscriptionProviderComboBox" Width="155" Margin="0,0,8,0"
+                                          AutomationProperties.Name="Transcription provider" />
+                                <Button x:Name="TranscribeButton" Grid.Column="1" Content="Transcribe / retry" Click="TranscribeButton_Click"
+                                        AutomationProperties.Name="Start or retry transcription" />
+                                <StackPanel Grid.Column="2" Margin="12,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="TranscriptionProgressTextBlock" Text="No transcription running" Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
+                                    <ProgressBar x:Name="TranscriptionProgressBar" Margin="0,5,0,0" Visibility="Collapsed" IsIndeterminate="True"
+                                                 AutomationProperties.Name="Transcription progress" />
+                                </StackPanel>
+                                <Button x:Name="CancelTranscriptionButton" Grid.Column="3" Content="Cancel" Style="{StaticResource SecondaryButton}" IsEnabled="False"
+                                        Click="CancelTranscriptionButton_Click" AutomationProperties.Name="Cancel transcription" />
+                            </Grid>
+
+                            <TextBlock x:Name="TranscriptionErrorTextBlock" Text="" Foreground="{StaticResource DangerBrush}" FontSize="12" Margin="0,8,0,0" Visibility="Collapsed" />
+
+                            <TabControl Margin="0,15,0,0" Height="285">
+                                <TabItem Header="Notes">
+                                    <Grid Margin="8">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBox x:Name="NotesTextBox" AcceptsReturn="True" AcceptsTab="True" TextWrapping="Wrap"
+                                                 VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                 TextChanged="NotesTextBox_TextChanged" AutomationProperties.Name="Meeting notes" />
+                                        <TextBlock x:Name="NotesAutosaveTextBlock" Grid.Row="1" Text="Notes autosave locally" Foreground="{StaticResource MutedTextBrush}"
+                                                   FontSize="11" HorizontalAlignment="Right" Margin="0,6,2,0" />
+                                    </Grid>
+                                </TabItem>
+                                <TabItem Header="Transcript">
+                                    <Grid Margin="8">
+                                        <TextBox x:Name="TranscriptTextBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                                 VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                 AutomationProperties.Name="Meeting transcript" />
+                                    </Grid>
+                                </TabItem>
+                            </TabControl>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button Content="Export Markdown" Style="{StaticResource SecondaryButton}" Click="ExportMarkdownButton_Click"
+                                        AutomationProperties.Name="Export meeting notes and transcript as Markdown" />
+                                <Button Grid.Column="1" Content="Open meeting folder" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0"
+                                        Click="OpenMeetingFolderButton_Click" AutomationProperties.Name="Open selected meeting folder" />
+                                <Button x:Name="DeleteAudioButton" Grid.Column="3" Content="Delete audio" Style="{StaticResource DangerButton}"
+                                        Click="DeleteAudioButton_Click" AutomationProperties.Name="Delete selected meeting audio" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Border Grid.Row="2" Background="#091F18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Grid Margin="18,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusTextBlock" Text="Ready" Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Text="Windows 0.1 preview · Local recording and notes work without cloud APIs" Foreground="{StaticResource MutedTextBrush}" FontSize="11" VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+
+        <Border x:Name="OnboardingOverlay" Grid.RowSpan="3" Background="#E6071A15" Visibility="Collapsed" Panel.ZIndex="20">
+            <Border Style="{StaticResource CardBorder}" Width="610" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <Image Width="64" Height="64" Source="Assets/hall-e.png" Stretch="Uniform" HorizontalAlignment="Left" />
+                    <TextBlock Text="Welcome to Hall-e for Windows" FontSize="27" FontWeight="SemiBold" Margin="0,16,0,7" />
+                    <TextBlock Text="This first Windows preview is focused on meeting recording, projects, a searchable local library, autosaved notes, audio playback and transcription. Advanced integrations from the macOS edition are not part of this preview."
+                               Foreground="{StaticResource MutedTextBrush}" LineHeight="20" />
+
+                    <Border Background="{StaticResource MintDarkBrush}" CornerRadius="9" Padding="14" Margin="0,18,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Private by default" Foreground="{StaticResource MintBrush}" FontWeight="SemiBold" />
+                            <TextBlock Text="Hall-e starts with microphone-only capture. Recording, projects and notes stay local and need no API key. Nothing records or uploads when the app opens."
+                                       Margin="0,5,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#3A301A" BorderBrush="#715F2F" BorderThickness="1" CornerRadius="9" Padding="14" Margin="0,10,0,0">
+                        <TextBlock Foreground="{StaticResource WarningBrush}"
+                                   Text="Optional all-computer-audio capture is broader than one app: it can include any sound playing on the PC. Hall-e requires a separate confirmation for each such recording." />
+                    </Border>
+
+                    <TextBlock Text="Transcription is optional. Hall-e can use installed Windows speech models locally, or Deepgram / Speechmatics only after you configure a validated key and provider-specific consent in Settings."
+                               Foreground="{StaticResource MutedTextBrush}" Margin="0,14,0,0" />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+                        <Button Content="Transcription settings" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="OnboardingSettingsButton_Click" />
+                        <Button Content="Continue with microphone default" Click="CompleteOnboardingButton_Click" IsDefault="True" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+    </Grid>
+</Window>
