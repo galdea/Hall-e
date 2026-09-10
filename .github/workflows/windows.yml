@@ -2,6 +2,7 @@ name: Build and verify Windows
 on:
   push:
     branches: [main]
+    tags: ['win-v*']
     paths: ['windows/**', '.github/workflows/windows.yml']
   pull_request:
     paths: ['windows/**', '.github/workflows/windows.yml']
@@ -11,8 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: hall-e-windows-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: hall-e-windows-${{ github.sha }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/tags/win-v') }}
 
 jobs:
   package:
@@ -26,6 +27,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Resolve release version
+        shell: pwsh
+        run: |
+          [xml]$properties = Get-Content windows/Directory.Build.props -Raw
+          $version = [string]$properties.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid Windows version.' }
+          if ($env:GITHUB_REF -like 'refs/tags/win-v*' -and $env:GITHUB_REF -cne "refs/tags/win-v$version") {
+            throw 'Release tag does not match the Windows application version.'
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
       - uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
@@ -33,11 +44,11 @@ jobs:
       - name: Verify local meeting storage
         run: dotnet run --project windows/HallE.Core.Tests/HallE.Core.Tests.csproj -c Release
       - name: Build self-contained Windows installer
-        run: ./windows/scripts/package.ps1
+        run: ./windows/scripts/package.ps1 -Version $env:VERSION
       - name: Verify credentials, recovery, and upload consent
         run: dotnet run --project windows/HallE.Windows.Tests/HallE.Windows.Tests.csproj -c Release
       - name: Verify installation and real-window startup
-        run: ./windows/scripts/smoke-install.ps1 -Installer windows/artifacts/release/Hall-e-0.1.0-windows-x64-setup.exe
+        run: ./windows/scripts/smoke-install.ps1 -Installer "windows/artifacts/release/Hall-e-$env:VERSION-windows-x64-setup.exe"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -46,7 +57,48 @@ jobs:
           retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
-          name: Hall-e-0.1.0-windows-x64
-          path: windows/artifacts/release/*
+          name: Hall-e-${{ env.VERSION }}-windows-x64
+          path: windows/artifacts/release/Hall-e-${{ env.VERSION }}-windows-x64-*
           if-no-files-found: error
           retention-days: 7
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/win-v')
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          pattern: Hall-e-*-windows-x64
+          merge-multiple: true
+      - name: Publish verified Windows preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#win-v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          cd packages
+          sha256sum -c "Hall-e-$version-windows-x64-setup.exe.sha256" "Hall-e-$version-windows-x64-portable.zip.sha256"
+          cat > release-notes.md <<EOF
+          Download **Hall-e-$version-windows-x64-setup.exe** for Windows 11 on Intel/AMD x64. The per-user installer includes the runtime. A portable ZIP and SHA-256 checksums are also included.
+
+          This preview is unsigned. SmartScreen may offer **More info → Run anyway** after you verify the download source. Smart App Control, S mode, or organizational policy may block unsigned software. Do not disable security protections.
+
+          This patch includes recording, recovery, and installer fixes. Storage and Windows service tests, installation/update/uninstallation, and real WPF startup checks passed before publication. Live microphones and cloud transcription still require interactive testing.
+
+          Recording ownership now survives driver warnings and stop timeouts so Stop can be retried safely. Damaged recordings no longer prevent the rest of the library from recovering. Concurrent metadata updates preserve meeting edits and cloud job checkpoints; stalled transcription responses have a bounded timeout. Packaging uses a clean payload and verifies the actual downloadable portable ZIP.
+
+          [Windows setup and limitations](https://github.com/$GH_REPO/blob/$RELEASE_TAG/windows/README.md)
+          EOF
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease --title "Hall-e for Windows — Preview $version" --notes-file release-notes.md
+          fi
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_TAG" "Hall-e-$version-windows-x64-setup.exe" "Hall-e-$version-windows-x64-portable.zip" ./*.sha256 --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false --notes-file release-notes.md

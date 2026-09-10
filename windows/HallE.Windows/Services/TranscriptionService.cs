@@ -570,8 +570,22 @@ public sealed class TranscriptionService
         }
     }
 
-    private static async Task<byte[]> ReadResponseBytesAsync(HttpResponseMessage response, CancellationToken cancellationToken)
-        => await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+    internal static async Task<byte[]> ReadResponseBytesAsync(HttpResponseMessage response, CancellationToken cancellationToken,
+        TimeSpan? responseTimeout = null)
+    {
+        // ResponseHeadersRead completes before the body arrives. The request
+        // helper's disposed timeout no longer covers a stalled response stream.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(responseTimeout ?? TimeSpan.FromMinutes(2));
+        try
+        {
+            return await response.Content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new IOException("The transcription response timed out. Recorded audio and any saved remote job metadata were preserved.", exception);
+        }
+    }
 
     private static void EnsureCloudSuccess(HttpResponseMessage response, byte[] body, string provider)
     {

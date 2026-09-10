@@ -6,8 +6,11 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/serve.mjs",
-    "check": "node --check public/app.js && node --check public/mechanical-assembly.js && node scripts/build.mjs",
-    "deploy": "npm run check && npx --yes wrangler@4.130.0 pages deploy dist --project-name hall-e --branch main"
+    "test": "node --test scripts/*.test.mjs",
+    "check": "node --check public/app.js && node --check public/mechanical-assembly.js && npm test && node scripts/build.mjs",
+    "check:downloads": "node scripts/update-downloads.mjs --check",
+    "update:downloads": "node scripts/update-downloads.mjs",
+    "deploy": "npm run check && npm run check:downloads && npx --yes wrangler@4.130.0 pages deploy dist --project-name hall-e --branch main"
   },
   "engines": { "node": ">=22" }
 }

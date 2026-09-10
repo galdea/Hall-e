@@ -1,10 +1,10 @@
-# Hall-e for Windows — preview 0.1.0
+# Hall-e for Windows — preview 0.1.1
 
 An initial native Windows edition for **Windows 11 on Intel/AMD x64 computers**. The installer includes the .NET runtime: no developer tools, terminal commands, or administrator password are needed for a normal per-user installation. Windows on ARM is not supported by this installer.
 
 ## Install
 
-Download **Hall-e-0.1.0-windows-x64-setup.exe** from the [Windows release](https://github.com/galdea/Hall-e/releases/tag/win-v0.1.0). Open the file, choose Install, then launch Hall-e from the Start menu or desktop shortcut. Use the same installer to update. Windows Settings → Apps → Installed apps can uninstall Hall-e; your meeting library is retained.
+Download **Hall-e-0.1.1-windows-x64-setup.exe** from the [Windows release](https://github.com/galdea/Hall-e/releases/tag/win-v0.1.1). Open the file, choose Install, then launch Hall-e from the Start menu or desktop shortcut. Use the same installer to update. Windows Settings → Apps → Installed apps can uninstall Hall-e; your meeting library is retained.
 
 This preview is **not Authenticode-signed**. If Microsoft Defender SmartScreen displays “Windows protected your PC”, first check that the file came from the Hall-e release above, then choose **More info → Run anyway**, if Windows offers that option. Do not disable antivirus, SmartScreen, or Smart App Control. Smart App Control, S mode, or organizational policy can block unsigned software without an individual override; this preview cannot guarantee installation on those computers. Ask your IT administrator on a managed computer.
 
@@ -32,7 +32,8 @@ Install the .NET 10 SDK and Inno Setup 6 on Windows. From the repository root:
 dotnet run --project windows/HallE.Core.Tests/HallE.Core.Tests.csproj -c Release
 dotnet run --project windows/HallE.Windows.Tests/HallE.Windows.Tests.csproj -c Release
 ./windows/scripts/package.ps1
-./windows/scripts/smoke-install.ps1 -Installer windows/artifacts/release/Hall-e-0.1.0-windows-x64-setup.exe
 ```
 
-The Windows workflow verifies storage, a self-contained installer, update/uninstall, portable startup, and the real WPF window in isolated temporary storage. Startup checks never record sound or submit cloud jobs. Physical microphones, live-call synchronization, recognition accuracy, and paid cloud transcription still need an interactive Windows test. Checksums accompany each release artifact.
+The package version defaults to `Directory.Build.props`. Packaging starts with a clean application payload so removed dependencies cannot leak into an update. The Windows workflow verifies storage, a self-contained installer, update/uninstall, the extracted portable ZIP, and the real WPF window in isolated temporary storage. Installation smoke checks run only on disposable GitHub-hosted Windows runners because installing and uninstalling the real product changes its installer registration. Startup checks never record sound or submit cloud jobs. Physical microphones, live-call synchronization, recognition accuracy, and paid cloud transcription still need an interactive Windows test. Checksums accompany each release artifact.
+
+Publishing a `win-vX.Y.Z` tag matching `Directory.Build.props` runs these checks and publishes a Windows prerelease only after they pass. Windows releases preserve the macOS latest release. Existing published assets are never overwritten; fixes receive a new version.

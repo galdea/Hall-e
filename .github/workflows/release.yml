@@ -4,11 +4,21 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'BundleResources/**'
+      - 'scripts/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       version:
         description: 'Version (X.Y.Z)'
-        default: '0.3.1'
+        default: '0.3.2'
         required: true
         type: string
       notarize:
@@ -55,7 +65,7 @@ jobs:
           REQUESTED_NOTARIZE: ${{ inputs.notarize }}
           TAG_NOTARIZE: ${{ vars.RELEASE_NOTARIZE }}
         run: |
-          version="${REQUESTED_VERSION:-0.3.1}"
+          version="${REQUESTED_VERSION:-0.3.2}"
           notarize=0
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -143,6 +153,10 @@ jobs:
           Choose **Start recording**, name your meeting, and select **Microphone + your meeting app** for online calls. Join the call first and tell participants before recording. If app audio is unavailable, Hall-e shows a microphone-only warning and a retry action. Notes save automatically on your Mac; export your notes and transcript together as Markdown.
 
           Existing recordings and provider choices are preserved. CI tests and fresh-profile startup checks run separately for Apple silicon and Intel. Real microphone permissions and live calls still need an interactive check on each Mac; automatic AI summaries are optional integrations, not part of local transcription.
+
+          ## Reliability fixes
+
+          Deleted recordings no longer reappear when a delayed processing callback runs. Deletion waits for active processing, and scheduled retries are cancelled after deletion. Failed recording sessions release their UI state correctly. Speechmatics submissions now require durable local checkpoints before uploading audio and before polling a newly created job.
 
           [Installation, updating, and troubleshooting](https://github.com/$GH_REPO/blob/$RELEASE_TAG/docs/release.md)
           EOF

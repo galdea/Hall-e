@@ -99,7 +99,7 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
     var session: URLSession = .shared
     var responseCache: URL? = nil
 
-    typealias JobCreatedHandler = @MainActor (String) async -> Void
+    typealias JobCreatedHandler = @MainActor (String) async throws -> Void
 
     func transcribe(fileURL: URL, sessionID: UUID, track: String) async throws -> Transcript {
         try await transcribe(fileURL: fileURL, sessionID: sessionID, track: track,
@@ -143,7 +143,7 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
             jobID = existingJobID
         } else {
             jobID = try await createJob(fileURL: fileURL, key: key, fingerprint: fingerprint)
-            await onJobCreated(jobID)
+            try await onJobCreated(jobID)
         }
 
         try await waitUntilDone(jobID: jobID, key: key)

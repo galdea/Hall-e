@@ -54,13 +54,26 @@ No GitHub Actions run is needed for this static-site deployment.
 
 ## Releases
 
-The page targets the `v0.3.1` DMGs for `arm64` and `x86_64`. Deploy only after both
-release assets are public. For a new release, verify both public assets and update the native links,
-accessible labels, release version, signing notice, and minimum macOS requirement
-in `public/index.html`, then run the checks and deploy. Versioned links keep
+The current native links and version labels in `public/index.html` identify the
+published downloads. After a new release is public, use the updater rather than
+editing individual links:
+
+```sh
+npm run update:downloads -- 0.3.2 0.1.1
+npm run deploy
+```
+
+The first version is macOS and the second is Windows. The updater checks GitHub
+release metadata and anonymous availability of both DMGs, the Windows installer,
+and all corresponding checksum files before atomically updating the page. Missing
+or unfinished releases leave every old link intact. It updates native links,
+accessible labels, displayed versions, and Windows help links together. Deployment
+rechecks public downloads; offline `npm run check` checks consistency and regression
+tests without requiring network access. Review the signing notice and minimum OS
+requirements separately when these change. Versioned links keep
 working even if the GitHub API is rate-limited or JavaScript is unavailable.
 
-The separate Windows 11 x64 preview targets `win-v0.1.0`. Publish its verified
+The separate Windows 11 x64 preview uses `win-vX.Y.Z` tags. Publish its verified
 installer before deploying its website link. Windows preview releases do not
 replace the macOS latest release. The Windows guide explains the unsigned
 installer and security-policy limitations alongside the download button.

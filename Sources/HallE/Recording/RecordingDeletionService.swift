@@ -4,9 +4,13 @@ import Foundation
 enum RecordingDeletionService {
     enum DeletionError: LocalizedError {
         case activeRecording
+        case activeProcessing
 
         var errorDescription: String? {
-            "Stop the active recording before deleting it."
+            switch self {
+            case .activeRecording: "Stop the active recording before deleting it."
+            case .activeProcessing: "Wait for this recording to finish processing before deleting it."
+            }
         }
     }
 
@@ -14,10 +18,14 @@ enum RecordingDeletionService {
         guard RecordingService.shared.currentSession?.id != session.id else {
             throw DeletionError.activeRecording
         }
+        guard !RecordingCoordinator.isProcessing(sessionID: session.id) else {
+            throw DeletionError.activeProcessing
+        }
         if RecordingPlaybackService.shared.activeSessionID == session.id {
             RecordingPlaybackService.shared.stop()
         }
         try RecordingStore.delete(session)
+        RecordingCoordinator.cancelScheduledRetry(sessionID: session.id)
         clearRecordingPath(in: session.notePath)
         NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
     }

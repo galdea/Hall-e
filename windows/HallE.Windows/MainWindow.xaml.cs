@@ -94,7 +94,7 @@ public partial class MainWindow : Window
         {
             var settings = await Task.Run(_library.LoadSettings);
             SetSelectedProvider(settings.Provider);
-            if (!_smokeMode) await Task.Run(RecoverInterruptedMeetings);
+            var recoveryFailures = _smokeMode ? 0 : await Task.Run(() => RecordingRecoveryService.RecoverInterruptedMeetings(_library));
             await RefreshProjectsAsync();
 
             if (_smokeMode)
@@ -113,37 +113,16 @@ public partial class MainWindow : Window
 
             await RefreshMeetingsAsync();
             _notesAutosaveTimer.Start();
-            ShowStatus(_smokeMode ? "Smoke-test window loaded with isolated local storage." : "Ready. Nothing records until you start a recording.");
+            ShowStatus(recoveryFailures > 0
+                ? $"Ready. {recoveryFailures} interrupted recording(s) need attention; their original files were preserved."
+                : _smokeMode ? "Smoke-test window loaded with isolated local storage." : "Ready. Nothing records until you start a recording.",
+                isError: recoveryFailures > 0);
             _initialization.TrySetResult();
         }
         catch (Exception ex)
         {
             _initialization.TrySetException(ex);
             if (!_smokeMode) ShowError("Hall-e could not finish loading", ex);
-        }
-    }
-
-    private void RecoverInterruptedMeetings()
-    {
-        foreach (var meeting in _library.ListMeetings())
-        {
-            if (meeting.Status is not ("recording" or "recording-error" or "transcribing")) continue;
-            var status = "transcription-cancelled";
-            var duration = meeting.DurationSeconds;
-            var message = "Transcription was interrupted. Recorded audio and any remote job ID were preserved.";
-            if (meeting.Status is "recording" or "recording-error")
-            {
-                AudioRecorder.RecoverInterruptedAudio(_library.GetMeetingDirectory(meeting.Id));
-                status = "recording-error";
-                message = "Recording was interrupted. Original files were preserved; recovered audio is available when possible.";
-                if (File.Exists(_library.GetAudioPath(meeting.Id)))
-                {
-                    using var reader = new NAudio.Wave.WaveFileReader(_library.GetAudioPath(meeting.Id));
-                    duration = reader.TotalTime.TotalSeconds;
-                    status = "ready";
-                }
-            }
-            _library.UpdateMeeting(meeting.Id, fresh => fresh with { Status = status, DurationSeconds = duration, TranscriptionError = message });
         }
     }
 
@@ -244,6 +223,9 @@ public partial class MainWindow : Window
 
     private async Task SwitchMeetingAsync(MeetingRecord? requestedMeeting, bool reload = false)
     {
+        // Every selection supersedes older loads, including a return to the
+        // already displayed meeting while another selection is still loading.
+        var loadVersion = ++_meetingLoadVersion;
         if (!reload && requestedMeeting?.Id == _selectedMeeting?.Id && _selectedMeeting is not null)
             return;
 
@@ -261,7 +243,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var loadVersion = ++_meetingLoadVersion;
         try
         {
             var data = await Task.Run(() =>
@@ -296,6 +277,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            if (loadVersion != _meetingLoadVersion) return;
             _loadingMeeting = false;
             ShowError("Could not open this meeting", ex);
         }
@@ -426,7 +408,7 @@ public partial class MainWindow : Window
         if (_smokeMode || _recordingStarting || _transcriptionStarting)
             return;
 
-        if (_recordingMeeting is not null || _recorder.IsRecording)
+        if (_recordingMeeting is not null || _recorder.HasActiveSession)
         {
             MessageBox.Show(this, "A recording is already active. Stop it before starting another.", "Hall-e", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
@@ -492,12 +474,11 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (meeting is not null && !_recorder.IsRecording)
+            if (meeting is not null && !_recorder.HasActiveSession)
             {
                 try
                 {
-                    var fresh = await Task.Run(() => _library.GetMeeting(meeting.Id));
-                    await Task.Run(() => _library.SaveMeeting(fresh with { Status = "recording-error" }));
+                    await Task.Run(() => _library.UpdateMeeting(meeting.Id, fresh => fresh with { Status = "recording-error" }));
                     await RefreshMeetingsAsync(meeting.Id);
                 }
                 catch (Exception metadataError)
@@ -506,7 +487,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            if (_recorder.IsRecording && meeting is not null)
+            if (_recorder.HasActiveSession && meeting is not null)
             {
                 _recordingMeeting = meeting;
                 _recordingStopwatch.Restart();
@@ -545,7 +526,7 @@ public partial class MainWindow : Window
 
     private async Task StopRecordingCoreAsync()
     {
-        if (_recordingMeeting is null && !_recorder.IsRecording)
+        if (_recordingMeeting is null && !_recorder.HasActiveSession)
             return;
 
         StopRecordingButton.IsEnabled = false;
@@ -559,7 +540,7 @@ public partial class MainWindow : Window
         }
         catch
         {
-            if (_recorder.IsRecording)
+            if (_recorder.HasActiveSession)
             {
                 StopRecordingButton.IsEnabled = true;
                 RecordingStateTextBlock.Text = "Stop failed — retry Stop";
@@ -569,11 +550,12 @@ public partial class MainWindow : Window
                 _recordingTimer.Stop();
                 _recordingStopwatch.Stop();
                 RecordingStateTextBlock.Text = "Capture stopped with an error";
-                if (_recordingMeeting is not null)
-                    _library.UpdateMeeting(_recordingMeeting.Id, fresh => fresh with { Status = "recording-error" });
+                var failedMeetingId = _recordingMeeting?.Id;
                 _recordingMeeting = null;
                 SettingsButton.IsEnabled = true;
                 SetRecordingComposerEnabled(true);
+                if (failedMeetingId is not null)
+                    _library.UpdateMeeting(failedMeetingId, fresh => fresh with { Status = "recording-error" });
             }
             throw;
         }
@@ -584,21 +566,31 @@ public partial class MainWindow : Window
         RecordingTimerTextBlock.Text = FormatClock(TimeSpan.FromSeconds(result.DurationSeconds));
 
         var stoppedMeetingId = _recordingMeeting?.Id;
-        if (stoppedMeetingId is not null)
+        try
         {
-            var fresh = await Task.Run(() => _library.GetMeeting(stoppedMeetingId));
-            var updated = fresh with
+            if (stoppedMeetingId is not null)
             {
-                DurationSeconds = result.DurationSeconds,
-                Status = "ready"
-            };
-            await Task.Run(() => _library.SaveMeeting(updated));
+                await Task.Run(() => _library.UpdateMeeting(stoppedMeetingId, fresh => fresh with
+                {
+                    DurationSeconds = result.DurationSeconds,
+                    Status = "ready"
+                }));
+            }
+            RecordingStateTextBlock.Text = "Ready";
         }
-
-        _recordingMeeting = null;
-        RecordingStateTextBlock.Text = "Ready";
-        SettingsButton.IsEnabled = true;
-        SetRecordingComposerEnabled(true);
+        catch
+        {
+            RecordingStateTextBlock.Text = "Audio saved; meeting status needs recovery";
+            throw;
+        }
+        finally
+        {
+            // Capture has ended even if the metadata disk is full. Leaving the
+            // old meeting active makes Stop and safe close fail on every retry.
+            _recordingMeeting = null;
+            SettingsButton.IsEnabled = true;
+            SetRecordingComposerEnabled(true);
+        }
 
         if (!string.IsNullOrWhiteSpace(result.Warning))
         {
@@ -621,7 +613,7 @@ public partial class MainWindow : Window
         MicrophoneOnlyRadio.IsEnabled = enabled;
         SystemAudioRadio.IsEnabled = enabled;
         StartRecordingButton.IsEnabled = enabled && _microphonesAvailable && _transcriptionTask is null;
-        StopRecordingButton.IsEnabled = !enabled && (_recordingMeeting is not null || _recorder.IsRecording);
+        StopRecordingButton.IsEnabled = !enabled && (_recordingMeeting is not null || _recorder.HasActiveSession);
 
         if (_selectedMeeting is not null)
             TranscribeButton.IsEnabled = enabled && File.Exists(_library.GetAudioPath(_selectedMeeting.Id)) && _transcriptionTask is null;
@@ -804,7 +796,7 @@ public partial class MainWindow : Window
         if (_selectedMeeting is null || _transcriptionStarting || _recordingStarting || _transcriptionTask is { IsCompleted: false })
             return;
 
-        if (_recordingMeeting is not null || _recorder.IsRecording)
+        if (_recordingMeeting is not null || _recorder.HasActiveSession)
         {
             MessageBox.Show(this, "Stop the active recording before starting transcription.", "Hall-e", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
@@ -836,9 +828,8 @@ public partial class MainWindow : Window
             }
 
             await Task.Run(() => _library.SaveSettings(settings));
+            await Task.Run(() => _library.UpdateMeeting(meetingId, fresh => fresh with { Status = "transcribing", TranscriptionError = null }));
             var fresh = await Task.Run(() => _library.GetMeeting(meetingId));
-            await Task.Run(() => _library.SaveMeeting(fresh with { Status = "transcribing", TranscriptionError = null }));
-            fresh = await Task.Run(() => _library.GetMeeting(meetingId));
 
             _transcriptionCts = new CancellationTokenSource();
             var progress = new Progress<string>(message =>
@@ -882,9 +873,8 @@ public partial class MainWindow : Window
             var result = await _transcriptionService.TranscribeAsync(meeting, settings, progress, cancellationToken);
             await Task.Run(() => _library.SaveTranscript(meeting.Id, result.Text));
 
-            // The service may have persisted a Speechmatics job ID while running. Reload before final status update.
-            var latest = await Task.Run(() => _library.GetMeeting(meeting.Id));
-            await Task.Run(() => _library.SaveMeeting(latest with
+            // Merge status with the latest metadata under the store lock.
+            await Task.Run(() => _library.UpdateMeeting(meeting.Id, latest => latest with
             {
                 Status = "ready",
                 TranscriptionError = null,
@@ -896,8 +886,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            var latest = await Task.Run(() => _library.GetMeeting(meeting.Id));
-            await Task.Run(() => _library.SaveMeeting(latest with
+            await Task.Run(() => _library.UpdateMeeting(meeting.Id, latest => latest with
             {
                 Status = "transcription-cancelled",
                 TranscriptionError = null
@@ -909,8 +898,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                var latest = await Task.Run(() => _library.GetMeeting(meeting.Id));
-                await Task.Run(() => _library.SaveMeeting(latest with
+                await Task.Run(() => _library.UpdateMeeting(meeting.Id, latest => latest with
                 {
                     Status = "transcription-error",
                     TranscriptionError = ex.Message
@@ -1143,7 +1131,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var recordingActive = _recordingMeeting is not null || _recorder.IsRecording;
+        var recordingActive = _recordingMeeting is not null || _recorder.HasActiveSession;
         var transcriptionActive = _transcriptionTask is { IsCompleted: false };
 
         if (!recordingActive && !transcriptionActive)

@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #error AppVersion is required; build using windows/scripts/package.ps1
 #endif
 #ifndef PublishDir
   #define PublishDir "..\artifacts\publish\win-x64"

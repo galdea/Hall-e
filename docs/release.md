@@ -9,7 +9,7 @@ it also remains available in the menu bar. Microphone and other access prompts
 still require user consent. No account or key is needed for supported local
 transcription. Setup checks the language model and offers an optional audio test.
 
-`VERSION=0.3.1 make release` builds both executables sequentially, bundles English
+`VERSION=0.3.2 make release` builds both executables sequentially, bundles English
 and Spanish strings, the Chrome extension, reminder sound, and dependency resource
 bundles, signs the app ad-hoc, and creates versioned DMG and ZIP packages plus a
 SHA-256 checksum for each in `dist/`. The DMG contains
@@ -56,7 +56,7 @@ With the certificate in your keychain:
 
 ```sh
 SIGNING_MODE=developer-id SIGN_ID='Developer ID Application: Your Name (TEAMID)' \
-  VERSION=0.3.1 ./scripts/release.sh
+  VERSION=0.3.2 ./scripts/release.sh
 ```
 
 Both executables receive hardened runtime and secure timestamps; the main app
@@ -161,4 +161,10 @@ or automatic AI meeting summaries; those are optional integrations.
 
 ## Windows edition
 
-The separate Windows preview is published under `win-v0.1.0`, preserving the macOS `v*` release series and latest-release links. Download the [Windows installer and portable ZIP](https://github.com/galdea/Hall-e/releases/tag/win-v0.1.0). It supports Windows 11 Intel/AMD x64 and bundles its runtime. See [Windows setup, limitations, packaging, and verification](../windows/README.md). The installer is currently unsigned; Windows security policy can still block installation.
+The separate Windows preview is published under `win-v0.1.1`, preserving the macOS `v*` release series and latest-release links. Download the [Windows installer and portable ZIP](https://github.com/galdea/Hall-e/releases/tag/win-v0.1.1). It supports Windows 11 Intel/AMD x64 and bundles its runtime. See [Windows setup, limitations, packaging, and verification](../windows/README.md). The installer is currently unsigned; Windows security policy can still block installation.
+
+The Windows version comes from `windows/Directory.Build.props`. A matching `win-vX.Y.Z` tag runs Core/service tests, packages a fresh payload, checks both downloadable checksums, installs/updates/uninstalls the app, and launches the extracted portable ZIP. Only a passing tag run publishes the Windows preview, without changing the macOS latest release. Main/tag validation of the same commit shares a concurrency group to avoid duplicate packaging.
+
+### Landing-page download updates
+
+After both platform releases are public, run `npm run update:downloads -- 0.3.2 0.1.1` from `website/`. It verifies both macOS installers, the Windows installer, and their checksum assets before atomically updating all native links, version labels, accessible labels, and Windows guide links. A failed check leaves the existing downloads untouched. `npm run deploy` repeats public availability checks before uploading the landing page.
