@@ -36,7 +36,7 @@ function Test-App([string]$Executable, [string]$Name) {
     Invoke-CheckedProcess $Executable "--smoke-test `"$result`""
     if (!(Test-Path $result)) { throw 'The real WPF window did not produce a smoke result.' }
     $data = Get-Content $result -Raw | ConvertFrom-Json
-    if (!$data.success -or !$data.windowLoaded -or !$data.meetingRefreshVerified -or !$data.isolatedStorage -or $data.recordedAudio -or $data.cloudRequested) {
+    if (!$data.success -or !$data.windowLoaded -or !$data.meetingRefreshVerified -or !$data.themeContrastVerified -or !$data.isolatedStorage -or $data.recordedAudio -or $data.cloudRequested) {
         throw "App startup/privacy checks failed: $result"
     }
     if (!(Test-Path ([IO.Path]::ChangeExtension($result, '.png')))) { throw 'Missing real-window screenshot.' }

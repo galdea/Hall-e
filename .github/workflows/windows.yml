@@ -92,7 +92,7 @@ jobs:
 
           This patch includes recording, recovery, and installer fixes. Storage and Windows service tests, installation/update/uninstallation, and real WPF startup checks passed before publication. Live microphones and cloud transcription still require interactive testing.
 
-          Recording ownership now survives driver warnings and stop timeouts so Stop can be retried safely. Damaged recordings no longer prevent the rest of the library from recovering. Concurrent metadata updates preserve meeting edits and cloud job checkpoints; stalled transcription responses have a bounded timeout. Packaging uses a clean payload and verifies the actual downloadable portable ZIP.
+          Recording ownership now survives driver warnings and stop timeouts so Stop can be retried safely. Damaged recordings no longer prevent the rest of the library from recovering. Concurrent metadata updates preserve meeting edits and cloud job checkpoints; stalled transcription responses have a bounded timeout. Buttons and selected tabs have readable dark-theme labels, verified in the real WPF window. Packaging uses a clean payload and verifies the actual downloadable portable ZIP.
 
           [Windows setup and limitations](https://github.com/$GH_REPO/blob/$RELEASE_TAG/windows/README.md)
           EOF

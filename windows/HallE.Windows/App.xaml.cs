@@ -139,6 +139,7 @@ public partial class App : Application
         {
             await window.Initialization;
             await window.VerifySmokeMeetingRefreshAsync();
+            window.VerifySmokeThemeContrast();
             // Yield once so the real WPF window reaches the dispatcher/render queue before success is recorded.
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
 
@@ -160,6 +161,7 @@ public partial class App : Application
                 success = window.IsLoaded && window.Initialization.IsCompletedSuccessfully,
                 windowLoaded = window.IsLoaded,
                 meetingRefreshVerified = true,
+                themeContrastVerified = true,
                 isolatedStorage = true,
                 recordedAudio = false,
                 cloudRequested = false

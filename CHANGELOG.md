@@ -7,6 +7,7 @@
 - Windows: retain capture ownership after warnings, rejected stop requests, and stop/rollback timeouts, allowing a safe Stop retry.
 - Windows: recover interrupted recordings independently so damaged audio cannot block startup; retain original files and cloud job checkpoints.
 - Windows: merge metadata updates atomically, ignore stale meeting-selection loads, release completed capture UI state even when metadata saving fails, and time out stalled transcription response bodies.
+- Windows: restore readable action-button and selected-tab labels, apply the dark theme to both windows, and check rendered label contrast during installer validation.
 - Releases: package Windows from a clean payload, derive its version from shared build properties, and verify installation, update, uninstallation, and the extracted portable ZIP before publishing.
 - Download page: verify published installers and checksums before updating links, version labels, and setup links together.
 
