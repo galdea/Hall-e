@@ -11,6 +11,14 @@ enum RecordingCoordinator {
     private static var scheduledCloudRetries: [UUID: Task<Void, Never>] = [:]
     private static var activeSessions = Set<UUID>()
 
+    static func isProcessing(sessionID: UUID) -> Bool {
+        activeSessions.contains(sessionID)
+    }
+
+    static func cancelScheduledRetry(sessionID: UUID) {
+        scheduledCloudRetries.removeValue(forKey: sessionID)?.cancel()
+    }
+
     static func startRecording(for event: UnifiedEvent) {
         guard RecordingService.shared.isRecording == false else { return }
         let consent = NSAlert()
@@ -76,9 +84,11 @@ enum RecordingCoordinator {
 
     /// Runs after a meeting recording stops, and also for a retry after relaunch.
     static func transcribeAndMerge(session incoming: RecordingSession, event: UnifiedEvent) async {
+        // A deferred callback may arrive after explicit deletion. Never revive
+        // it from an in-memory snapshot: checkpoint saves create directories.
+        guard var session = RecordingStore.allSessions().first(where: { $0.id == incoming.id }) else { return }
         guard activeSessions.insert(incoming.id).inserted else { return }
         defer { activeSessions.remove(incoming.id) }
-        var session = RecordingStore.allSessions().first(where: { $0.id == incoming.id }) ?? incoming
         if let playback = await RecordingMixdownService.makePlaybackMix(for: session) {
             session.playbackFileName = playback
             session.save(); notifyRecordingChanged()
@@ -158,9 +168,9 @@ enum RecordingCoordinator {
     }
 
     static func finishCall(session incoming: RecordingSession, event: UnifiedEvent) async {
+        guard var session = RecordingStore.allSessions().first(where: { $0.id == incoming.id }) else { return }
         guard activeSessions.insert(incoming.id).inserted else { return }
         defer { activeSessions.remove(incoming.id) }
-        var session = RecordingStore.allSessions().first(where: { $0.id == incoming.id }) ?? incoming
         if let playback = await RecordingMixdownService.makePlaybackMix(for: session) {
             session.playbackFileName = playback
             session.save(); notifyRecordingChanged()
@@ -569,16 +579,18 @@ enum RecordingCoordinator {
                           phase: existingJobID == nil ? .submitting : .polling,
                           providerJobID: existingJobID, providerRegion: region.rawValue)
         session.transcriptionJob = job
-        session.save(); notifyRecordingChanged()
 
         do {
+            // Submission uncertainty must survive a crash before any paid upload.
+            try session.persist()
+            notifyRecordingChanged()
             let provider = SpeechmaticsTranscriptionProvider(
                 configuration: .init(region: region), rawResponseDirectory: session.folderURL,
                 duration: duration, responseCache: AppPaths.speechmaticsResponseCacheDir)
             var replacement = try await provider.transcribe(
                 fileURL: audioURL, sessionID: session.id, track: "mixed",
                 existingJobID: existingJobID,
-                onJobCreated: { jobID in persistSpeechmaticsJobID(sessionID: session.id, jobID: jobID) })
+                onJobCreated: { jobID in try persistSpeechmaticsJobID(sessionID: session.id, jobID: jobID) })
 
             // Pull the job-ID checkpoint written by the callback into the final
             // atomic completion update.
@@ -659,9 +671,11 @@ enum RecordingCoordinator {
         }
     }
 
-    private static func persistSpeechmaticsJobID(sessionID: UUID, jobID: String) {
+    private static func persistSpeechmaticsJobID(sessionID: UUID, jobID: String) throws {
         guard var session = RecordingStore.allSessions().first(where: { $0.id == sessionID }),
-              var job = session.transcriptionJob else { return }
+              var job = session.transcriptionJob else {
+            throw CocoaError(.fileNoSuchFile)
+        }
         job.cloud?.provider = .speechmatics
         job.cloud?.providerJobID = jobID
         job.cloud?.requestID = jobID
@@ -669,7 +683,8 @@ enum RecordingCoordinator {
         job.cloud?.phase = .polling
         job.cloud?.updatedAt = Date()
         session.transcriptionJob = job
-        session.save(); notifyRecordingChanged()
+        try session.persist()
+        notifyRecordingChanged()
     }
 
     private static func scheduleCloudRetry(sessionID: UUID, after delay: TimeInterval) {

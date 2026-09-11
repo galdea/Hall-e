@@ -50,6 +50,14 @@ try
         "Saving recovered settings preserves the last valid backup");
     Parallel.For(0, 12, i => store.SaveNotes(meeting.Id, "Concurrent note " + i));
     Check(store.GetNotes(meeting.Id).StartsWith("Concurrent note "), "Concurrent note saves remain complete");
+    Parallel.Invoke(
+        () => store.UpdateMeeting(meeting.Id, current => current with { Title = "Edited during transcription" }),
+        () => store.UpdateMeeting(meeting.Id, current => current with { Status = "ready", DurationSeconds = 42 }),
+        () => store.UpdateMeeting(meeting.Id, current => current with { RemoteJobId = "saved-job", RemoteJobRegion = "eu1" }));
+    var merged = store.GetMeeting(meeting.Id);
+    Check(merged.Title == "Edited during transcription" && merged.DurationSeconds == 42
+        && merged.RemoteJobId == "saved-job" && merged.RemoteJobRegion == "eu1",
+        "Atomic status updates preserve concurrent title edits and remote job checkpoints");
     Check(!Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories).Any(), "Atomic writes leave no temporary files");
     Console.WriteLine($"PASS: {passed} Windows core checks.");
     return 0;

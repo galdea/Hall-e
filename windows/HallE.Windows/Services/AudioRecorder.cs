@@ -12,6 +12,7 @@ public sealed class AudioRecorder : IDisposable
     private const int MicrophoneBits = 16;
     private const int MicrophoneChannels = 1;
     private const int GapToleranceMilliseconds = 100;
+    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(15);
 
     private readonly object _gate = new();
     private WaveInEvent? _microphone;
@@ -39,6 +40,12 @@ public sealed class AudioRecorder : IDisposable
                 return _sessionActive && !_stopRequested && _captureWarning is null;
             }
         }
+    }
+
+    // A capture warning or a pending stop does not release device/file ownership.
+    public bool HasActiveSession
+    {
+        get { lock (_gate) { return _sessionActive; } }
     }
 
     public event Action<float>? LevelChanged;
@@ -158,8 +165,7 @@ public sealed class AudioRecorder : IDisposable
                     // The loopback capture never started, so no native stopped
                     // callback will arrive for it during rollback.
                     loopbackStopped!.TrySetResult(null);
-                    microphone.StopRecording();
-                    await microphoneStopped.Task.ConfigureAwait(false);
+                    // The outer rollback stops and awaits both devices.
                     throw;
                 }
 
@@ -176,8 +182,8 @@ public sealed class AudioRecorder : IDisposable
             }
             catch
             {
-                // Preserve the original start failure. AbortStartAsync already
-                // disposes every capture object it can reach.
+                // Preserve the original start failure. A timed-out rollback
+                // retains ownership so the user can retry Stop safely.
             }
             throw new InvalidOperationException(message, exception);
         }
@@ -226,12 +232,19 @@ public sealed class AudioRecorder : IDisposable
         {
             if (loopbackStopped is not null)
             {
-                await Task.WhenAll(microphoneStopped, loopbackStopped).ConfigureAwait(false);
+                await Task.WhenAll(microphoneStopped, loopbackStopped).WaitAsync(StopTimeout).ConfigureAwait(false);
             }
             else
             {
-                await microphoneStopped.ConfigureAwait(false);
+                await microphoneStopped.WaitAsync(StopTimeout).ConfigureAwait(false);
             }
+        }
+        catch (TimeoutException exception)
+        {
+            // Do not dispose or mix files while a driver may still be writing.
+            // Keep ownership so the UI can offer Stop again and safe close waits.
+            lock (_gate) { _stopRequested = false; }
+            throw new InvalidOperationException("Windows has not finished stopping audio capture. The source files are preserved; retry Stop.", exception);
         }
         catch (Exception exception)
         {
@@ -402,8 +415,16 @@ public sealed class AudioRecorder : IDisposable
     {
         var message = $"{prefix}: {exception.Message}";
         var first = false;
+        WaveInEvent? microphone;
+        WasapiLoopbackCapture? loopback;
+        TaskCompletionSource<object?>? microphoneStopped;
+        TaskCompletionSource<object?>? loopbackStopped;
         lock (_gate)
         {
+            microphone = _microphone;
+            loopback = _loopback;
+            microphoneStopped = _microphoneStopped;
+            loopbackStopped = _loopbackStopped;
             if (_captureWarning is null)
             {
                 _captureWarning = message;
@@ -422,11 +443,11 @@ public sealed class AudioRecorder : IDisposable
             {
                 if (stopMicrophone)
                 {
-                    RequestStop(_microphone, _microphoneStopped);
+                    RequestStop(microphone, microphoneStopped);
                 }
                 if (stopLoopback)
                 {
-                    RequestStop(_loopback, _loopbackStopped);
+                    RequestStop(loopback, loopbackStopped);
                 }
             });
         }
@@ -457,12 +478,14 @@ public sealed class AudioRecorder : IDisposable
         {
             try
             {
-                await Task.WhenAll(waits).ConfigureAwait(false);
+                await Task.WhenAll(waits).WaitAsync(StopTimeout).ConfigureAwait(false);
             }
-            catch
+            catch (TimeoutException)
             {
-                // Start already failed. Continue cleanup even if native stop
-                // also reports an error.
+                // A failed start can still own a running microphone. Only a
+                // native stopped callback authorizes disposal and file cleanup.
+                lock (_gate) { _stopRequested = false; }
+                throw;
             }
         }
 
@@ -471,7 +494,7 @@ public sealed class AudioRecorder : IDisposable
         ResetSessionState();
     }
 
-    private static void RequestStop(IWaveIn? capture, TaskCompletionSource<object?>? stopped)
+    internal static void RequestStop(IWaveIn? capture, TaskCompletionSource<object?>? stopped)
     {
         if (capture is null || stopped is null || stopped.Task.IsCompleted)
         {
@@ -484,7 +507,9 @@ public sealed class AudioRecorder : IDisposable
         }
         catch (Exception exception)
         {
-            stopped.TrySetException(exception);
+            // A rejected stop request does not mean capture ended. Keep the
+            // completion pending for its real callback, allowing a later retry.
+            Trace.TraceError($"Audio capture stop request failed: {exception}");
         }
     }
 

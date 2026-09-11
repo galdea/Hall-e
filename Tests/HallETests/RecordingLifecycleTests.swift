@@ -6,6 +6,17 @@ import Foundation
 struct RecordingLifecycleTests {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @MainActor @Test func delayedProcessingDoesNotRecreateDeletedRecordings() async {
+        let event = Self.event(start: start, duration: 60)
+        var session = RecordingSession(event: event, notePath: nil)
+        session.folderPath = "deleted-regression-\(UUID().uuidString)"
+        #expect(!FileManager.default.fileExists(atPath: session.folderURL.path))
+        await RecordingCoordinator.transcribeAndMerge(session: session, event: event)
+        await RecordingCoordinator.finishCall(session: session, event: event)
+        #expect(!FileManager.default.fileExists(atPath: session.folderURL.path))
+        #expect(!RecordingCoordinator.isProcessing(sessionID: session.id))
+    }
+
     @Test func recordingStoreDeletesOnlyRecordingFolders() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("halle-recording-delete-\(UUID().uuidString)", isDirectory: true)

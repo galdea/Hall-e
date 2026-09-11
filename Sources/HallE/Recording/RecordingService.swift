@@ -82,7 +82,7 @@ final class RecordingService: NSObject {
     func start(for event: UnifiedEvent, notePath: String?,
                sourceKind: RecordingSourceKind = .calendarMeeting,
                onFinish: @escaping (RecordingSession) -> Void) async {
-        if case .failed = state { state = .idle }
+        if case .failed = state { currentSession = nil; state = .idle }
         guard case .idle = state else { return }
         state = .preparing
         self.onFinish = onFinish
@@ -354,7 +354,12 @@ final class RecordingService: NSObject {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard self.currentSession?.id == completedSessionID else { return }
-            if case .completed = self.state { self.state = .idle; self.currentSession = nil }
+            switch self.state {
+            case .completed, .failed:
+                self.currentSession = nil
+                self.state = .idle
+            default: break
+            }
         }
     }
 

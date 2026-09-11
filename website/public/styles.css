@@ -27,11 +27,10 @@ button[hidden], [hidden] { display: none !important; }
   position: relative;
   isolation: isolate;
   width: 100%;
-  height: 100svh;
-  min-height: 650px;
+  min-height: max(650px, 100svh);
   padding: 0 clamp(20px, 4vw, 68px);
   display: grid;
-  grid-template-rows: 88px minmax(0, 1fr) 65px;
+  grid-template-rows: 88px minmax(min-content, 1fr) 65px;
   overflow: hidden;
   background: radial-gradient(ellipse at 50% 41%, #14272366 0, #080e1000 51%);
 }
@@ -69,10 +68,10 @@ button[hidden], [hidden] { display: none !important; }
 .motion-toggle { display: flex; align-items: center; gap: 7px; border: 0; padding: 10px 0; background: none; color: var(--muted); font-size: 12px; }
 .motion-toggle:hover { color: var(--paper); }
 
-.main-stage { min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 20px; padding-bottom: 13px; }
+.main-stage { display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 20px; padding-bottom: 13px; }
 .stage-heading { flex-shrink: 0; display: flex; align-items: center; gap: 26px; color: #9caf9b; font-size: 11px; font-family: var(--mono); letter-spacing: .22em; margin-bottom: -7px; }
 .small-cross { color: #537864; font-size: 15px; font-weight: 300; }
-.instrument { position: relative; flex: 1 1 440px; min-height: 200px; max-height: 530px; width: min(100%, 1060px); display: flex; align-items: center; justify-content: center; }
+.instrument { position: relative; flex: 1 0 auto; height: clamp(200px, calc(100svh - 560px), 530px); min-height: 200px; max-height: 530px; width: min(100%, 1060px); display: flex; align-items: center; justify-content: center; }
 .instrument-halo { position: absolute; top: 0; bottom: 0; left: 10%; right: 10%; background: radial-gradient(ellipse, #31593c20, #12322608 50%, transparent 68%); pointer-events: none; }
 .mechanism { width: 100%; height: 100%; overflow: visible; }
 .orbit-type { font-family: var(--mono); font-size: 9px; }
@@ -175,7 +174,7 @@ h1 span { color: var(--mint); }
 
 @media (min-width: 1600px) and (min-height: 950px) { .instrument { max-height: 630px; } .download-area { padding-top: 30px; padding-bottom: 18px; } }
 @media (max-height: 790px) and (min-width: 701px) {
-  .site-shell { grid-template-rows: 70px minmax(0, 1fr) 50px; min-height: 580px; }
+  .site-shell { grid-template-rows: 70px minmax(min-content, 1fr) 50px; min-height: max(580px, 100svh); }
   .main-stage { padding-top: 16px; padding-bottom: 10px; }
   .stage-heading { font-size: 10px; margin-bottom: -12px; }
   .download-area { padding-top: 18px; }
@@ -194,7 +193,7 @@ h1 span { color: var(--mint); }
   .left-meta { left: 0; } .right-meta { right: 0; }
 }
 @media (max-width: 700px) {
-  .site-shell { padding: 0 22px; min-height: 640px; grid-template-rows: 72px minmax(0, 1fr) 52px; }
+  .site-shell { padding: 0 22px; min-height: max(640px, 100svh); grid-template-rows: 72px minmax(min-content, 1fr) 52px; }
   .site-shell::after { inset: 9px; }
   .brand { font-size: 18px; gap: 8px; }
   .brand-portrait { width: 36px; height: 36px; }
@@ -207,7 +206,7 @@ h1 span { color: var(--mint); }
   .source-link > svg { width: 16px; }
   .stage-heading { font-size: 9px; letter-spacing: .17em; gap: 17px; margin-bottom: -4px; }
   .main-stage { padding-top: 18px; padding-bottom: 15px; }
-  .instrument { width: calc(100% + 40px); min-height: 210px; max-height: 370px; }
+  .instrument { width: calc(100% + 40px); height: clamp(210px, calc(100svh - 590px), 370px); min-height: 210px; max-height: 370px; }
   .mechanism { width: 165%; flex-shrink: 0; }
   .assembly-part { filter: none; }
   .instrument-meta { display: none; }
@@ -248,7 +247,7 @@ h1 span { color: var(--mint); }
   .product-credit { justify-self: end; }
 }
 @media (max-height: 730px) and (max-width: 700px) {
-  .site-shell { min-height: 600px; grid-template-rows: 63px minmax(0,1fr) 44px; }
+  .site-shell { min-height: max(600px, 100svh); grid-template-rows: 63px minmax(min-content,1fr) 44px; }
   .main-stage { padding-top: 13px; padding-bottom: 12px; }
   .instrument { min-height: 183px; }
   .download-area { padding-top: 16px; }
@@ -256,7 +255,7 @@ h1 span { color: var(--mint); }
   h1 { font-size: 31px; }
 }
 @media (max-height: 650px) and (max-width: 700px) {
-  .site-shell { min-height: 520px; grid-template-rows: 55px minmax(0, 1fr) 40px; }
+  .site-shell { min-height: max(520px, 100svh); grid-template-rows: 55px minmax(min-content, 1fr) 40px; }
   .main-stage { padding-top: 10px; padding-bottom: 8px; }
   .instrument { min-height: 115px; }
   h1 { font-size: 28px; }
@@ -267,10 +266,10 @@ h1 span { color: var(--mint); }
   .first-launch { margin-top: 7px; }
 }
 @media (max-height: 590px) and (min-width: 701px) {
-  .site-shell { min-height: 480px; grid-template-rows: 56px minmax(0,1fr) 40px; }
+  .site-shell { min-height: max(480px, 100svh); grid-template-rows: 56px minmax(min-content,1fr) 40px; }
   .brand-portrait { width: 34px; height: 34px; }
   .brand img { width: 32px; height: 32px; }
-  .main-stage { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 24px 1fr 145px; column-gap: 20px; width: 100%; padding: 15px 0; }
+  .main-stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: 24px auto auto; column-gap: 20px; width: 100%; padding: 15px 0; }
   .stage-heading { grid-column: 1 / -1; justify-content: center; }
   .instrument { grid-column: 1; grid-row: 2 / 4; width: 100%; height: 100%; max-height: none; min-height: 0; }
   .instrument-meta { display: none; }
@@ -286,8 +285,8 @@ h1 span { color: var(--mint); }
   .download-details { font-size: 9px; gap: 6px; }
 }
 @media (max-height: 480px) and (min-width: 701px) {
-  .site-shell { min-height: 360px; grid-template-rows: 46px minmax(0, 1fr) 32px; }
-  .main-stage { grid-template-rows: 18px 1fr 136px; padding: 8px 0; }
+  .site-shell { min-height: max(360px, 100svh); grid-template-rows: 46px minmax(min-content, 1fr) 32px; }
+  .main-stage { grid-template-rows: 18px auto auto; padding: 8px 0; }
   .intro-copy { padding-bottom: 4px; }
   h1 { font-size: 27px; }
   .download-area { padding-top: 6px; }

@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
+        Style="{StaticResource {x:Type Window}}"
         Title="Hall-e — Windows Preview"
         Width="1280"
         Height="820"
@@ -266,7 +267,7 @@
 
                             <TextBlock x:Name="TranscriptionErrorTextBlock" Text="" Foreground="{StaticResource DangerBrush}" FontSize="12" Margin="0,8,0,0" Visibility="Collapsed" />
 
-                            <TabControl Margin="0,15,0,0" Height="285">
+                            <TabControl x:Name="MeetingDetailsTabControl" Margin="0,15,0,0" Height="285">
                                 <TabItem Header="Notes">
                                     <Grid Margin="8">
                                         <Grid.RowDefinitions>
