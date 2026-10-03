@@ -4,7 +4,7 @@ import Observation
 import GRDB
 
 enum WorkspaceRoute: String, CaseIterable, Identifiable, Hashable {
-    case today, inbox, projects, meetings, actions, people, search
+    case today, inbox, projects, meetings, actions, people, search, weeklyReview
     var id: String { rawValue }
 
     var title: String { L10n.text("workspace.\(rawValue)") }
@@ -17,6 +17,7 @@ enum WorkspaceRoute: String, CaseIterable, Identifiable, Hashable {
         case .actions: "checklist"
         case .people: "person.2"
         case .search: "magnifyingglass"
+        case .weeklyReview: "calendar.badge.checkmark"
         }
     }
 }

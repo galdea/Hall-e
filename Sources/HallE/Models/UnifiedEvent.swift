@@ -23,6 +23,11 @@ struct UnifiedEvent: Codable, Identifiable, Hashable, FetchableRecord, Persistab
     var projectConfidence: Double?
     var sourcesJSON: String         // [EventSource]
 
+    var recurrenceRulesJSON: String? = nil
+    var recurringEventId: String? = nil
+    var recurrenceException: Bool? = nil
+    var originalStartTs: Date? = nil
+
     var id: String { dedupKey }
 
     static let databaseTableName = "unified_event"

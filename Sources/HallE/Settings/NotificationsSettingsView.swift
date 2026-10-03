@@ -4,6 +4,7 @@ import AppKit
 
 struct NotificationsSettingsView: View {
     @State private var enabled = AppPreferences.notificationsEnabled
+    @State private var preparation = AppPreferences.meetingPreparationEnabled
     @State private var lead = AppPreferences.notificationLeadMinutes
     @State private var quietStart = AppPreferences.quietHoursStart
     @State private var quietEnd = AppPreferences.quietHoursEnd
@@ -18,6 +19,10 @@ struct NotificationsSettingsView: View {
                     if value { Task { await requestPermission() } }
                     Task { await NotificationScheduler.shared.refreshReminders() }
                 }
+                Toggle(PublicUICopy.text("Show preparation popup five minutes before meetings", "Mostrar preparación cinco minutos antes de las reuniones"), isOn: $preparation)
+                    .onChange(of: preparation) { _, value in AppPreferences.meetingPreparationEnabled = value }
+                Text(PublicUICopy.text("Uses saved notes and commitments only; respects quiet hours and requires a recent calendar sync.", "Usa solo notas y compromisos guardados; respeta las horas de silencio y requiere una sincronización reciente."))
+                    .font(.caption).foregroundStyle(.secondary)
                 Stepper("Notify \(lead) minutes before", value: $lead, in: 0...60, step: 5).onChange(of: lead) { _, value in
                     AppPreferences.notificationLeadMinutes = value
                     Task { await NotificationScheduler.shared.refreshReminders() }

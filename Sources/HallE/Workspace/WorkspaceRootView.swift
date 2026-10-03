@@ -46,7 +46,7 @@ struct WorkspaceRootView: View {
     private var sidebar: some View {
         List(selection: $model.route) {
             Section(L10n.text("sidebar.focus")) {
-                routeRow(.today); routeRow(.meetings); routeRow(.inbox)
+                routeRow(.today); routeRow(.meetings); routeRow(.inbox); routeRow(.weeklyReview)
             }
             Section(L10n.text("sidebar.organize")) {
                 routeRow(.projects); routeRow(.actions)
@@ -79,6 +79,7 @@ struct WorkspaceRootView: View {
         case .actions: ActionsWorkspaceView(model: model)
         case .people: PeopleWorkspaceView(model: model)
         case .search: SearchWorkspaceView(model: model)
+        case .weeklyReview: WeeklyReviewView(model: model)
         }
     }
 
@@ -124,6 +125,7 @@ struct WorkspaceRootView: View {
         case .people: "Select a person to see their projects and meeting signals."
         case .search: "Select a result to preview its indexed content."
         case .inbox: "Select an item to resolve it."
+        case .weeklyReview: "Review source coverage and cited context in the weekly view."
         }
     }
 }

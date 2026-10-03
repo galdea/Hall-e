@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum PopoverMode: String, CaseIterable, Identifiable {
-    case day, week, month
+    case day, week, month, calendar
     var id: String { rawValue }
     var label: String { L10n.text("popover.\(rawValue)") }
 }
@@ -53,6 +53,8 @@ struct PopoverRootView: View {
     }()
     @State private var selection = PopoverPeriodSelection()
     @State private var syncedPeriods = Set<String>()
+    @State private var newEventDay: Date?
+    @State private var showEventEditor = false
     @State private var language = AppLanguageStore.shared
 
     private var cal: Calendar { var c = Calendar.current; c.timeZone = .current; return c }
@@ -66,15 +68,14 @@ struct PopoverRootView: View {
         return DateInterval(start: start, end: cal.date(byAdding: .day, value: 7, to: start)!)
     }
     private var visibleInterval: DateInterval {
-        mode == .month ? TimelineBuilder.periodInterval(scope: .month, anchor: anchor) : weekInterval
+        (mode == .month || mode == .calendar) ? TimelineBuilder.periodInterval(scope: .month, anchor: anchor) : weekInterval
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            quickActions
-            Divider()
+            if mode != .calendar { quickActions; Divider() }
             modeBar
             Divider()
             if let error = appState.lastSyncError { syncError(error) }
@@ -84,14 +85,32 @@ struct PopoverRootView: View {
             Divider()
             footer
         }
-        .frame(width: 460, height: 620)
+        .frame(width: mode == .calendar ? 920 : 460, height: mode == .calendar ? 780 : 620)
         .environment(\.locale, language.locale)
         .id(language.language)
         .onChange(of: mode) { _, newMode in
             // Re-entering Month should present the current day, not the day that
             // happened to be selected when the tab was last left.
-            if newMode == .month { goToToday() }
+            if newMode == .month || newMode == .calendar { goToToday() }
+            NotificationCenter.default.post(name: .hallePopoverSizeChanged, object: nil,
+                userInfo: ["calendar": newMode == .calendar])
             syncVisiblePeriod()
+        }
+        .sheet(isPresented: $showEventEditor) {
+            CalendarEventEditor(draft: CalendarEventDraft(start: newEventDay ?? Date(), end: (newEventDay ?? Date()).addingTimeInterval(3600)),
+                targets: appState.calendarSources.map(CalendarWriteTarget.init),
+                writableAccounts: Set(appState.accounts.filter {
+                    $0.email == MacCalendarProvider.accountID || ($0.grantedScopes ?? "").split(separator: " ").contains(Substring(GoogleOAuthClient.writeScope))
+                }.map(\.email)),
+                onEnableWriting: { target in
+                    if target.isMac { try await MacCalendarProvider.shared.enableWriting() }
+                    else { try await GoogleAccountManager.enableCalendarWriting(email: target.accountEmail) }
+                }, onSave: { draft, target in
+                    let event = try await CalendarCreationCoordinator.shared.save(draft, target: target)
+                    await SyncCoordinator.shared.rebuildCachedRange(event.startTs.addingTimeInterval(-86400), event.endTs.addingTimeInterval(86400))
+                    // Refresh the visible provider-expanded range after recurring creation.
+                    if draft.repetition != .none { await SyncCoordinator.shared.syncRange(visibleInterval.start, visibleInterval.end) }
+                })
         }
         .onChange(of: selection.anchor) { _, _ in syncVisiblePeriod() }
         .onReceive(NotificationCenter.default.publisher(for: .hallePopoverWillShow)) { _ in
@@ -203,6 +222,12 @@ struct PopoverRootView: View {
             weekView
         case .month:
             monthView
+        case .calendar:
+            CalendarView(events: appState.agenda, month: $selection.anchor, selectedDay: $selection.selectedDay,
+                calendar: cal, onSelect: openMeeting, onAdd: { day in
+                    newEventDay = cal.date(bySettingHour: 9, minute: 0, second: 0, of: day) ?? day
+                    showEventEditor = true
+                })
         }
     }
 
@@ -278,7 +303,7 @@ struct PopoverRootView: View {
     // MARK: - Navigation
 
     private var periodLabel: String {
-        if mode == .month { return anchor.formatted(.dateTime.month(.wide).year()) }
+        if mode == .month || mode == .calendar { return anchor.formatted(.dateTime.month(.wide).year()) }
         let start = weekInterval.start
         let end = cal.date(byAdding: .day, value: 6, to: start)!
         return "\(start.formatted(.dateTime.day().month(.abbreviated))) – \(end.formatted(.dateTime.day().month(.abbreviated)))"

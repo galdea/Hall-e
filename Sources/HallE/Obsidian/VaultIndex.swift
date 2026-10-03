@@ -10,7 +10,7 @@ actor VaultIndex {
 
     private(set) var lastIndexedAt: Date?
 
-    func reindex() async {
+    func reindex(refreshIntelligence: Bool = true) async {
         guard let root = await MainActor.run(body: { VaultAccess.currentVaultURL() }) else { return }
         let hallRoot = root.appendingPathComponent(ObsidianVaultConfig.load()?.subfolderName ?? "Hall-e",
                                                    isDirectory: true)
@@ -25,8 +25,10 @@ actor VaultIndex {
             }
             lastIndexedAt = Date()
             Log.obsidian.info("vault indexed: \(documents.count) notes, \(actions.count) action items")
-            await MainActor.run {
-                NotificationCenter.default.post(name: .halleProjectKnowledgeChanged, object: nil)
+            if refreshIntelligence {
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .halleProjectKnowledgeChanged, object: nil)
+                }
             }
         } catch {
             Log.obsidian.error("vault index failed: \(error, privacy: .public)")

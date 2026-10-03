@@ -26,6 +26,10 @@ struct CalendarEvent: Codable, Identifiable, Hashable, FetchableRecord, Persista
     var updatedAt: Date?
     var fetchedAt: Date
 
+    var recurrenceRulesJSON: String? = nil
+    var recurringEventId: String? = nil
+    var recurrenceException: Bool? = nil
+
     var id: String { "\(accountEmail)\u{1F}\(calendarId)\u{1F}\(eventId)" }
 
     static let databaseTableName = "calendar_event"

@@ -24,7 +24,7 @@ enum EventMapper {
         if let s = dt.date {
             // All-day: interpret yyyy-MM-dd at local midnight.
             var cal = Calendar(identifier: .gregorian)
-            cal.timeZone = TimeZone.current
+            cal.timeZone = dt.timeZone.flatMap(TimeZone.init(identifier:)) ?? TimeZone.current
             let parts = s.split(separator: "-").compactMap { Int($0) }
             if parts.count == 3 {
                 var comps = DateComponents()
@@ -95,7 +95,10 @@ enum EventMapper {
             originalStartTs: originalStart,
             etag: e.etag,
             updatedAt: e.updated.flatMap { rfc3339.date(from: $0) ?? rfc3339NoFrac.date(from: $0) },
-            fetchedAt: fetchedAt
+            fetchedAt: fetchedAt,
+            recurrenceRulesJSON: e.recurrence.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) },
+            recurringEventId: e.recurringEventId,
+            recurrenceException: e.isRecurrenceException ?? originalStart.map { abs($0.timeIntervalSince(start.date)) > 1 }
         )
     }
 }

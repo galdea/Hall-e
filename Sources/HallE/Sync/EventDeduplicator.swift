@@ -77,7 +77,11 @@ enum EventDeduplicator {
                 winnerAccountEmail: winner.accountEmail,
                 projectId: nil,
                 projectConfidence: nil,
-                sourcesJSON: sourcesJSON
+                sourcesJSON: sourcesJSON,
+                recurrenceRulesJSON: winner.recurrenceRulesJSON ?? group.compactMap(\.recurrenceRulesJSON).first,
+                recurringEventId: winner.recurringEventId,
+                recurrenceException: winner.recurrenceException,
+                originalStartTs: winner.originalStartTs
             )
         }
         .sorted { $0.startTs < $1.startTs }

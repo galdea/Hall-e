@@ -3,8 +3,14 @@ import Foundation
 @MainActor enum MeetingBriefingPipeline {
     static func run(session initial: RecordingSession, transcript: Transcript, context: MeetingContext,
                     service: MeetingNoteService, notePath: String,
-                    client: OpenClawReportClient = .init(configuration: .init())) async -> RecordingSession {
+                    client: OpenClawReportClient? = nil) async -> RecordingSession {
         var session = initial
+        guard let client else {
+            session.briefingJob = .init(status: .actionRequired, attemptCount: session.briefingJob?.attemptCount ?? 0,
+                transcriptHash: transcript.contentHash, promptVersion: "halle.local-agent.v1", model: "local-agent",
+                lastError: "Export the evidence packet and import a reviewed local-agent briefing from the recording detail. No report provider is called automatically.")
+            session.save(); return session
+        }
         guard AppPreferences.allowCloudTranscriptReports else {
             session.briefingJob = .init(status: .consentBlocked, attemptCount: session.briefingJob?.attemptCount ?? 0,
                                         transcriptHash: transcript.contentHash,

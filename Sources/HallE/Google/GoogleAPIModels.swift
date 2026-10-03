@@ -47,7 +47,7 @@ struct CalendarListEntry: Codable {
 struct EventsResponse: Codable {
     let items: [GEvent]?
     let nextPageToken: String?
-    let timeZone: String?
+    var timeZone: String?
 }
 
 struct GEvent: Codable {
@@ -59,8 +59,8 @@ struct GEvent: Codable {
     let location: String?
     let htmlLink: String?
     let hangoutLink: String?
-    let start: GEventDateTime?
-    let end: GEventDateTime?
+    var start: GEventDateTime?
+    var end: GEventDateTime?
     let organizer: GEventPerson?
     let attendees: [GEventAttendee]?
     let originalStartTime: GEventDateTime?
@@ -68,12 +68,14 @@ struct GEvent: Codable {
     let etag: String?
     let conferenceData: GConferenceData?
     let recurringEventId: String?
+    var recurrence: [String]? = nil
+    var isRecurrenceException: Bool? = nil
 }
 
 struct GEventDateTime: Codable {
     let dateTime: String?   // RFC3339 with offset (timed events)
     let date: String?       // yyyy-MM-dd (all-day)
-    let timeZone: String?
+    var timeZone: String?
 }
 
 struct GEventPerson: Codable {

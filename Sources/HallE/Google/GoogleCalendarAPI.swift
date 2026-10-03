@@ -64,7 +64,7 @@ struct GoogleCalendarAPI {
         var pageToken: String?
         let iso = ISO8601DateFormatter()
         repeat {
-            var comps = URLComponents(string: "\(base)/calendars/\(calendarId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarId)/events")!
+            var comps = URLComponents(string: "\(base)/calendars/\(GoogleCalendarWriter.segment(calendarId))/events")!
             comps.queryItems = [
                 .init(name: "singleEvents", value: "true"),
                 .init(name: "orderBy", value: "startTime"),
@@ -75,9 +75,36 @@ struct GoogleCalendarAPI {
             ]
             if let pageToken { comps.queryItems?.append(.init(name: "pageToken", value: pageToken)) }
             let resp: EventsResponse = try await get(comps.url!)
-            events.append(contentsOf: resp.items ?? [])
+            events.append(contentsOf: (resp.items ?? []).map { value in
+                var event = value
+                if event.start?.date != nil && event.start?.timeZone == nil { event.start?.timeZone = resp.timeZone }
+                if event.end?.date != nil && event.end?.timeZone == nil { event.end?.timeZone = resp.timeZone }
+                return event
+            })
             pageToken = resp.nextPageToken
         } while pageToken != nil
+        // Instances omit RRULEs. Read each actual parent once; keep its rules on
+        // returned occurrences without manufacturing dates or overriding exceptions.
+        var parents: [String: GEvent] = [:]
+        for parentID in Set(events.compactMap(\.recurringEventId)) {
+            let url = URL(string: "\(base)/calendars/\(GoogleCalendarWriter.segment(calendarId))/events/\(GoogleCalendarWriter.segment(parentID))")!
+            do {
+                let parent: GEvent = try await get(url)
+                parents[parentID] = parent
+            } catch {
+                // Missing metadata stays unknown. A read failure must not hide meetings.
+                Log.sync.warning("Recurring calendar metadata unavailable: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        for index in events.indices {
+            if let parentID = events[index].recurringEventId, let parent = parents[parentID] {
+                events[index].recurrence = parent.recurrence
+                let event = events[index]
+                events[index].isRecurrenceException = event.summary != parent.summary
+                    || event.location != parent.location || event.description != parent.description
+                    || (EventMapper.parseDateTime(event.originalStartTime)?.date).map { $0 != EventMapper.parseDateTime(event.start)?.date } == true
+            }
+        }
         return events
     }
 

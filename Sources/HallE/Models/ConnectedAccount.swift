@@ -12,6 +12,8 @@ struct ConnectedAccount: Codable, Identifiable, Hashable, FetchableRecord, Persi
     var lastSyncAt: Date?
     var lastSyncError: String?
 
+    var grantedScopes: String? = nil
+
     var id: String { email }
 
     static let databaseTableName = "connected_account"

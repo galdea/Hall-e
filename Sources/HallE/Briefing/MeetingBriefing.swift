@@ -56,11 +56,23 @@ enum MeetingBriefingValidator {
     static func validate(_ briefing: MeetingBriefing, transcript: Transcript) throws {
         guard briefing.schemaVersion == MeetingBriefing.schema else { throw BriefingValidationError.invalidSchema }
         guard briefing.transcriptHash == transcript.contentHash else { throw BriefingValidationError.transcriptMismatch }
+        guard briefing.confidence.isFinite, (0...1).contains(briefing.confidence) else { throw BriefingValidationError.invalidEvidence }
         let all = briefing.objectives + briefing.tasks + briefing.decisions + briefing.risks + briefing.openQuestions + briefing.milestones
+        guard Set(all.map(\.id)).count == all.count, all.allSatisfy({ !$0.id.isEmpty }) else {
+            throw BriefingValidationError.invalidEvidence
+        }
         for item in all {
-            guard !item.evidence.isEmpty, item.evidence.allSatisfy({ evidence in
-                evidence.utteranceIndex >= 0 && evidence.utteranceIndex < transcript.segments.count &&
-                evidence.start >= 0 && evidence.end >= evidence.start && !evidence.excerpt.isEmpty
+            guard !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  item.confidence.isFinite, (0...1).contains(item.confidence),
+                  !item.evidence.isEmpty, item.evidence.allSatisfy({ evidence in
+                guard evidence.utteranceIndex >= 0 && evidence.utteranceIndex < transcript.segments.count,
+                      evidence.start.isFinite, evidence.end.isFinite, evidence.start >= 0,
+                      evidence.end >= evidence.start else { return false }
+                let segment = transcript.segments[evidence.utteranceIndex]
+                return segment.start.isFinite && segment.duration.isFinite && segment.duration >= 0
+                    && evidence.start >= segment.start - 0.25
+                    && evidence.end <= segment.start + segment.duration + 0.25
+                    && TextNormalizer.containsPhrase(segment.text, evidence.excerpt)
             }) else { throw BriefingValidationError.invalidEvidence }
         }
         for task in briefing.tasks {
@@ -68,12 +80,12 @@ enum MeetingBriefingValidator {
                 guard task.ownerName == nil || task.ownerName?.isEmpty == true else { throw BriefingValidationError.inventedOwner }
             } else {
                 guard let owner = task.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty,
-                      task.evidence.contains(where: { $0.excerpt.localizedCaseInsensitiveContains(owner) }) else {
+                      task.evidence.contains(where: { TextNormalizer.containsPhrase($0.excerpt, owner) }) else {
                     throw BriefingValidationError.inventedOwner
                 }
             }
             if let date = task.explicitDate, !date.isEmpty,
-               !task.evidence.contains(where: { $0.excerpt.localizedCaseInsensitiveContains(date) }) {
+               !task.evidence.contains(where: { TextNormalizer.containsPhrase($0.excerpt, date) }) {
                 throw BriefingValidationError.inventedDate
             }
         }

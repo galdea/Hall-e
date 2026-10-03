@@ -278,6 +278,34 @@ final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v7_calendar_writing_and_recurrence") { db in
+            for table in ["calendar_event", "unified_event"] {
+                try db.alter(table: table) { t in
+                    t.add(column: "recurrenceRulesJSON", .text)
+                    t.add(column: "recurringEventId", .text)
+                    t.add(column: "recurrenceException", .boolean)
+                    if table == "unified_event" { t.add(column: "originalStartTs", .datetime) }
+                }
+            }
+            try db.alter(table: "connected_account") { $0.add(column: "grantedScopes", .text) }
+            try db.create(table: "calendar_sync_receipt") { t in
+                t.primaryKey("id", .text)
+                t.column("accountEmail", .text).notNull().references("connected_account", onDelete: .cascade)
+                t.column("calendarID", .text).notNull()
+                t.column("coveredFrom", .datetime).notNull()
+                t.column("coveredTo", .datetime).notNull()
+                t.column("fetchedAt", .datetime).notNull()
+            }
+            try db.create(table: "calendar_creation") { t in
+                t.primaryKey("requestID", .text)
+                t.column("draftJSON", .text).notNull()
+                t.column("targetJSON", .text).notNull()
+                t.column("state", .text).notNull()
+                t.column("resultJSON", .text)
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 }

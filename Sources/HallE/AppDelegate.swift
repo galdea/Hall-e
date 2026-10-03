@@ -5,6 +5,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if CalendarPreview.renderIfRequested() { return }
+        if CalendarPreview.showIfRequested() { return }
+        #endif
+
         // Operator driver for the Deepgram migration gates. Runs one step and
         // exits without installing the status item or starting a calendar sync:
         // `HALLE_DEEPGRAM_OP=status /Applications/Hall-e.app/Contents/MacOS/Hall-e`
@@ -121,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Periodic + event-based syncing (timer, wake, network). Skipped under
         // fixtures so directly-inserted sample data isn't rebuilt away.
         if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
+            MeetingPreparationController.shared.start()
             RefreshScheduler.shared.start()
             CallDetectionCoordinator.shared.start()
             DeepgramCreditWatchdog.shared.start()
@@ -143,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["HALLE_DEBUG_CALENDAR_PREVIEW"] == "1" { return .terminateNow }
+        #endif
         let recorder = RecordingService.shared
         guard recorder.isRecording || recorder.state == .stopping else { return .terminateNow }
         recorder.finishBeforeTermination { sender.reply(toApplicationShouldTerminate: true) }
@@ -181,6 +190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Re-opening the app (Finder/Spotlight/`open`) shows the workspace — a reliable
     /// way in even when the menu-bar icon is hidden behind the notch.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        #if DEBUG
+        if CalendarPreview.showIfRequested() { return true }
+        #endif
         if OnboardingWindowController.shared.window?.isVisible == true {
             OnboardingWindowController.shared.show()
         } else {

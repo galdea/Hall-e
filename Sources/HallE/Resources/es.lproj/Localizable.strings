@@ -61,3 +61,7 @@
 "chatgpt.copyPrompt" = "Copiar prompt";
 "chatgpt.open" = "Abrir ChatGPT";
 "chatgpt.reveal" = "Mostrar paquete";
+
+"popover.calendar" = "Calendario";
+
+"workspace.weeklyReview" = "Revisión semanal";

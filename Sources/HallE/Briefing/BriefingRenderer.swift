@@ -4,24 +4,24 @@ import WebKit
 enum BriefingRenderer {
     static func markdown(_ briefing: MeetingBriefing) -> String {
         var lines = ["# \(briefing.headline)", ""]
-        append("Objetivos", briefing.objectives, to: &lines)
-        append("Tareas individuales", briefing.tasks, to: &lines, tasks: true)
-        append("Decisiones", briefing.decisions, to: &lines)
-        append("Riesgos y bloqueos", briefing.risks, to: &lines)
-        append("Próximos hitos", briefing.milestones, to: &lines)
-        append("Preguntas abiertas", briefing.openQuestions, to: &lines)
-        lines += ["", "---", "_Reporte Hall-E · \(briefing.model) · evidencia: \(briefing.transcriptHash.prefix(12))_", ""]
+        append("Objectives", briefing.objectives, to: &lines)
+        append("Individual commitments", briefing.tasks, to: &lines, tasks: true)
+        append("Decisions", briefing.decisions, to: &lines)
+        append("Risks and blockers", briefing.risks, to: &lines)
+        append("Upcoming milestones", briefing.milestones, to: &lines)
+        append("Open questions", briefing.openQuestions, to: &lines)
+        lines += ["", "---", "_Hall-E report · \(briefing.model) · evidence: \(briefing.transcriptHash.prefix(12))_", ""]
         return lines.joined(separator: "\n")
     }
 
     static func html(_ briefing: MeetingBriefing, profile: BriefingDesignProfile,
                      designDirectory: URL?, compact: Bool = false) -> String {
         let safe = profile.validated(designDirectory: designDirectory)
-        let core = sectionHTML("Objetivos", briefing.objectives) + sectionHTML("Tareas", briefing.tasks, tasks: true) + sectionHTML("Decisiones", briefing.decisions)
+        let core = sectionHTML("Objectives", briefing.objectives) + sectionHTML("Tasks", briefing.tasks, tasks: true) + sectionHTML("Decisions", briefing.decisions)
         let optionalItems = briefing.risks + briefing.milestones + briefing.openQuestions
         let optional = compact
-            ? "<section><h2>Seguimiento</h2><p>\(escape(optionalItems.prefix(5).map(\.title).joined(separator: " · ")))</p><p class='overflow'>Detalle completo en la nota Markdown.</p></section>"
-            : sectionHTML("Riesgos", briefing.risks) + sectionHTML("Hitos", briefing.milestones) + sectionHTML("Preguntas", briefing.openQuestions)
+            ? "<section><h2>Follow-up</h2><p>\(escape(optionalItems.prefix(5).map(\.title).joined(separator: " · ")))</p><p class='overflow'>Full details in the Markdown note.</p></section>"
+            : sectionHTML("Risks", briefing.risks) + sectionHTML("Milestones", briefing.milestones) + sectionHTML("Questions", briefing.openQuestions)
         let logo = safe.logoFileName.map { "<img class='logo' src='\(escape($0))' alt='Project logo'>" } ?? ""
         return """
         <!doctype html><html><head><meta charset="utf-8"><style>
@@ -52,7 +52,7 @@ enum BriefingRenderer {
 
     private static func append(_ title: String, _ items: [BriefingItem], to lines: inout [String], tasks: Bool = false) {
         lines += ["## \(title)"]
-        if items.isEmpty { lines += ["_(Sin elementos con evidencia.)_", ""]; return }
+        if items.isEmpty { lines += ["_(No evidence-backed items.)_", ""]; return }
         for item in items.sorted(by: { $0.priority < $1.priority }) {
             var line = tasks ? "- [ ] \(item.title)" : "- \(item.title)"
             if tasks { line += " — \(item.ownerKind == .unassigned ? "Unassigned" : item.ownerName ?? "Unassigned")" }

@@ -138,6 +138,11 @@ struct AppPreferences {
         set { d.set(newValue, forKey: Key.notificationsEnabled) }
     }
 
+    static var meetingPreparationEnabled: Bool {
+        get { d.object(forKey: "meetingPreparationEnabled") as? Bool ?? true }
+        set { d.set(newValue, forKey: "meetingPreparationEnabled") }
+    }
+
     static var quietHoursStart: Int {
         get { d.object(forKey: Key.quietHoursStart) as? Int ?? 22 }
         set { d.set(newValue, forKey: Key.quietHoursStart) }

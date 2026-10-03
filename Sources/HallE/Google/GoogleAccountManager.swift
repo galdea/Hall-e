@@ -37,9 +37,44 @@ enum GoogleAccountManager {
         try KeychainStore.set(refresh, account: KeychainStore.googleRefreshAccount(email: email))
         await TokenStore.shared.seed(email: email, accessToken: tokens.accessToken, expiresIn: tokens.expiresIn)
 
-        try await persistAccount(email: email)
+        try await persistAccount(email: email, scopes: tokens.scope)
         Log.oauth.info("Connected Google account \(email, privacy: .private)")
         return email
+    }
+
+    /// Called only from the explicit Enable writing button. No background scope upgrades.
+    static func enableCalendarWriting(email: String) async throws {
+        guard let config = GoogleClientConfig.load() else { throw GoogleClientConfig.ConfigError.notImported }
+        let client = GoogleOAuthClient(config: config,
+            requestedScopes: GoogleOAuthClient.scope + " " + GoogleOAuthClient.writeScope, loginHint: email)
+        let tokens = try await client.authorize()
+        guard (tokens.scope ?? "").split(separator: " ").contains(Substring(GoogleOAuthClient.writeScope)) else {
+            throw CalendarCreationError.permission
+        }
+        let placeholder = "write-consent-\(UUID().uuidString)"
+        await TokenStore.shared.seed(email: placeholder, accessToken: tokens.accessToken, expiresIn: tokens.expiresIn)
+        defer { Task { await TokenStore.shared.invalidate(placeholder) } }
+        let entries = try await GoogleCalendarAPI(email: placeholder, tokenStore: .shared).calendarList()
+        guard let identified = entries.first(where: { $0.primary == true })?.id,
+              identified.caseInsensitiveCompare(email) == .orderedSame else {
+            throw CalendarCreationError.validation("The selected Google account does not match this calendar account.")
+        }
+        // Complete identity and permission validation before replacing any credential.
+        if let refresh = tokens.refreshToken {
+            try KeychainStore.set(refresh, account: KeychainStore.googleRefreshAccount(email: email))
+        } else { throw AccountError.noRefreshToken }
+        await TokenStore.shared.seed(email: email, accessToken: tokens.accessToken, expiresIn: tokens.expiresIn)
+        try await AppDatabase.shared.dbQueue.write { db in
+            guard var account = try ConnectedAccount.fetchOne(db, key: email) else {
+                throw CalendarCreationError.permission
+            }
+            account.grantedScopes = tokens.scope; account.needsReauth = false
+            try account.update(db)
+            for entry in entries {
+                try db.execute(sql: "UPDATE calendar_source SET accessRole = ? WHERE accountEmail = ? AND calendarId = ?",
+                    arguments: [entry.accessRole ?? "reader", email, entry.id])
+            }
+        }
     }
 
     static func removeAccount(_ email: String) {
@@ -93,7 +128,7 @@ enum GoogleAccountManager {
 
     private static var pendingCalendars: [String: [CalendarListEntry]] = [:]
 
-    private static func persistAccount(email: String) async throws {
+    private static func persistAccount(email: String, scopes: String?) async throws {
         // Always drop the stash, even when a write below throws — otherwise a
         // failed connect leaks the entry until the next successful one.
         defer { pendingCalendars[email] = nil }
@@ -105,6 +140,7 @@ enum GoogleAccountManager {
                 ?? ConnectedAccount(email: email, displayName: nil, colorHex: color,
                                     addedAt: Date(), needsReauth: false, lastSyncAt: nil, lastSyncError: nil)
             account.needsReauth = false
+            account.grantedScopes = scopes
             try account.save(db)
 
             for entry in calendars {

@@ -239,7 +239,7 @@ struct RecordingDetailView: View {
                 }
                 MeetingNotesView(session: session).id(session.id)
                 Divider()
-                if session.isFinished { TranscriptReaderView(session: session) }
+                if session.isFinished { LocalBriefingControls(session: session); TranscriptReaderView(session: session) }
                 HStack {
                     Button("Reveal recording folder") { NSWorkspace.shared.activateFileViewerSelecting([session.folderURL]) }
                     Spacer()

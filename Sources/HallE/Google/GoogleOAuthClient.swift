@@ -6,7 +6,10 @@ import AppKit
 struct GoogleOAuthClient {
     static let scope = "https://www.googleapis.com/auth/calendar.readonly"
 
+    static let writeScope = "https://www.googleapis.com/auth/calendar.events"
     let config: GoogleClientConfig
+    var requestedScopes: String = Self.scope
+    var loginHint: String? = nil
 
     enum OAuthError: Error, LocalizedError {
         case stateMismatch
@@ -32,13 +35,15 @@ struct GoogleOAuthClient {
             .init(name: "client_id", value: config.clientId),
             .init(name: "redirect_uri", value: redirectURI),
             .init(name: "response_type", value: "code"),
-            .init(name: "scope", value: Self.scope),
+            .init(name: "scope", value: requestedScopes),
             .init(name: "code_challenge", value: pkce.challenge),
             .init(name: "code_challenge_method", value: "S256"),
             .init(name: "state", value: pkce.state),
             .init(name: "access_type", value: "offline"),
             .init(name: "prompt", value: "consent select_account"),
         ]
+        if let loginHint { comps.queryItems?.append(.init(name: "login_hint", value: loginHint)) }
+        comps.queryItems?.append(.init(name: "include_granted_scopes", value: "true"))
         return comps.url!
     }
 

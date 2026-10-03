@@ -23,6 +23,13 @@ final class MacCalendarProvider {
         await SyncCoordinator.shared.syncAll()
     }
 
+    /// Permission-only upgrade for the editor; avoids the primary sync's optional AI work.
+    func enableWriting() async throws {
+        guard try await store.requestFullAccessToEvents() else { throw CalendarAccessError.denied }
+        Self.enabled = true
+        try await refreshSources()
+    }
+
     func disconnect() async throws {
         Self.enabled = false
         try await removeCache()
@@ -37,7 +44,7 @@ final class MacCalendarProvider {
         let sources = store.calendars(for: .event).map { calendar in
             CalendarSource(accountEmail: Self.accountID, calendarId: calendar.calendarIdentifier,
                            summary: "\(calendar.source.title) · \(calendar.title)", colorHex: nil,
-                           isPrimary: false, accessRole: "reader", isSelected: false)
+                           isPrimary: false, accessRole: calendar.allowsContentModifications ? "writer" : "reader", isSelected: false)
         }
         try await AppDatabase.shared.dbQueue.write { db in
             try MacCalendarCache.replaceSources(sources, in: db)
@@ -51,6 +58,26 @@ final class MacCalendarProvider {
         return store.events(matching: predicate).compactMap { MacCalendarEventMapper.map($0, fetchedAt: fetchedAt) }
     }
 
+    /// Invoked only after the user explicitly saves to a selected connected calendar.
+    func create(_ draft: CalendarEventDraft, calendarID: String) throws -> CalendarEvent {
+        guard Self.enabled && Self.authorized else { throw CalendarAccessError.denied }
+        guard let calendar = store.calendar(withIdentifier: calendarID), calendar.allowsContentModifications else {
+            throw CalendarCreationError.permission
+        }
+        let draft = try draft.validated()
+        let event = EKEvent(eventStore: store)
+        event.calendar = calendar; event.title = draft.title; event.startDate = draft.start; event.endDate = draft.end
+        event.timeZone = TimeZone(identifier: draft.timeZoneID); event.isAllDay = draft.allDay
+        event.notes = draft.notes.isEmpty ? nil : draft.notes
+        if draft.repetition != .none {
+            event.addRecurrenceRule(EKRecurrenceRule(recurrenceWith: draft.repetition == .daily ? .daily : .weekly,
+                                                   interval: 1, end: nil))
+        }
+        try store.save(event, span: .futureEvents, commit: true)
+        guard let mapped = MacCalendarEventMapper.map(event, fetchedAt: Date()) else { throw CalendarCreationError.uncertain }
+        return mapped
+    }
+
     private func removeCache() async throws {
         try await AppDatabase.shared.dbQueue.write { db in
             try MacCalendarCache.remove(in: db)
@@ -61,7 +88,7 @@ final class MacCalendarProvider {
         case denied, missingCalendar
         var errorDescription: String? {
             switch self {
-            case .denied: "Allow full Calendar access in System Settings → Privacy & Security → Calendars, then reconnect. Hall-e only reads calendars you select."
+            case .denied: "Allow full Calendar access in System Settings → Privacy & Security → Calendars, then reconnect. Hall-e reads selected calendars and writes events only when you explicitly save."
             case .missingCalendar: "This calendar is no longer available. Refresh your calendars."
             }
         }
@@ -89,8 +116,27 @@ enum MacCalendarEventMapper {
                              attendeesJSON: (try? JSONEncoder().encode(attendees)).map { String(decoding: $0, as: UTF8.self) },
                              meetingURL: meetingURL, location: event.location, descriptionText: event.notes,
                              htmlLink: nil, originalStartTs: event.occurrenceDate, etag: nil,
-                             updatedAt: event.lastModifiedDate, fetchedAt: fetchedAt)
+                             updatedAt: event.lastModifiedDate, fetchedAt: fetchedAt,
+                             recurrenceRulesJSON: recurrenceJSON(event.recurrenceRules),
+                             recurringEventId: event.hasRecurrenceRules ? event.calendarItemExternalIdentifier : nil,
+                             recurrenceException: event.isDetached)
     }
+    static func recurrenceJSON(_ rules: [EKRecurrenceRule]?) -> String? {
+        guard let rules, !rules.isEmpty else { return nil }
+        let values = rules.compactMap { rule -> String? in
+            let frequency: String
+            switch rule.frequency {
+            case .daily: frequency = "DAILY"
+            case .weekly: frequency = "WEEKLY"
+            case .monthly: frequency = "MONTHLY"
+            case .yearly: frequency = "YEARLY"
+            @unknown default: return nil
+            }
+            return "RRULE:FREQ=\(frequency);INTERVAL=\(rule.interval)"
+        }
+        return (try? JSONEncoder().encode(values)).map { String(decoding: $0, as: UTF8.self) }
+    }
+
     static func occurrenceID(identifier: String, start: Date) -> String {
         "\(identifier)#\(start.timeIntervalSince1970)"
     }

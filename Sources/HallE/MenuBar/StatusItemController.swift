@@ -24,6 +24,12 @@ final class StatusItemController: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(openMeetingNotification(_:)),
                                                name: .halleOpenMeeting, object: nil)
 
+        NotificationCenter.default.addObserver(forName: .hallePopoverSizeChanged, object: nil, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                let calendar = notification.userInfo?["calendar"] as? Bool ?? false
+                self?.popover.contentSize = NSSize(width: calendar ? 920 : 460, height: calendar ? 780 : 620)
+            }
+        }
         popover.contentSize = NSSize(width: 460, height: 620)
         // Debug runs keep the popover pinned (and floated, below) so it can be
         // screenshotted without fighting other apps for focus.
@@ -168,6 +174,7 @@ final class StatusItemController: NSObject {
 }
 
 extension Notification.Name {
+    static let hallePopoverSizeChanged = Notification.Name("cl.gabriel.hall-e.popoverSizeChanged")
     static let halleOpenMeeting = Notification.Name("cl.gabriel.hall-e.openMeeting")
     static let halleManualRefresh = Notification.Name("cl.gabriel.hall-e.manualRefresh")
     static let hallePopoverWillShow = Notification.Name("cl.gabriel.hall-e.popoverWillShow")

@@ -28,6 +28,11 @@ actor SyncCoordinator {
         await performSync(timeMin: min, timeMax: max, isPrimaryWindow: false)
     }
 
+    /// Rebuild only cached occurrences after an explicit save, without AI or provider calls.
+    func rebuildCachedRange(_ min: Date, _ max: Date) async {
+        await rebuildUnifiedEvents(timeMin: min, timeMax: max)
+    }
+
     /// Rebuild local derived state immediately after an account/calendar toggle,
     /// without requiring a network request.
     func rebuildAfterSourceChange() async {
@@ -55,7 +60,8 @@ actor SyncCoordinator {
             return
         }
         guard !accounts.isEmpty else {
-            await rebuildAfterSourceChange()
+            if isPrimaryWindow { await rebuildAfterSourceChange() }
+            else { await rebuildUnifiedEvents(timeMin: timeMin, timeMax: timeMax) }
             return
         }
 
@@ -168,6 +174,10 @@ actor SyncCoordinator {
                                 && CalendarEvent.Columns.startTs < timeMax)
                         .deleteAll(db)
                     for var event in mapped { try event.insert(db, onConflict: .replace) }
+                    try CalendarSyncReceipt(id: cal.id + "|" + String(timeMin.timeIntervalSince1970) + "|" + String(timeMax.timeIntervalSince1970),
+                        accountEmail: account.email, calendarID: cal.calendarId, coveredFrom: timeMin, coveredTo: timeMax,
+                        fetchedAt: fetchedAt).save(db)
+                    try db.execute(sql: "DELETE FROM calendar_sync_receipt WHERE fetchedAt < ?", arguments: [fetchedAt.addingTimeInterval(-30 * 86400)])
                 }
             } catch let GoogleOAuthClient.OAuthError.invalidGrant {
                 try? await AppDatabase.shared.dbQueue.write { db in

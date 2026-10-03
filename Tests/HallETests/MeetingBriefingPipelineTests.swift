@@ -47,9 +47,9 @@ struct MeetingBriefingPipelineTests {
         value.headline = "Cierre <script>alert(1)</script>"
         let markdown = BriefingRenderer.markdown(value)
         let html = BriefingRenderer.html(value, profile: .corporateCloseKnit, designDirectory: nil)
-        #expect(markdown.contains("## Objetivos"))
-        #expect(markdown.contains("## Tareas individuales"))
-        #expect(markdown.contains("## Decisiones"))
+        #expect(markdown.contains("## Objectives"))
+        #expect(markdown.contains("## Individual commitments"))
+        #expect(markdown.contains("## Decisions"))
         #expect(html.contains("&lt;script&gt;"))
         #expect(!html.contains("<script>alert"))
         #expect(html.contains("max-height:594mm"))
