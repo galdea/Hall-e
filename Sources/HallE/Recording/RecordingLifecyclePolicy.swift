@@ -110,3 +110,18 @@ struct RecordingLifecycleState: Equatable {
         lastObservedAt = nil
     }
 }
+
+/// Fresh capture meters can establish silence even when SoundAnalysis is
+/// unavailable. Missing/stalled capture must never be interpreted as silence.
+enum RecordingAudioActivity {
+    static func voice(classified: Bool?, powerDB: Float) -> Bool? {
+        guard powerDB.isFinite else { return nil }
+        return classified ?? (powerDB > RecordingLifecyclePolicy().silenceThresholdDB)
+    }
+
+    static func combined(microphone: Bool?, system: Bool?) -> Bool? {
+        if microphone == true || system == true { return true }
+        guard let microphone, let system else { return nil }
+        return microphone || system
+    }
+}

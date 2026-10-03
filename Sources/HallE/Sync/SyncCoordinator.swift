@@ -99,12 +99,10 @@ actor SyncCoordinator {
                                               accountErrors: accountErrors)
         }
 
-        // Optional LLM classification for events the rules left unclassified.
-        await runAIClassificationIfEnabled()
-
-        // Reconcile 15-min reminders against the fresh agenda.
+        // Schedule time-sensitive reminders before optional network/AI work.
         let agenda = (try? await AppDatabase.shared.dbQueue.read { try UnifiedEvent.fetchAll($0) }) ?? []
         await NotificationScheduler.shared.reconcile(events: agenda) { $0.winnerAccountEmail }
+        await runAIClassificationIfEnabled()
     }
 
     /// When AI is enabled, ask the LLM about a bounded number of still-unclassified

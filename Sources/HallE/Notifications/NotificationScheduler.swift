@@ -183,7 +183,7 @@ final class NotificationScheduler {
                 sound: sound.rawValue)
         }
         let pendingIds = Set(unchanged.map(\.identifier))
-        let deliveredKeys = await deliveredLedgerKeys(pendingIdentifiers: Set(ordinary.map(\.identifier)))
+        let deliveredKeys = await deliveredLedgerKeys()
         guard generation == reconcileGeneration, AppPreferences.notificationsEnabled else { return }
         // Preserve snoozes while their occurrence remains eligible, cancel on changes.
         let eligible = NotificationPlanner.snoozableOccurrences(from: events, now: now, showDeclined: showDeclined)
@@ -252,13 +252,11 @@ final class NotificationScheduler {
 
     // Ledger access is async so SQLite I/O runs on GRDB's queue, not the main
     // actor (reconcile runs after every sync).
-    private func deliveredLedgerKeys(pendingIdentifiers: Set<String>) async -> Set<String> {
+    private func deliveredLedgerKeys() async -> Set<String> {
         (try? await AppDatabase.shared.dbQueue.read { db -> Set<String> in
-            let now = Date()
             let rows = try NotificationRecord.fetchAll(db).filter {
-                $0.status == NotificationStatus.delivered.rawValue ||
-                ($0.status == NotificationStatus.pending.rawValue && $0.scheduledFor <= now &&
-                 !pendingIdentifiers.contains(NotificationPlanner.identifier(dedupKey: $0.dedupKey, startTs: $0.startTs)))
+                guard let status = NotificationStatus(rawValue: $0.status) else { return false }
+                return NotificationPlanner.ledgerStatusSuppressesReminder(status)
             }
             return Set(rows.map { NotificationPlanner.ledgerKey(dedupKey: $0.dedupKey, startTs: $0.startTs) })
         }) ?? []

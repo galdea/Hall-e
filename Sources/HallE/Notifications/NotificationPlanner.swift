@@ -106,4 +106,12 @@ enum NotificationPlanner {
     static func ledgerKey(dedupKey: String, startTs: Date) -> String {
         "\(dedupKey)|\(Int(startTs.timeIntervalSince1970))"
     }
+
+    /// Only explicit delivery is durable evidence that a reminder was shown.
+    /// A pending request can disappear from Notification Center without firing
+    /// (for example across sleep/wake), so a stale pending ledger row must be
+    /// eligible for reconciliation to schedule again.
+    static func ledgerStatusSuppressesReminder(_ status: NotificationStatus) -> Bool {
+        status == .delivered
+    }
 }

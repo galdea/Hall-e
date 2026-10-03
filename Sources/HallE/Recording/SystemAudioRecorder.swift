@@ -31,7 +31,7 @@ final class SystemAudioRecorder {
     private let ioQueue = DispatchQueue(label: "cl.gabriel.hall-e.systemaudio")
     private let powerLock = NSLock()
     private var latestPowerDB: Float = -160
-    private var latestPowerAt = Date.distantPast
+    private var latestPowerAt: TimeInterval = -.infinity
     private var voiceMonitor: VoiceActivityMonitor?
 
     /// Start capturing only `targetBundleID`'s output to `url`.
@@ -121,12 +121,12 @@ final class SystemAudioRecorder {
         // The IOProc block reads `file` on `ioQueue`; clear it there so any
         // in-flight callback finishes its write before the file closes.
         ioQueue.sync { file = nil; voiceMonitor = nil }
-        powerLock.lock(); latestPowerDB = -160; powerLock.unlock()
+        powerLock.lock(); latestPowerDB = -160; latestPowerAt = -.infinity; powerLock.unlock()
     }
 
     func currentPowerDB() -> Float {
         powerLock.lock(); defer { powerLock.unlock() }
-        return Date().timeIntervalSince(latestPowerAt) > 1.5 ? -160 : latestPowerDB
+        return ProcessInfo.processInfo.systemUptime - latestPowerAt > 1.5 ? .nan : latestPowerDB
     }
 
     func currentVoiceActivity() -> Bool? { voiceMonitor?.hasVoice }
@@ -149,7 +149,7 @@ final class SystemAudioRecorder {
         }
         let rms = sqrt(sum / Float(frames * channelCount))
         let db = rms > 0 ? 20 * log10(rms) : -160
-        powerLock.lock(); latestPowerDB = db; latestPowerAt = Date(); powerLock.unlock()
+        powerLock.lock(); latestPowerDB = db; latestPowerAt = ProcessInfo.processInfo.systemUptime; powerLock.unlock()
     }
 
     deinit { stop() }

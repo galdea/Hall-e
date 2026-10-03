@@ -58,7 +58,7 @@ struct RecordingSettingsView: View {
                 Stepper("Allow \(Int(confirmationSeconds)) seconds to respond", value: $confirmationSeconds, in: 5...120, step: 5)
                     .onChange(of: confirmationSeconds) { _, value in AppPreferences.recordingConfirmationSeconds = value }
                     .disabled(!detectSilence || !autoStopSilence)
-                Text("Speech resuming cancels the countdown. Keep recording dismisses the prompt until speech resumes and another quiet period occurs. Voice detection runs on this Mac; unavailable audio analysis never counts as silence.")
+                Text("Speech resuming cancels the countdown. Keep recording dismisses the prompt until speech resumes and another quiet period occurs. Voice detection runs on this Mac. If voice analysis is unavailable, fresh audio levels detect silence; missing audio never counts as silence.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Reset silence defaults") {
                     detectSilence = true; autoStopSilence = true; silenceSeconds = 20; confirmationSeconds = 20

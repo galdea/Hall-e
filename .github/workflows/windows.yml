@@ -1,11 +1,8 @@
 name: Build and verify Windows
+# Routine main pushes and PRs use local checks; tag releases retain all gates.
 on:
   push:
-    branches: [main]
     tags: ['win-v*']
-    paths: ['windows/**', '.github/workflows/windows.yml']
-  pull_request:
-    paths: ['windows/**', '.github/workflows/windows.yml']
   workflow_dispatch:
 
 permissions:

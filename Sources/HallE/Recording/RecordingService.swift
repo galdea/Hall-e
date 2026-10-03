@@ -280,11 +280,13 @@ final class RecordingService: NSObject {
                 guard let self, self.isRecording, let r = self.recorder else { return }
                 self.elapsed = r.currentTime
                 r.updateMeters()
-                var voice = self.micVoiceMonitor?.hasVoice
+                var voice = RecordingAudioActivity.voice(classified: self.micVoiceMonitor?.hasVoice,
+                                                         powerDB: r.averagePower(forChannel: 0))
                 var strongAudio = r.peakPower(forChannel: 0) > -35
                 if #available(macOS 14.2, *), let system = self.systemRecorder as? SystemAudioRecorder {
-                    let remote = system.currentVoiceActivity()
-                    voice = voice == true || remote == true ? true : (voice == nil || remote == nil ? nil : false)
+                    let remote = RecordingAudioActivity.voice(classified: system.currentVoiceActivity(),
+                                                               powerDB: system.currentPowerDB())
+                    voice = RecordingAudioActivity.combined(microphone: voice, system: remote)
                     strongAudio = strongAudio || system.currentPowerDB() > -35
                 }
                 // Classification uses a multi-second window. New audible input

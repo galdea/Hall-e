@@ -114,4 +114,30 @@ struct NotificationPlannerTests {
         var moved = started; moved.startTs = now.addingTimeInterval(600)
         #expect(!NotificationPlanner.snoozableOccurrences(from: [moved], now: now, showDeclined: false).contains(id))
     }
+
+    @Test func onlyDeliveredLedgerRowsSuppressReminder() {
+        #expect(NotificationPlanner.ledgerStatusSuppressesReminder(.delivered))
+        #expect(!NotificationPlanner.ledgerStatusSuppressesReminder(.pending))
+        #expect(!NotificationPlanner.ledgerStatusSuppressesReminder(.cancelled))
+        #expect(!NotificationPlanner.ledgerStatusSuppressesReminder(.skipped))
+    }
+
+    @Test func droppedPendingRequestIsScheduledAgain() {
+        let start = now.addingTimeInterval(60)
+        let desired = NotificationPlanner.desired(from: [event("k", start: start)], now: now,
+                                                  leadMinutes: 5, showDeclined: false,
+                                                  accountLabel: { _ in nil })
+        #expect(desired.first?.fireAt == now.addingTimeInterval(1))
+
+        // The database may still say pending after Notification Center drops the
+        // request. Since pending is not delivery evidence, reconciliation must
+        // leave deliveredKeys empty and schedule the catch-up reminder.
+        let deliveredKeys: Set<String> = NotificationPlanner.ledgerStatusSuppressesReminder(.pending)
+            ? [NotificationPlanner.ledgerKey(dedupKey: "k", startTs: start)]
+            : []
+        let plan = NotificationPlanner.plan(desired: desired,
+                                            pendingIdentifiers: [],
+                                            deliveredKeys: deliveredKeys)
+        #expect(plan.toSchedule.map(\.dedupKey) == ["k"])
+    }
 }

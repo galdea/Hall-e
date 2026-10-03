@@ -4,6 +4,27 @@ import Foundation
 
 @Suite("Recording lifecycle")
 struct RecordingLifecycleTests {
+    @Test func classifierFailureStillStopsFreshSilentCapture() {
+        var state = RecordingLifecycleState(startedAt: start)
+        for second in 0...40 {
+            let voice = RecordingAudioActivity.voice(classified: nil, powerDB: -80)
+            #expect(voice == false)
+            let actions = state.observe(now: start.addingTimeInterval(Double(second)),
+                                        audioPowerDB: voice == false ? -80 : .nan, sourceActive: nil)
+            if second == 20 { #expect(actions == [.promptForSilence]) }
+            if second == 40 { #expect(actions == [.stop(.silencePrompt)]) }
+        }
+    }
+
+    @Test func fallbackProtectsAudibleAndMissingTracks() {
+        #expect(RecordingAudioActivity.voice(classified: nil, powerDB: -20) == true)
+        #expect(RecordingAudioActivity.voice(classified: true, powerDB: -80) == true)
+        #expect(RecordingAudioActivity.voice(classified: false, powerDB: .nan) == nil)
+        #expect(RecordingAudioActivity.combined(microphone: false, system: nil) == nil)
+        #expect(RecordingAudioActivity.combined(microphone: false, system: true) == true)
+        #expect(RecordingAudioActivity.combined(microphone: false, system: false) == false)
+    }
+
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
     @MainActor @Test func delayedProcessingDoesNotRecreateDeletedRecordings() async {

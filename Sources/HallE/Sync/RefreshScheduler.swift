@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Network
 import EventKit
+import GRDB
 
 /// Drives periodic and event-based calendar syncs while keeping CPU/battery low:
 /// a coarse timer, wake-from-sleep, and network-restored triggers. All syncs go
@@ -77,9 +78,16 @@ final class RefreshScheduler {
     }
 
     private func kick(reason: String) {
-        guard isOnline || MacCalendarProvider.enabled else { Log.sync.info("skip sync (offline): \(reason, privacy: .public)"); return }
-        Log.sync.info("sync trigger: \(reason, privacy: .public)")
-        Task { await SyncCoordinator.shared.syncAll() }
+        let canSync = isOnline || MacCalendarProvider.enabled
+        Task {
+            // Cached reminders must not wait for connectivity or calendar requests.
+            if let events = try? await AppDatabase.shared.dbQueue.read({ try UnifiedEvent.fetchAll($0) }) {
+                await NotificationScheduler.shared.reconcile(events: events) { $0.winnerAccountEmail }
+            }
+            guard canSync else { return }
+            Log.sync.info("sync trigger: \(reason, privacy: .public)")
+            await SyncCoordinator.shared.syncAll()
+        }
     }
 
     private func scheduleTimer() {

@@ -32,7 +32,15 @@ final class VoiceActivityMonitor: NSObject, SNResultsObserving {
     func consume(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         let capturePosition = position
-        if captureOrigin == nil { captureOrigin = ProcessInfo.processInfo.systemUptime }
+        let now = ProcessInfo.processInfo.systemUptime
+        let origin = now - Double(position + AVAudioFramePosition(buffer.frameLength)) / sampleRate
+        if let previous = captureOrigin, abs(origin - previous) > 0.5 {
+            // Device interruptions leave a gap in wall time but not frame positions.
+            // Re-anchor the clock so all subsequent results do not stay stale.
+            uncertainUntil = now + settlingDuration
+            lastResultAt = -.infinity
+        }
+        captureOrigin = origin
         position += AVAudioFramePosition(buffer.frameLength)
         // Bound memory while allowing the classifier's initial model load.
         // Results are dated by captured frames, so queued analysis cannot make

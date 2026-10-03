@@ -57,7 +57,13 @@ struct NotificationsSettingsView: View {
         }
     }
     private func refreshStatus() async {
+        let previous = authorizationStatus
         authorizationStatus = await NotificationScheduler.shared.authorizationStatus()
+        if previous != authorizationStatus,
+           authorizationStatus == .authorized || authorizationStatus == .provisional {
+            permissionMessage = nil
+            await NotificationScheduler.shared.refreshReminders()
+        }
     }
     private func requestPermission() async {
         authorizationStatus = await NotificationScheduler.shared.requestAuthorizationIfNeeded()

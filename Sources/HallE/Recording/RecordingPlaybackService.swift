@@ -97,6 +97,7 @@ final class RecordingPlaybackService: NSObject {
 extension RecordingPlaybackService: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
+            guard self.player === player else { return }
             self.timer?.invalidate(); self.timer = nil
             self.isPlaying = false
             self.currentTime = 0
@@ -106,6 +107,7 @@ extension RecordingPlaybackService: AVAudioPlayerDelegate {
 
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         Task { @MainActor in
+            guard self.player === player else { return }
             self.errorMessage = error?.localizedDescription ?? "Recording playback failed."
             self.stop(resetSelection: false)
         }
