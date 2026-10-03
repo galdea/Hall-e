@@ -54,6 +54,13 @@ struct CalendarAgentFeaturesTests {
         return db
     }
 
+    #if DEBUG
+    @Test @MainActor func finderPreviewLaunchAndTerminationUseFixturesWithoutEnvironmentFlag() {
+        #expect(CalendarPreview.shouldUseFixtures(bundleIdentifier: "cl.gabriel.hall-e.calendar-preview", environment: [:]))
+        #expect(!CalendarPreview.shouldUseFixtures(bundleIdentifier: "cl.gabriel.hall-e", environment: [:]))
+        #expect(CalendarPreview.shouldUseFixtures(bundleIdentifier: nil, environment: ["HALLE_DEBUG_CALENDAR_PREVIEW": "1"]))
+    }
+    #endif
     @Test func gridStartsMondayAndAlwaysContains42ConsecutiveDays() {
         let days = CalendarPresentation.days(in: date(5), calendar: calendar)
         #expect(days.count == 42)

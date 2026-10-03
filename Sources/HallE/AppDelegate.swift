@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         if CalendarPreview.renderIfRequested() { return }
+        if CalendarPreview.isActive { installMainMenu() }
         if CalendarPreview.showIfRequested() { return }
         #endif
 
@@ -150,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["HALLE_DEBUG_CALENDAR_PREVIEW"] == "1" { return .terminateNow }
+        if CalendarPreview.isActive { return .terminateNow }
         #endif
         let recorder = RecordingService.shared
         guard recorder.isRecording || recorder.state == .stopping else { return .terminateNow }
