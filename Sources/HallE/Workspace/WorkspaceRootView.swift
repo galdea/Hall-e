@@ -6,6 +6,7 @@ struct WorkspaceRootView: View {
     @State var model = WorkspaceViewModel()
     @State private var language = AppLanguageStore.shared
     @State private var recorder = RecordingService.shared
+    @State private var showSharedMeetings = false
 
     var body: some View {
         NavigationSplitView {
@@ -22,6 +23,9 @@ struct WorkspaceRootView: View {
         .safeAreaInset(edge: .top, spacing: 0) { RecordingPromptBanner() }
         .environment(\.locale, language.locale)
         .id(language.language)
+        .sheet(isPresented: $showSharedMeetings) {
+            SharedMeetingsView().frame(minWidth: 760, minHeight: 640)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .halleOpenToday)) { notification in
             let epoch = notification.userInfo?["agendaDate"] as? Double
             model.openToday(date: epoch.map(Date.init(timeIntervalSince1970:)))
@@ -39,6 +43,9 @@ struct WorkspaceRootView: View {
                     }
                 }
                 if !model.appState.accounts.isEmpty { SyncHealthButton() }
+                Button { showSharedMeetings = true } label: {
+                    Label(PublicUICopy.text("Devices & shared meetings", "Dispositivos y reuniones compartidas"), systemImage: "laptopcomputer.and.iphone")
+                }.help(PublicUICopy.text("Pair devices and coordinate shared meetings", "Vincula dispositivos y coordina reuniones compartidas"))
                 Button { model.route = .search } label: { Image(systemName: "magnifyingglass") }
                     .keyboardShortcut("f", modifiers: .command).help(L10n.text("workspace.search"))
                 Button { SettingsWindowController.shared.show() } label: { Image(systemName: "gearshape") }

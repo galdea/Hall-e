@@ -81,6 +81,7 @@ final class RecordingService: NSObject {
     /// finalized session (e.g. to kick off transcription).
     func start(for event: UnifiedEvent, notePath: String?,
                sourceKind: RecordingSourceKind = .calendarMeeting,
+               sharedSessionID: String? = nil,
                onFinish: @escaping (RecordingSession) -> Void) async {
         if case .failed = state { currentSession = nil; state = .idle }
         guard case .idle = state else { return }
@@ -95,6 +96,11 @@ final class RecordingService: NSObject {
         var session = RecordingSession(event: event, notePath: notePath, sourceKind: sourceKind)
         session.state = .preparing
         do {
+            session.sharedSessionID = try await SharedMeetingCoordinator.shared.prepareLocalCapture(
+                event: event, requestedSessionID: sharedSessionID)
+            if session.sharedSessionID != nil && !SharedMeetingCoordinator.shared.hasValidRecordingLease {
+                throw SharedMeetingError.lostLease
+            }
             try FileManager.default.createDirectory(at: session.folderURL, withIntermediateDirectories: true)
             let settings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -105,6 +111,10 @@ final class RecordingService: NSObject {
             let recorder = try AVAudioRecorder(url: session.micURL, settings: settings)
             recorder.delegate = self
             recorder.isMeteringEnabled = true
+            // File and audio-device setup can take time; recheck immediately before capture.
+            if session.sharedSessionID != nil && !SharedMeetingCoordinator.shared.hasValidRecordingLease {
+                throw SharedMeetingError.lostLease
+            }
             guard recorder.record() else {
                 fail("Could not start the recorder."); return
             }
@@ -127,6 +137,7 @@ final class RecordingService: NSObject {
             silencePromptVisible = false
             scheduledEndPromptVisible = false
             state = .recording
+            SharedMeetingCoordinator.shared.captureStarted(session)
             callCaptureIdentityVerified = event.meetingURL == nil
             if sourceKind == .calendarMeeting, event.meetingURL != nil {
                 if let identity = CallDetectionCoordinator.shared.browserIdentity(for: event) {
@@ -281,6 +292,10 @@ final class RecordingService: NSObject {
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.isRecording, let r = self.recorder else { return }
+                if self.currentSession?.sharedSessionID != nil && !SharedMeetingCoordinator.shared.hasValidRecordingLease {
+                    self.stop(reason: .sharedSessionEnded)
+                    return
+                }
                 self.elapsed = r.currentTime
                 r.updateMeters()
                 var voice = RecordingAudioActivity.voice(classified: self.micVoiceMonitor?.hasVoice,
@@ -351,6 +366,9 @@ final class RecordingService: NSObject {
         clearPrompt()
         if success { onFinish?(session) }
         onFinish = nil
+        if session.sharedSessionID != nil {
+            Task { await SharedMeetingCoordinator.shared.captureFinished(session) }
+        }
         let completedSessionID = session.id
         let completion = terminationCompletion
         terminationCompletion = nil
@@ -388,6 +406,8 @@ final class RecordingService: NSObject {
         silencePromptVisible = false
         scheduledEndPromptVisible = false
         state = .failed(message)
+        let failedSharedSession = currentSession
+        Task { await SharedMeetingCoordinator.shared.captureFinished(failedSharedSession) }
         let failedSessionID = currentSession?.id
         let completion = terminationCompletion
         terminationCompletion = nil

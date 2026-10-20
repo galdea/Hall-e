@@ -1,5 +1,10 @@
 # Downloadable macOS releases
 
+The current macOS candidate is **0.5.0, build 2026102007**; the Android
+candidate is **0.2.0, version code 2**. These are candidates, not public
+releases. See [the current validation record](validation/2026-10-20-hall-e-0.5.0.md)
+for verified checks and outstanding upload, store, and device-QA gates.
+
 Hall-e ships as a native drag-to-Applications DMG plus a ZIP alternative. It
 targets macOS 14.0 and later; system audio capture requires 14.2+. Choose `arm64`
 for Apple silicon or `x86_64` for Intel. For the normal installation, open the
@@ -9,7 +14,7 @@ it also remains available in the menu bar. Microphone and other access prompts
 still require user consent. No account or key is needed for supported local
 transcription. Setup checks the language model and offers an optional audio test.
 
-`VERSION=0.3.2 make release` builds both executables sequentially, bundles English
+`VERSION=0.5.0 make release` builds both executables sequentially, bundles English
 and Spanish strings, the Chrome extension, reminder sound, and dependency resource
 bundles, signs the app ad-hoc, and creates versioned DMG and ZIP packages plus a
 SHA-256 checksum for each in `dist/`. The DMG contains
@@ -56,7 +61,7 @@ With the certificate in your keychain:
 
 ```sh
 SIGNING_MODE=developer-id SIGN_ID='Developer ID Application: Your Name (TEAMID)' \
-  VERSION=0.3.2 ./scripts/release.sh
+  VERSION=0.5.0 ./scripts/release.sh
 ```
 
 Both executables receive hardened runtime and secure timestamps; the main app
@@ -173,4 +178,4 @@ The Windows version comes from `windows/Directory.Build.props`. A matching `win-
 
 ### Landing-page download updates
 
-After both platform releases are public, run `npm run update:downloads -- 0.3.2 0.1.1` from `website/`. It verifies both macOS installers, the Windows installer, and their checksum assets before atomically updating all native links, version labels, accessible labels, and Windows guide links. A failed check leaves the existing downloads untouched. `npm run deploy` repeats public availability checks before uploading the landing page.
+After both platform releases are public, run `npm run update:downloads -- <mac-version> <windows-version>` from `website/`, substituting the versions that are actually published. It verifies both macOS installers, the Windows installer, and their checksum assets before atomically updating all native links, version labels, accessible labels, and Windows guide links. A failed check leaves the existing downloads untouched. `npm run deploy` repeats public availability checks before uploading the landing page.

@@ -1,5 +1,12 @@
 # Mac App Store preparation
 
+Current review candidate: Hall-e **0.5.0**, build **2026102007**. Candidate
+validation and remaining gates are recorded in
+[`../validation/2026-10-20-hall-e-0.5.0.md`](../validation/2026-10-20-hall-e-0.5.0.md).
+The 2026102007 App Store QA build compiled and passed development-signature
+validation. The candidate has not been uploaded to Apple. Physical
+Mac/phone pairing and recording-handoff QA remains incomplete.
+
 This is a separate distribution path from `scripts/release.sh`. Direct releases
 remain ad-hoc or Developer ID signed and are not changed by
 `MacAppStore.entitlements`. The App Store candidate is an Apple-signed sandboxed
@@ -20,7 +27,16 @@ browser/account OAuth flow itself has not been run. External-volume and revoked
 folder-permission cases remain untested. Signed build 2005's notification
 feedback check confirmed the UI reports “Delivered to Notification Center.”
 
-The core Store build can now be packaged as a review candidate. The remaining
+The earlier core sandbox and notification checks below are historical evidence
+from builds 2004–2005; they do not verify the shared-session handoff. Direct
+build 2026102007 was signed, installed at `/Applications/Hall-e.app`, and its
+process launched, with the prior install saved at
+`/Users/Gabriel/Hall-e/local-releases/20261020-shared/Hall-e-before-0.5.0.app`.
+The window could not be exposed for UI inspection. Its scoped startup log ends
+at `SecItemCopyMatching`; the cause is unknown. The current 2026102007 Store QA
+app compiled and passed signature validation; its new shared-device flow has
+not been verified in the sandbox. The 0.5.0
+Store build can be packaged as a review candidate after required QA. The remaining
 external-volume/revoked-access and full Google OAuth cases are documented QA
 limitations, not evidence that the complete feature matrix passed. Public App
 Store submission additionally requires the documented exact-SHA hosted release
@@ -102,7 +118,7 @@ Create the local QA app on a registered test Mac:
 STORE_PACKAGE_MODE=qa \
 STORE_QA_APP_IDENTITY='Apple Development: Name (TEAMID)' \
 STORE_QA_PROFILE='/secure/path/Hall-e-Mac-Development.provisionprofile' \
-VERSION=0.4.0 ./scripts/package-mac-app-store.sh
+VERSION=0.5.0 BUILD_NUM=2026102007 ./scripts/package-mac-app-store.sh
 ```
 
 Builds 2004 and 2005 cover launch, sandbox/container separation, macOS Calendar
@@ -119,7 +135,7 @@ STORE_SANDBOX_READY=1 \
 APPSTORE_APP_IDENTITY='3rd Party Mac Developer Application: Name (TEAMID)' \
 APPSTORE_INSTALLER_IDENTITY='3rd Party Mac Developer Installer: Name (TEAMID)' \
 APPSTORE_PROFILE='/secure/path/Hall-e-App-Store.provisionprofile' \
-VERSION=0.4.0 ./scripts/package-mac-app-store.sh
+VERSION=0.5.0 BUILD_NUM=2026102007 ./scripts/package-mac-app-store.sh
 ```
 
 The command creates a signed `.pkg` in `dist/`, validates its signatures,

@@ -6,13 +6,21 @@ Hall-e stores recordings, transcripts, built-in meeting notes, project data, and
 
 The sandboxed Mac App Store edition stores recordings, notes, projects, and its database in its macOS app container, separate from the direct-download edition's Application Support folder. Hall-e does not automatically import that recording library or database. macOS may carry over preferences for the same app identifier; credentials remain in Keychain and access follows macOS signing and permission rules. A notes folder must be selected again if its saved sandbox access is unavailable. Recording is microphone-only; app-audio capture and desktop/browser call detection are unavailable. The Store edition does not include Chrome integration, OpenClaw report launching, or import from `~/.codex`.
 
-Hall-e data remains local unless you explicitly enable an optional cloud transcription or AI provider, or connect an online calendar as described below. Each integration sends only the data needed for the feature you chose and enabled. The [Android privacy notice](https://hall-e.pages.dev/android-privacy.html) describes the separate Android app.
+Hall-e data remains local unless you explicitly enable an optional cloud transcription or AI provider, connect an online calendar as described below, or pair devices for shared meetings. Each integration sends only the data needed for the feature you chose and enabled. The [Android privacy notice](https://hall-e.pages.dev/android-privacy.html) describes the separate Android app.
 
 ## Local setup and recording
 
 A new installation requires no Hall-e account. Supported Apple Speech transcription is explicitly constrained to on-device recognition; an unavailable local model produces a setup/retry state rather than an unapproved cloud upload. The optional eight-second setup check records a temporary microphone sample only after you start it. It never uses cloud transcription or enters the recording library, and Hall-e deletes it after completion or cancellation. A sample may remain in the system temporary directory after an unexpected app or system crash.
 
 In the direct-download edition, you explicitly choose the app whose audio to record for online meetings. Its other playing tabs/windows may be included. A missing app or failed audio tap never silently expands capture to all system audio. Hall-e shows a microphone-only warning when meeting audio is unavailable. The Mac App Store edition is microphone-only, as described above.
+
+## Shared meetings across paired devices
+
+Pairing is optional. The `https://hall-e.pages.dev/pair` page reads an invitation from the URL fragment in your browser and does not send that fragment to a website, analytics service, or third-party resource. You choose when to open Hall-e or copy the one-time invitation. Invitations expire after 10 minutes and become invalid after one use. Hall-e asks you to confirm before connecting a device.
+
+When paired devices create or update a shared meeting, they send data to Hall-e's HTTPS shared-session coordinator. The meeting title, project name, optional meeting URL, and scheduled times are encrypted on the paired devices with AES-GCM; the coordinator stores the encrypted payload and cannot decrypt it. Only devices holding the shared key can read that meeting payload. The coordinator does see device names, random workspace/device/session IDs, invitation and device-token hashes, recording lease ownership/state and expiry, and segment device IDs, start/end times, and status. It does not receive calendar contents, invitees, audio, transcripts, or the decryption key.
+
+The coordinator expires a workspace after seven days without activity. Invitation tokens are single-use and expire after 10 minutes; device credentials expire within 90 days. Unlinking a device revokes its future coordinator access and removes its saved credentials. It cannot erase meeting details already cached on another device or recordings already saved locally. Shared meeting metadata is not an audio backup or a recording transfer. A recording begins only after a person acts on the device that will record, grants microphone access, and confirms the recording notice. On Android, Hall-e records that phone's microphone only; on Mac, capture follows the Mac edition's microphone or selected-app behavior above. The shared coordinator never starts capture remotely and never receives audio. Optional transcription or AI providers remain separate and require their own configured consent.
 
 ## What leaves your Mac
 

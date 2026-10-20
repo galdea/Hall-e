@@ -330,6 +330,7 @@ private extension RecordingStopReason {
         case .silencePrompt: "silence confirmation"
         case .recorderFinished: "audio finished"
         case .recorderFailed: "recorder error"
+        case .sharedSessionEnded: "shared recording moved or disconnected"
         }
     }
 }

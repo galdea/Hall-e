@@ -12,12 +12,14 @@ enum KeychainStore {
 
     enum KeychainError: Error, LocalizedError {
         case unexpectedStatus(OSStatus)
+        case invalidUTF8
 
         var errorDescription: String? {
             switch self {
             case .unexpectedStatus(let s):
                 let msg = SecCopyErrorMessageString(s, nil) as String? ?? "OSStatus \(s)"
                 return "Keychain error: \(msg)"
+            case .invalidUTF8: return "The saved Keychain item is not valid UTF-8."
             }
         }
     }
@@ -46,6 +48,11 @@ enum KeychainStore {
 
     /// Retrieve a secret, or nil if absent.
     static func get(account: String) -> String? {
+        try? getThrowing(account: account)
+    }
+
+    /// Retrieve a secret, distinguishing an absent item from a denied or failed read.
+    static func getThrowing(account: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -55,8 +62,32 @@ enum KeychainStore {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
+        guard let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
+            throw KeychainError.invalidUTF8
+        }
+        return value
+    }
+
+    /// Keychain operations can wait for user authorization. Keep them off the UI actor.
+    static func getAsync(account: String) async throws -> String? {
+        try await Task.detached(priority: .userInitiated) {
+            try getThrowing(account: account)
+        }.value
+    }
+
+    static func setAsync(_ value: String, account: String) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try set(value, account: account)
+        }.value
+    }
+
+    @discardableResult
+    static func deleteAsync(account: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            delete(account: account)
+        }.value
     }
 
     static func exists(account: String) -> Bool {

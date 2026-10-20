@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080e10">
-  <meta name="description" content="Privacy information for Hall-e for Android: a local calendar companion with no account, network connection, or Mac sync.">
+  <meta name="description" content="Privacy information for Hall-e for Android: local calendar data, on-device recordings, and optional encrypted shared sessions.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Hall-e for Android — Privacy">
   <meta property="og:description" content="How Hall-e for Android uses calendar access, stores local notes, and schedules reminders.">
@@ -34,7 +34,7 @@
       <a class="privacy-back" href="/">← Hall-e home</a>
       <p class="privacy-eyebrow">ANDROID COMPANION · PRIVACY</p>
       <h1>Hall-e for Android</h1>
-      <p class="privacy-lede">A local calendar companion. No account, network connection, or synchronization with Hall-e for Mac.</p>
+      <p class="privacy-lede">The published Google Play release 0.1.0 (version code 1) remains local-only. The optional recording and shared-meeting features described below are for the planned 0.2.0 release (version code 2) and apply only after that updated app is released.</p>
 
       <section aria-labelledby="en-title">
         <h2 id="en-title">English</h2>
@@ -44,8 +44,13 @@
         <h3>Information stored on your phone</h3>
         <p>Hall-e stores your selected calendar IDs, project names, meeting-to-project assignments, Markdown notes, reminder settings, and reminder occurrence IDs in the app’s private local storage. Each occurrence ID is derived from a calendar ID, event ID, and occurrence start time; Hall-e uses it to schedule, cancel, and avoid duplicate reminders. Calendar events are read from Android when Hall-e builds or refreshes your agenda. Hall-e does not create a separate server-side calendar copy.</p>
 
-        <h3>No recording or online services</h3>
-        <p>Hall-e for Android does not record meetings or audio, transcribe speech, or use a microphone. The app does not request network access, create an account, synchronize with Hall-e for Mac, or send analytics to the developer.</p>
+        <h3>Planned for 0.2.0: optional recording</h3>
+        <p>If you choose to record, Hall-e asks for microphone permission and records audio from this phone’s microphone only. A foreground notification stays visible while recording and includes Stop. Android or another audio app can silence or affect the microphone; phone recording may not capture remote participants or other apps. Hall-e stores recordings in app-private phone storage, does not upload them to the coordinator, and does not transcribe speech. Record only after giving participants the notice or consent your situation requires.</p>
+
+        <h3>Planned for 0.2.0: optional shared meetings</h3>
+        <p>Pairing requires an invitation you choose to open or paste and confirmation in Hall-e. Invitations work once and expire after 10 minutes. When you create or share a meeting, Hall-e encrypts its title, optional project name, optional supported meeting URL, and scheduled times on your device with AES-GCM before transmission over HTTPS. A title or time may come from a calendar event you chose, but Hall-e does not send calendar IDs, attendee lists, or a calendar copy. The coordinator stores the encrypted meeting payload and cannot read it; the decryption key is held by paired devices.</p>
+        <p>The coordinator can see device names, random workspace/device/session IDs, hashes of invitation and device credentials, recording-lease owner/state/expiry, and segment device IDs, start/end times, and status. It does not receive audio, transcripts, or the workspace key. A workspace expires after seven days without activity; device credentials expire within 90 days. Unlinking revokes future access from that device but cannot remove meeting metadata cached on other devices. Audio stays only on the device that recorded it. Hall-e has no user account system or analytics SDK; there is no automatic calendar, notes, project, or audio sync with Mac.</p>
+        <p>Hall-e’s developer operates the coordinator, which runs on Cloudflare Workers. Cloudflare may process network and request metadata as an infrastructure provider; see <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare’s privacy policy</a>. Account-specific platform logs and retention depend on the deployed service configuration.</p>
 
         <h3>Meeting links and sharing</h3>
         <p>Supported meeting links open in an app or browser on your device. The receiving app or service may process information under its own privacy practices. If you choose to share a Markdown note, Android opens its system share sheet; Hall-e sends the note only after you choose a destination. Hall-e does not share notes automatically.</p>
@@ -65,8 +70,13 @@
         <h3>Información guardada en tu teléfono</h3>
         <p>Hall-e guarda los identificadores de los calendarios seleccionados, los nombres de proyectos, las asignaciones de reuniones a proyectos, las notas Markdown, los ajustes y los identificadores de cada ocurrencia de recordatorio en el almacenamiento privado de la app. Cada identificador se deriva del calendario, el evento y la hora de inicio; Hall-e lo usa para programar, cancelar y evitar recordatorios duplicados. Lee los eventos desde Android al crear o actualizar la agenda. No crea una copia del calendario en un servidor.</p>
 
-        <h3>Sin grabación ni servicios en línea</h3>
-        <p>Hall-e para Android no graba reuniones ni audio, no transcribe conversaciones y no usa el micrófono. La app no solicita acceso a internet, no crea una cuenta, no sincroniza con Hall-e para Mac ni envía datos de analítica a quienes la desarrollan.</p>
+        <h3>Previsto para 0.2.0: grabación opcional</h3>
+        <p>Si eliges grabar, Hall-e solicita permiso para usar el micrófono y captura audio solo del micrófono de este teléfono. Durante la grabación aparece una notificación con la opción Detener. Android u otra app puede silenciar o afectar el micrófono; es posible que no capture participantes remotos ni el audio de otras apps. Hall-e guarda las grabaciones en el almacenamiento privado del teléfono, no las sube al coordinador ni transcribe conversaciones. Graba solo después de dar a los participantes el aviso o consentimiento que corresponda.</p>
+
+        <h3>Previsto para 0.2.0: reuniones compartidas opcionales</h3>
+        <p>La vinculación requiere una invitación que eliges abrir o pegar y una confirmación en Hall-e. Las invitaciones se usan una vez y vencen a los 10 minutos. Al crear o compartir una reunión, Hall-e cifra en el teléfono con AES-GCM el título, el nombre opcional del proyecto, el enlace compatible opcional y los horarios, antes de transmitirlos por HTTPS. El título u horario puede provenir de un evento de calendario que elegiste, pero Hall-e no envía identificadores del calendario, listas de asistentes ni una copia del calendario. El coordinador guarda el contenido cifrado y no puede leerlo; la clave queda en los dispositivos vinculados.</p>
+        <p>El coordinador puede ver nombres de dispositivos, identificadores aleatorios de espacio/dispositivo/sesión, hashes de invitaciones y credenciales, propietario/estado/vencimiento del permiso de grabación, y los identificadores de dispositivo, horarios de inicio/fin y estado de cada segmento. No recibe audio, transcripciones ni la clave del espacio. El espacio vence tras siete días sin actividad; las credenciales de dispositivo vencen en un máximo de 90 días. Desvincular revoca el acceso futuro de ese dispositivo, pero no elimina los datos de reunión guardados en caché por otros dispositivos. El audio permanece solo en el dispositivo que lo grabó. Hall-e no tiene cuentas de usuario ni un SDK de analítica; no hay sincronización automática de calendarios, notas, proyectos ni audio con Mac.</p>
+        <p>Quien desarrolla Hall-e opera el coordinador, que funciona en Cloudflare Workers. Cloudflare puede procesar metadatos de red y solicitudes como proveedor de infraestructura; consulta la <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">política de privacidad de Cloudflare</a>. Los registros de la plataforma y su conservación dependen de la configuración del servicio desplegado.</p>
 
         <h3>Enlaces de reunión y uso compartido</h3>
         <p>Los enlaces compatibles se abren en una app o navegador del teléfono. La app o el servicio que los recibe puede procesar información según sus propias prácticas de privacidad. Si eliges compartir una nota Markdown, Android abre su menú para compartir; Hall-e solo envía la nota después de que eliges el destino. Hall-e no comparte notas automáticamente.</p>

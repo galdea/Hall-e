@@ -18,7 +18,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, recording, transcription, accounts, calendars, notifications, browserCalls
+    case general, recording, transcription, accounts, calendars, notifications, devices, browserCalls
     case aiOrchestrator, obsidian, privacy, advanced, about
 
     var id: String { rawValue }
@@ -26,7 +26,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var group: SettingsGroup {
         switch self {
         case .general: .general
-        case .accounts, .calendars, .notifications: .meetings
+        case .accounts, .calendars, .notifications, .devices: .meetings
         case .recording, .transcription, .browserCalls: .capture
         case .aiOrchestrator: .intelligence
         case .obsidian, .privacy: .storagePrivacy
@@ -40,6 +40,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .accounts: PublicUICopy.text("Accounts", "Cuentas")
         case .calendars: PublicUICopy.text("Calendar", "Calendario")
         case .notifications: PublicUICopy.text("Reminders", "Recordatorios")
+        case .devices: PublicUICopy.text("Devices & shared meetings", "Dispositivos y reuniones compartidas")
         case .recording: PublicUICopy.text("Recording", "Grabación")
         case .browserCalls: PublicUICopy.text("Calls", "Llamadas")
         case .transcription: PublicUICopy.text("Transcription", "Transcripción")
@@ -57,6 +58,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .accounts: ["google", "microsoft", "account", "sign in"]
         case .calendars: ["calendar", "sync", "events"]
         case .notifications: ["notifications", "reminders", "alerts", "quiet hours"]
+        case .devices: ["shared", "pairing", "device", "phone", "handoff", "meeting"]
         case .recording: ["recording", "audio", "microphone", "automatic", "silence", "countdown", "stop"]
         case .browserCalls: ["calls", "browser", "whatsapp", "meet", "zoom", "teams"]
         case .transcription: ["transcription", "speech", "deepgram", "speechmatics", "language"]
@@ -140,6 +142,7 @@ struct SettingsView: View {
         case .accounts: AccountsSettingsView()
         case .calendars: CalendarSettingsView()
         case .notifications: NotificationsSettingsView()
+        case .devices: SharedMeetingsView()
         case .recording: RecordingSettingsView()
         case .browserCalls: BrowserCallsSettingsView()
         case .transcription: TranscriptionSettingsView()

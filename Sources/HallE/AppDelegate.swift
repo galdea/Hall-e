@@ -156,6 +156,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  components.scheme == "halle", components.host == "pair",
+                  components.path.isEmpty, components.fragment == nil,
+                  let items = components.queryItems, items.count == 1,
+                  items[0].name == "payload", let payload = items[0].value, !payload.isEmpty,
+                  (try? SharedMeetingCoordinator.parseInvitation(url.absoluteString)) != nil else {
+                continue
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            SharedMeetingWindowController.shared.show(invitation: url.absoluteString)
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         VaultAccess.stopAccessingVault()
     }

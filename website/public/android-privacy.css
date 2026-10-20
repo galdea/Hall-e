@@ -32,3 +32,6 @@
   .privacy-shell .footer { grid-template-columns: 1fr auto; align-content: center; gap: 6px 14px; }
   .privacy-shell .footer > a { border: 0; padding: 6px 0; margin-left: 0; }
 }
+
+.pair-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+.pair-actions button { min-height: 44px; justify-content: center; }

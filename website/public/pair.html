@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#080e10">
+  <meta name="description" content="Open a Hall-e device-pairing invitation on your phone or Mac.">
+  <link rel="icon" href="/assets/hall-e-mark.png" type="image/png">
+  <link rel="stylesheet" href="/styles.css?v=6">
+  <link rel="stylesheet" href="/android-privacy.css?v=1">
+  <script src="/pair.js" defer></script>
+  <title>Pair Hall-e devices</title>
+</head>
+<body>
+  <div class="site-shell privacy-shell">
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Hall-e home">
+        <span class="brand-portrait"><img src="/assets/hall-e-mark.png" width="44" height="44" alt=""></span>
+        <span>HALL<span class="brand-dash">—</span>E<span class="brand-period">.</span></span>
+      </a>
+      <span class="masthead-caption">PRIVATE DEVICE PAIRING</span>
+    </header>
+    <main class="privacy-main">
+      <a class="privacy-back" href="/">← Hall-e home</a>
+      <p class="privacy-eyebrow">SHARED MEETINGS · INVITATION</p>
+      <h1>Pair Hall-e devices</h1>
+      <p class="privacy-lede">This page reads the invitation fragment in your browser only. It does not send the invitation to a website or analytics service.</p>
+
+      <section aria-labelledby="invitation-title">
+        <h2 id="invitation-title">Your invitation</h2>
+        <p id="invite-status" role="status" aria-live="polite">Checking the invitation…</p>
+        <div id="invite-actions" hidden>
+          <p>Invitations work once and expire after 10 minutes. Only connect a device you trust. Hall-e will ask you to confirm in the app.</p>
+          <div class="pair-actions">
+            <button id="open-halle" class="download-button primary" type="button">Open Hall-e</button>
+            <button id="copy-invitation" class="download-button secondary" type="button">Copy invitation link</button>
+          </div>
+          <p class="pair-fallback">If Hall-e does not open, open Hall-e on Android and choose <strong>Shared sessions</strong>, or open Hall-e on Mac and choose <strong>Devices &amp; shared meetings</strong> in Settings. Paste the copied invitation. Do not share this invitation in a public place.</p>
+        </div>
+      </section>
+      <section>
+        <h2>What pairing shares</h2>
+        <p>Paired devices can share meeting titles, project names, optional meeting links, times, and recording-segment status. These meeting details are encrypted between paired devices. The coordinator can see device names and IDs, meeting/session IDs, recording lease state, and segment device/timing/status metadata. It never receives audio.</p>
+        <p>Recording starts only after someone acts in Hall-e on the device that will record, grants microphone access, and confirms the recording notice. Audio stays on that device.</p>
+      </section>
+      <p class="privacy-contact">If Hall-e does not open, open Shared sessions on Android or Devices &amp; shared meetings in Mac Settings, then paste the invitation.</p>
+    </main>
+    <footer class="footer">
+      <span class="footer-note">On your devices. On your terms.</span>
+      <a href="/">Home</a>
+      <a href="/android-privacy.html">Privacy</a>
+    </footer>
+  </div>
+</body>
+</html>

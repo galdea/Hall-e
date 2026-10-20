@@ -1,6 +1,6 @@
 # Hall-e for Android — Google Play listing draft (English, United States)
 
-This is the calendar companion for Hall-e. It works on its own and does not connect or sync with Hall-e for Mac.
+This is the calendar companion for Hall-e. The published 0.1.0 release is local-only. The optional recording and shared-meeting features below are planned for 0.2.0; shared workspaces can coordinate selected meeting details with paired Hall-e devices, including Hall-e for Mac.
 
 ## Store listing
 
@@ -20,9 +20,9 @@ This is the calendar companion for Hall-e. It works on its own and does not conn
   Choose a reminder at the meeting start, 1, 5, 10, 15, or 30 minutes beforehand, or set a custom lead time. If enabled, the morning overview appears the first time you open Hall-e from 4:00 a.m. until noon.
 
   **Your calendar stays on your phone**
-  Hall-e reads only the calendars you select. Calendar entries, projects, notes, and reminder settings are stored locally. There is no Hall-e account, network connection, Mac sync, or background service. Sharing a note is always an action you start.
+  Hall-e reads only the calendars you select. Calendar entries, notes, and reminder settings stay local. If you choose to pair a shared workspace, selected meeting titles, optional project names or meeting links, and scheduled times are encrypted on your phone and sent with coordination metadata to Hall-e's coordinator for paired devices. Calendar IDs, attendee lists, full calendar records, and audio are not uploaded. This is not automatic calendar, notes, project, or audio sync. There is no Hall-e account system.
 
-  Hall-e does not record meetings or audio, and it does not transcribe conversations. It does not request microphone, contacts, or location access.
+  Optional recording captures audio from this phone's microphone only after you choose to record and grant permission. Android or another audio app may affect microphone capture; it may not capture remote participants or other apps. Audio stays on this phone and is never sent to the coordinator. Hall-e does not transcribe conversations or request contacts or location access.
 
   Android controls calendar permission, notification permission, and exact-alarm access. If a permission is off, reminders may not appear or may arrive later than requested. The morning overview is shown when you open Hall-e from 4:00 a.m. until noon; Android may not launch the app for you before you open it.
 

@@ -21,7 +21,7 @@ enum RecordingSourceKind: String, Codable {
 }
 
 enum RecordingStopReason: String, Codable {
-    case manual, scheduledEnd, sourceEnded, silencePrompt, recorderFinished, recorderFailed
+    case manual, scheduledEnd, sourceEnded, silencePrompt, recorderFinished, recorderFailed, sharedSessionEnded
 }
 
 /// Metadata for one recording, linked to a unified event and its Obsidian note.
@@ -64,6 +64,8 @@ struct RecordingSession: Codable, Identifiable {
     var audioCaptureNotice: String?
     /// Explicitly selected app; nil for microphone-only and older recordings.
     var capturedAppBundleID: String?
+    /// Shared metadata links segments; the audio remains on its recording device.
+    var sharedSessionID: String?
     /// This recording's folder relative to `AppPaths.recordingsDir`, e.g.
     /// `Accurate/2026-08-04 1801 - Revisión de resultados - Sebastián`.
     /// Recordings are filed under their thematic project and renamed once the

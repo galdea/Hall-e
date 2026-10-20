@@ -158,7 +158,7 @@ with open(output_path, "wb") as destination:
 PY
 plutil -lint "$TEMP/app-entitlements.plist" >/dev/null || fail "Generated signing entitlements are not a valid plist."
 
-VERSION="${VERSION:-0.4.0}"
+VERSION="${VERSION:-0.5.0}"
 ARCH="${ARCH:-$(uname -m)}"
 BUILD_NUM="${BUILD_NUM:-$(git show -s --format=%ct HEAD 2>/dev/null || date -u +%Y%m%d%H%M)}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "VERSION must be X.Y.Z."

@@ -1,6 +1,6 @@
 # Hall-e para Android — borrador de ficha para Google Play (español latinoamericano)
 
-Esta es la app de calendario complementaria de Hall-e. Funciona por sí sola y no se conecta ni sincroniza con Hall-e para Mac.
+Esta es la app de calendario complementaria de Hall-e. La versión publicada 0.1.0 funciona solo de forma local. Las funciones opcionales de grabación y reuniones compartidas que se describen aquí están previstas para la versión 0.2.0; los espacios compartidos pueden coordinar datos seleccionados de reuniones con dispositivos vinculados de Hall-e, incluido Hall-e para Mac.
 
 ## Ficha de Play
 
@@ -20,9 +20,9 @@ Esta es la app de calendario complementaria de Hall-e. Funciona por sí sola y n
   Elige un aviso al inicio de la reunión, 1, 5, 10, 15 o 30 minutos antes, o define un intervalo personalizado. Si está activado, el resumen de la mañana aparece la primera vez que abres Hall-e desde las 4:00 hasta antes del mediodía.
 
   **Tu calendario permanece en el teléfono**
-  Hall-e lee solo los calendarios que seleccionas. Las entradas del calendario, los proyectos, las notas y los ajustes de recordatorios se guardan localmente. No requiere una cuenta de Hall-e, conexión de red, sincronización con Mac ni un servicio en segundo plano. Compartir una nota siempre requiere que tú lo inicies.
+  Hall-e lee solo los calendarios que seleccionas. Las entradas del calendario, las notas y los ajustes de recordatorios se guardan localmente. Si eliges vincular un espacio compartido, los títulos de reuniones seleccionados, nombres opcionales de proyectos o enlaces y horarios se cifran en el teléfono y se envían, junto con metadatos de coordinación, al servidor de Hall-e para los dispositivos vinculados. No se envían identificadores de calendario, listas de asistentes, registros completos del calendario ni audio. No hay sincronización automática de calendarios, notas, proyectos ni audio. Hall-e no tiene un sistema de cuentas.
 
-  Hall-e no graba reuniones ni audio, y no transcribe conversaciones. No solicita acceso al micrófono, a tus contactos ni a tu ubicación.
+  La grabación es opcional y captura audio solo del micrófono de este teléfono, después de que eliges grabar y concedes el permiso. Android u otra app puede afectar la captura; quizá no incluya a participantes remotos ni el audio de otras apps. El audio permanece en el teléfono y nunca se envía al servidor. Hall-e no transcribe conversaciones ni solicita acceso a contactos o ubicación.
 
   Android controla el permiso de calendario, el permiso para notificaciones y el acceso a alarmas exactas. Si alguno está desactivado, los recordatorios pueden no aparecer o llegar más tarde de lo previsto. El resumen de la mañana aparece cuando abres Hall-e desde las 4:00 hasta antes del mediodía; Android no necesariamente iniciará la app antes de que la abras.
 
