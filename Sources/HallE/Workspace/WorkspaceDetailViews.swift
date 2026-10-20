@@ -140,12 +140,15 @@ struct ProjectDetailView: View {
                             Text($0 == .actions ? PublicUICopy.text("Follow-ups", "Seguimientos") : $0.rawValue).tag($0)
                         }
                         if [.assistant, .activity, .sources, .rules].contains(tab) { Text(tab.rawValue).tag(tab) }
-                    }.pickerStyle(.segmented)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                     Menu("More") {
                         Button("Activity") { tab = .activity }
                         Button("Connected sources") { tab = .sources }
                         Button("Project matching rules") { tab = .rules }
                     }
+                    .fixedSize()
                 }
             }.padding(20)
             Divider(); projectContent
