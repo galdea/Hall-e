@@ -1,11 +1,12 @@
 # Mac App Store preparation
 
-Current review candidate: Hall-e **0.5.0**, build **2026102007**. Candidate
-validation and remaining gates are recorded in
-[`../validation/2026-10-20-hall-e-0.5.0.md`](../validation/2026-10-20-hall-e-0.5.0.md).
-The 2026102007 App Store QA build compiled and passed development-signature
-validation. The candidate has not been uploaded to Apple. Physical
-Mac/phone pairing and recording-handoff QA remains incomplete.
+Current source candidate: Hall-e **0.5.0**, commit `f5dde2f`. Build
+**2026102010** includes the asynchronous Keychain fixes and retirement of the
+OpenClaw integration. The direct build was installed and its startup, reminder and
+Transcription settings verified. The development-signed sandbox QA build also
+compiled and passed signature/profile validation; its installed UI QA is pending. See [candidate validation](../validation/2026-10-20-hall-e-0.5.0.md).
+App Store Connect has a saved 0.5.0 listing draft; no build or screenshots have
+been uploaded. Physical Mac/phone pairing and recording-handoff QA is incomplete.
 
 This is a separate distribution path from `scripts/release.sh`. Direct releases
 remain ad-hoc or Developer ID signed and are not changed by
@@ -27,23 +28,22 @@ browser/account OAuth flow itself has not been run. External-volume and revoked
 folder-permission cases remain untested. Signed build 2005's notification
 feedback check confirmed the UI reports “Delivered to Notification Center.”
 
-The earlier core sandbox and notification checks below are historical evidence
-from builds 2004–2005; they do not verify the shared-session handoff. Direct
-build 2026102007 was signed, installed at `/Applications/Hall-e.app`, and its
-process launched, with the prior install saved at
-`/Users/Gabriel/Hall-e/local-releases/20261020-shared/Hall-e-before-0.5.0.app`.
-The window could not be exposed for UI inspection. Its scoped startup log ends
-at `SecItemCopyMatching`; the cause is unknown. The current 2026102007 Store QA
-app compiled and passed signature validation; its new shared-device flow has
-not been verified in the sandbox. The 0.5.0
-Store build can be packaged as a review candidate after required QA. The remaining
-external-volume/revoked-access and full Google OAuth cases are documented QA
-limitations, not evidence that the complete feature matrix passed. Public App
-Store submission additionally requires the documented exact-SHA hosted release
-gate in [the CI policy](../ci-policy.md), final App Privacy answers based on
-actual provider configurations, real screenshots of the installed Store
-build, App Store Connect authorization and metadata, and an explicitly
-authorized upload/submission.
+The earlier core sandbox and notification checks above are historical evidence
+from builds 2004–2005. They do not verify the new shared-session flow. Direct
+build 2026102009 confirmed a responsive Today/shared-meetings UI after replacing
+synchronous shared-credential and credit-check Keychain reads. The final source
+also retires OpenClaw without deleting historical artifacts. **264 Swift Testing
+tests and 5 XCTest tests passed** on `f5dde2f`.
+
+Build 2026102010 direct and development-signed sandbox QA packaging passed.
+The installed direct app verified the retired setting is absent and preserved
+Speechmatics selection. A development-signed QA app is not an App Store upload package. The current sandbox startup, shared-meetings UI and
+Keychain paths need installed QA before signing off that gate. Public submission
+also requires exact-SHA hosted release validation, exact-candidate App Privacy
+answers, review metadata and real screenshots of the installed Store app.
+Transporter installation was blocked by automatic approval review; no upload
+has taken place. `apple-0.5-draft.png` is local proof of the listing only, not an
+uploaded screenshot.
 
 The source audit found these distribution-specific behaviors and remaining
 validation requirements before the gate may be set:
@@ -54,7 +54,7 @@ validation requirements before the gate may be set:
 | Chosen notes folders | App Store builds store and resolve a security-scoped bookmark for the selected folder, reuse one active scope while the app is running, stop it when replacing the selection or exiting, and ask the user to reselect when a legacy or revoked bookmark cannot be resolved. Direct builds keep their existing path fallback. | Build 2004 confirmed a moved folder still resolves after quit/relaunch and remains writable; legacy direct-edition configuration fails closed. External-volume access and revoked permission still need QA. |
 | Calendar | EventKit reads selected macOS calendars; Google Calendar uses OAuth with an HTTP callback listener bound to `127.0.0.1`. | Build 2004 Calendar permission and enumeration passed. The actual loopback server smoke passed callback code/state and HTTP 200 with the Store entitlements. Full Google browser/account OAuth flow remains untested. |
 | Recording audio | Microphone capture remains available. App Store builds disable process-tap recording and desktop/browser call detection; capture is microphone-only. | Build 2004 six-second microphone recording, playback, and moving the test recording to Trash passed. Do not advertise app-audio capture for the Store edition. |
-| OpenClaw reports | Store compilation disables local executable discovery and `Process` launching, the report pipeline fails closed, and Settings explains the distribution limit. | Verify the feature stays unavailable in an installed Store build. Direct downloads retain the integration. |
+| OpenClaw/Gemini reports | Retired from all Hall-e editions on 2026-10-20 because the integration was unavailable and unreliable. Current releases must not enqueue/retry report jobs or expose OpenClaw activation settings. Previously created report artifacts and historical schemas are preserved; generic configured AI providers and their separate consent remain independent. | Verify the retired pipeline cannot be invoked in the installed Store build, while legacy report artifacts remain readable and generic AI-provider controls continue to behave separately. |
 | Chrome integration | The Store edition does not bundle the Chrome native-messaging helper. Store builds disable the settings controls, native-message queue ingress, extension preparation, and manifest installation. | Verify Chrome integration remains unavailable in the signed installed Store build. |
 | Codex import | Store compilation removes the `~/.codex` path and importer body; coordinator methods reject refresh/link actions, and the UI offers explicit ChatGPT JSON/WhatsApp exports instead. ChatGPT ZIP extraction is disabled because the direct path uses an external process. | Verify no Codex-home access or external archive process occurs in the installed Store build. Direct downloads retain Codex and ZIP imports. |
 | Existing direct installs | Direct releases keep their existing app data location. Store app support is container-scoped; same-bundle-ID preferences carried over, and Keychain item access follows macOS signing identity/access-group rules. | Build 2004 verified the separate app container and preference carryover. Keychain visibility must be described according to the actual signing identity and access groups. |
@@ -118,7 +118,7 @@ Create the local QA app on a registered test Mac:
 STORE_PACKAGE_MODE=qa \
 STORE_QA_APP_IDENTITY='Apple Development: Name (TEAMID)' \
 STORE_QA_PROFILE='/secure/path/Hall-e-Mac-Development.provisionprofile' \
-VERSION=0.5.0 BUILD_NUM=2026102007 ./scripts/package-mac-app-store.sh
+VERSION=0.5.0 BUILD_NUM=2026102009 ./scripts/package-mac-app-store.sh
 ```
 
 Builds 2004 and 2005 cover launch, sandbox/container separation, macOS Calendar
@@ -135,7 +135,7 @@ STORE_SANDBOX_READY=1 \
 APPSTORE_APP_IDENTITY='3rd Party Mac Developer Application: Name (TEAMID)' \
 APPSTORE_INSTALLER_IDENTITY='3rd Party Mac Developer Installer: Name (TEAMID)' \
 APPSTORE_PROFILE='/secure/path/Hall-e-App-Store.provisionprofile' \
-VERSION=0.5.0 BUILD_NUM=2026102007 ./scripts/package-mac-app-store.sh
+VERSION=0.5.0 BUILD_NUM=2026102009 ./scripts/package-mac-app-store.sh
 ```
 
 The command creates a signed `.pkg` in `dist/`, validates its signatures,

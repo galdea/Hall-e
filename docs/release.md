@@ -1,6 +1,6 @@
 # Downloadable macOS releases
 
-The current macOS candidate is **0.5.0, build 2026102007**; the Android
+The current macOS candidate is **0.5.0, build 2026102010**; the Android
 candidate is **0.2.0, version code 2**. These are candidates, not public
 releases. See [the current validation record](validation/2026-10-20-hall-e-0.5.0.md)
 for verified checks and outstanding upload, store, and device-QA gates.
