@@ -1,17 +1,22 @@
 # Mac App Store preparation
 
-Current source candidate: Hall-e **0.5.0**, commit `f5dde2f`. Build
-**2026102010** includes the asynchronous Keychain fixes and retirement of the
-OpenClaw integration. The final Store QA app was installed at
-`/Applications/Hall-e Store QA.app`, launched, restored its Keychain access to
-the live workspace, and passed bidirectional paired-Pixel recording-handoff QA.
+Current source candidate: Hall-e **0.5.0**, commit `a92732b`. Build
+**2026102011** adds a narrow-window Project navigation layout correction to the
+asynchronous Keychain fixes and retirement of the OpenClaw integration.
+Functional Store QA was completed on build 2010; build 2011 preserves that
+behavior and passed fresh compilation, signature checks and rendered Projects
+verification. The final Store QA app is installed at
+`/Applications/Hall-e Store QA.app`. Build 2010 restored Keychain access to
+the live workspace and passed bidirectional paired-Pixel recording-handoff QA.
 The distribution-signed package was signature- and payload-validated, but has
 not been uploaded. See [candidate validation](../validation/2026-10-20-hall-e-0.5.0.md).
 App Store Connect has saved English and Mexican Spanish listing copy, review
 notes, and contact details. App Privacy is published with six data types,
 purpose App Functionality, linked to user/device set to Yes, and tracking set to
-No (UI confirmation: “Published ... Gabriel”). No build or screenshots have
-been uploaded.
+No (UI confirmation: “Published ... Gabriel”). A genuine Projects screenshot
+from installed build 2011 is uploaded in English and inherited by Mexican
+Spanish. The owner selected free pricing worldwide: 175 countries/regions are
+set to Available on App Release, with age 13+. No build has been uploaded.
 
 This is a separate distribution path from `scripts/release.sh`. Direct releases
 remain ad-hoc or Developer ID signed and are not changed by
@@ -46,14 +51,14 @@ off and Apple Speech selected; Speechmatics and AI were restored afterward with
 the user's confirmation. No cloud QA upload was performed.
 
 The direct build verified that the retired setting is absent and preserved
-Speechmatics selection. Final Store QA build 2010 passed installed startup,
+Speechmatics selection. Store QA build 2010 passed installed startup,
 Keychain, live-workspace and paired-device checks. The distribution-signed
-0.5.0 package was validated and has SHA-256
-`fa76bd23706c5aed48f064a2735f7e59c8a761d947cc156d264d6b9ff9585c5f`; it has
+0.5.0/build 2011 package was validated and has SHA-256
+`7c8dddb4a4ea1fd29872c218561bb93374977ddd8d715e5a4a18d5938f4ff0f1`; it has
 not been uploaded. English and Mexican Spanish listing copy, review notes and
 contacts are saved. App Privacy is published for six data types, with purpose
-App Functionality, linked to user/device Yes, and tracking No. No screenshots
-or build have been uploaded. The repository has no separate hosted
+App Functionality, linked to user/device Yes, and tracking No. The genuine
+Projects screenshot is uploaded; the build remains local. The repository has no separate hosted
 workflow for Mac App Store packaging or validation. The existing macOS GitHub
 workflow is for direct-download packages and runs only on a `vX.Y.Z` tag or an
 explicit manual dispatch; no hosted run has been made for this candidate.
@@ -162,10 +167,12 @@ The command creates a signed `.pkg` in `dist/`, validates its signatures,
 payload, `/Applications` install destination, app identifier and version, and
 writes a SHA-256 checksum. It **does not upload**. The distribution-signed app
 may not launch directly before App Review, so do not use it as the local QA
-artifact. Installed Store QA passed for build 2010 as described above. Public
-submission still requires App Privacy answers based on real provider settings,
-real screenshots, App Store Connect authorization/metadata, and an authorized
-upload through Transporter or App Store Connect. The direct-download GitHub workflow remains
+artifact. Installed functional Store QA passed for build 2010, and the sole
+build 2011 layout delta passed fresh rendered verification as described above.
+Public submission still requires final App Store Connect/account compliance
+checks and an authorized upload through Transporter or App Store Connect. App Privacy
+is published for six data types; verify that declaration against actual
+provider settings before submission. The direct-download GitHub workflow remains
 available on its existing tag/manual triggers, but it does not validate or
 package this Store build. Hosted Actions are to remain undispatched until the
 included allowance renews. When the separate direct-download release is ready,
@@ -173,17 +180,15 @@ its existing release workflow still applies to that distribution path.
 
 ## Store listing material
 
-The draft localizations are in [`listing-en-US.md`](listing-en-US.md) and
-[`listing-es-CL.md`](listing-es-CL.md). The live App Store name is not reserved;
-check its availability in App Store Connect. The selected support link is the
-repo's issue form and the privacy link is the existing policy. Before review,
-make sure the issue form remains an appropriate customer-support path and
-update the policy to explain the App Store container and the separation from
-direct-release data accurately.
+The saved English and Mexican Spanish listings use copy from
+[`listing-en-US.md`](listing-en-US.md) and [`listing-es-CL.md`](listing-es-CL.md).
+The selected support link is the repository's issue form; the privacy link
+points to the updated policy. App Store Connect contains the Hall-e app entry
+and version 0.5.0 metadata, but no uploaded build.
 
-Screenshots are intentionally not fabricated. Capture the actual signed,
-installed App Store build after the UI and sandbox audit is complete. Do not
-reuse preview images as product screenshots.
+The genuine Projects screenshot from the signed, installed build 2011 is
+uploaded in English and inherited by the Spanish listing. Its capture and
+dimensions are recorded in [screenshot provenance](mac-screenshots/provenance.md).
 
 ## Primary Apple references
 

@@ -1,8 +1,7 @@
 # Google Play Console: App content and Data Safety
 
 Source-backed preparation for the Android release. This records product behavior
-and recommended answers; owner-only declarations are marked for confirmation.
-Do not treat this as a legal attestation.
+and the owner's selected Console declarations. It is not a legal attestation.
 
 ## App details
 
@@ -17,15 +16,15 @@ Do not treat this as a legal attestation.
   APK/AAB and lint passed with 14 Android tests, and the APK was installed on
   the Pixel with version code 3 confirmed. The paired workspace remained
   preserved and refresh no longer showed a false handoff state. Google Play's
-  Internal testing track is Active for code 3, available to the existing
-  owner-only tester list, Released Oct 20 at 2:21 AM, and Not reviewed. This is
-  an internal release, not a public production release.
+  Internal testing track is Active for code 3 since Oct 20 at 2:21 AM, available
+  to the unchanged owner-only tester list. This is an internal release, not a
+  public production release.
 - **Minimum Android:** API 31 (Android 12); **target/compile:** API 36.
 - **Suggested category:** Productivity, matching the listing draft.
 - **Ads:** No ads are implemented and there is no ads SDK in the app dependencies.
   Answer **No** if the release candidate remains unchanged.
-- **Account/app access:** The app has no sign-in, Hall-e account, or gated screen;
-  no username, password, purchase, or trial is needed. For Console's access
+- **Account/app access:** No sign-in, Hall-e account, external account login,
+  username, password, purchase, or trial is needed. For Console's access
   instructions, answer **Yes** because the optional paired-workspace feature
   requires a second device. Provide these setup steps, without credentials:
   install Hall-e on two devices; on the first, create a workspace (no account
@@ -33,12 +32,32 @@ Do not treat this as a legal attestation.
   the invitation explicitly; create a quick meeting and explicitly choose
   Record, then stop it. The local calendar and meeting features remain usable
   without pairing.
-- **Support and privacy:** Use the owner's temporary public support email
+- **Support and privacy:** The published public support email is
   `gabriel.aldea@gmail.com`; do not use or claim `hall-e.com`. The Play privacy
-  policy URL `https://hall-e.pages.dev/android-privacy.html` is saved and
-  awaiting global publication review.
+  policy URL `https://hall-e.pages.dev/android-privacy.html` is saved. The
+  Publishing overview says: “Your changes are now in review. We may find
+  additional issues when reviewing your app.” The owner confirmed sending 15
+  changes, and Play's quick checks completed successfully.
+- **Target audience:** Owner-selected ages 13–15, 16–17, and 18+; do not include
+  children under 13.
+- **Content rating:** IARC questionnaire completed and assigned Everyone,
+  PEGI 3, and 3+. The “Users Interact” descriptor reflects private device
+  pairing. Workspace access is invitation-only and revocable; there is no
+  public user-generated content.
 
-## Data Safety: evidence and candidate responses
+## Data Safety: saved declaration, changes in review
+
+The owner authorized and saved the Data Safety form. It declares **Device or
+other IDs** (collected, optional, non-ephemeral; App functionality and Fraud
+prevention, security, and compliance purposes) and **App activity → App
+interactions** (collected, optional, non-ephemeral; App functionality purpose).
+It records **no reportable sharing**, applying the service-provider and
+user-directed transfer exceptions to the coordinator and explicit shares.
+Encryption in transit is declared **Yes**. There is no account system or
+external account login, and no data-deletion request route is provided. The form
+is included in the submitted Play changes, now in review after quick checks
+completed successfully. Update the declaration if a data flow or provider
+changes.
 
 The manifest declares `INTERNET`, `READ_CALENDAR`, `POST_NOTIFICATIONS`,
 `SCHEDULE_EXACT_ALARM`, `RECEIVE_BOOT_COMPLETED`, `RECORD_AUDIO`,
@@ -64,25 +83,23 @@ selected meeting-detail coordination, not automatic full-calendar, notes,
 project, or audio synchronization. Paired devices may include Hall-e for Mac.
 
 - **Data collection:** The shared-workspace path transmits data to the
-  developer-operated Hall-e coordinator when users explicitly create/join and
-  share sessions. The coordinator stores encrypted meeting payloads and
-  plaintext coordination metadata listed above. The service is hosted on
-  Cloudflare infrastructure; verify Cloudflare's role and any network/security
-  log retention for the production account before final disclosures. Prepare
-  applicable Data Safety declarations for the exact transmitted data types,
-  recipients, and retention, and verify against the final deployment before
-  publication. The unpaired calendar, notes, projects, and recordings remain
-  local.
-- **Data sharing:** Users explicitly share encrypted meeting details with other
-  devices in their workspace. The coordinator processes encrypted session
-  payloads and lease/device metadata. A user can also explicitly share a
+  developer-operated coordinator when users create or join a workspace. The
+  coordinator receives encrypted meeting payloads and plaintext coordination
+  metadata. The saved declaration covers Device or other IDs and App
+  interactions; local-only data and end-to-end encrypted meeting details are
+  not included as collected. The unpaired calendar, notes, projects, and
+  recordings remain local.
+- **Data sharing:** The saved form records no reportable sharing under the
+  owner-approved service-provider and user-directed transfer exceptions. Users
+  explicitly share encrypted meeting details with other devices in their
+  workspace; the coordinator processes encrypted session payloads and
+  lease/device metadata. A user can also explicitly share a
   Markdown note or export a completed recording (or an interrupted partial
   recording file) through Android's Sharesheet after choosing a destination.
   The chosen receiving app/service may process or retain the file under its own
   practices. These are user-directed shares, not automatic uploads or
-  coordinator transfers. Include this audio-export path in the owner's Data
-  Safety classification; do not interpret “not sent to the coordinator” as
-  “never shared.” [Google Play Data safety guidance](https://support.google.com/googleplay/android-developer/answer/10787469?hl=en).
+  coordinator audio transfers. Do not interpret “not sent to the coordinator”
+  as “never shared.” [Google Play Data safety guidance](https://support.google.com/googleplay/android-developer/answer/10787469?hl=en).
 - **Security in transit:** Coordinator requests use HTTPS; meeting details are
   also encrypted on the client before transmission. Device tokens and workspace
   keys are protected at rest with Android Keystore. Hall-e does not upload
@@ -91,11 +108,12 @@ project, or audio synchronization. Paired devices may include Hall-e for Mac.
   Sharesheet; the selected app/service controls further handling.
 - **Data retention/deletion:** Invitations are single-use and expire after 10
   minutes. Device credentials expire within 90 days. Coordinator workspace data
-  expires after seven days without activity; confirm expiry enforcement against
-  the deployed service. Leaving revokes that device's future access, but does
-  not erase data cached on other paired devices. The owner must revoke other
-  devices before leaving. Confirm whether the Console requires a deletion-
-  request URL or contact process for this workspace data.
+  expires after seven days without activity. Active workspaces may persist
+  longer; device-token expiry does not delete workspace data. Leaving revokes
+  that device's future access, but does not erase data cached on other paired
+  devices. The owner must revoke other devices before leaving. No route is
+  provided for users to request deletion of coordinator data; the saved form
+  does not claim a deletion-request mechanism.
 
 The candidate privacy notice is `website/public/android-privacy.html`, with its
 source draft at `docs/store/android/privacy-policy.md`. Both distinguish the
@@ -124,24 +142,32 @@ remained preserved and refresh no longer showed a false handoff state. The
 null-handoff/poll-drop fix was checked by tests and UI refresh. APK SHA-256:
 `d8bfbbcfd48e80dbbba033a57d6159cc88f10d08f32adfe85cb781f646fcbc7a`; AAB
 SHA-256: `4109e0ae8d2c4645217f248c4a38564b1a69512b34b5dfa4f9fb0ce3c7ca7c49`.
-Google Play's Internal testing track is Active for code 3, available to the
-existing owner-only tester list, Released Oct 20 at 2:21 AM, and Not reviewed.
-This is internal testing, not a public production release. The public
-production-access gate still requires the applicable closed test of 12 testers
-for 14 days; preserve that gate.
+Google Play's Internal testing track is Active for code 3 since Oct 20 at 2:21
+AM, available to the unchanged owner-only tester list. Closed testing release 1
+for code 3 is configured for Chile only, with the same one-owner tester list;
+it is not active and is not public. The public production-access gate still
+requires 12 testers for 14 days after a qualifying closed test begins.
 
-## Owner confirmation required
+## Owner-confirmed Console settings
 
-- Target audience is owner-confirmed as ages **13–15, 16–17, and 18+**; do not
-  include children under 13. Select those age groups in Play Console. This
-  audience decision does not by itself answer the content-rating questionnaire
-  or any other policy classification.
-- Complete Google's content-rating questionnaire from the released app and
-  intended audience. Source review shows a calendar/productivity utility with
-  no ads, public posting, or in-app account system; do not infer all rating
-  answers from that alone.
-- Check that the proposed support URL is reachable and the privacy notice
-  matches the final signed release before publication.
+- Target audience: ages **13–15, 16–17, and 18+**; under 13 excluded.
+- IARC: **Everyone / PEGI 3 / 3+**, with “Users Interact” for private,
+  invitation-only pairing; no public user-generated content.
+- Support email `gabriel.aldea@gmail.com` is published. The privacy policy URL
+  is saved in Play Console. The Publishing overview says: “Your changes are now
+  in review. We may find additional issues when reviewing your app.” Quick
+  checks completed successfully.
+- English and Spanish listing text and screenshots 03 and 04 are saved in Play
+  Console for code 3. The app icon and feature graphic are marked AI-generated;
+  the real QA screenshots are not AI-generated. The owner explicitly confirmed
+  sending 15 changes, and the Publishing overview says: “Your changes are now
+  in review. We may find additional issues when reviewing your app.” Quick
+  checks completed successfully. Closed testing release 1 is configured for Chile only with
+  the unchanged owner-only tester list (one user); it is not active or public.
+  Initial Play setup is complete, including IARC, Data Safety, English and
+  Spanish (es-419) listing entries, and microphone foreground-service and
+  Advertising ID = No declarations. Do not treat the closed test as active or
+  the listing as publicly available until Play confirms those states.
 
 ## Source evidence
 
@@ -157,3 +183,5 @@ for 14 days; preserve that gate.
   request timing, note-share fields, and user-directed external link opening.
 - `docs/store/android/listing-en-US.md` and
   `docs/store/android/listing-es-419.md` — listing claims and suggested category.
+- `docs/store/android/screenshots/provenance.md` — provenance for screenshot
+  candidates 03 and 04, selected in place of stale screenshot 01.

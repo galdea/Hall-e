@@ -1,9 +1,9 @@
 # Downloadable macOS releases
 
-The current macOS candidate is **0.5.0, build 2026102010**; the Android
-candidate is **0.2.0, version code 2**. These are candidates, not public
+The current macOS candidate is **0.5.0, build 2026102011**; the Android
+candidate is **0.2.0, version code 3**. These are candidates, not public
 releases. See [the current validation record](validation/2026-10-20-hall-e-0.5.0.md)
-for verified checks and outstanding upload, store, and device-QA gates.
+for verified checks, the active Android internal track, and outstanding store gates.
 
 Hall-e ships as a native drag-to-Applications DMG plus a ZIP alternative. It
 targets macOS 14.0 and later; system audio capture requires 14.2+. Choose `arm64`

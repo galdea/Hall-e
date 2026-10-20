@@ -2,10 +2,12 @@
 
 Esta es la app de calendario complementaria de Hall-e. La versión original 0.1.0 funciona solo de forma local. La versión 0.2.0/código 3, que agrega grabación y reuniones compartidas opcionales, está disponible por ahora solo para las personas incluidas por el propietario en la prueba interna de Google Play; este borrador describe esa versión para una futura publicación pública. Los espacios compartidos coordinan datos seleccionados de reuniones con dispositivos vinculados de Hall-e, incluido Hall-e para Mac.
 
+Las fichas completas en inglés y español y las capturas reales `03-shared-sessions.png` y `04-local-recording.png` están guardadas en Play Console para la versión candidata 0.2.0/código 3. En Console, el ícono de la app y el gráfico destacado están marcados como generados con IA. El propietario confirmó explícitamente el envío de 15 cambios. Publishing overview indica: “Your changes are now in review. We may find additional issues when reviewing your app.” Las comprobaciones rápidas terminaron correctamente. La versión 1 de la prueba cerrada para el código 3 está configurada solo para Chile y conserva la lista del propietario, con una persona; todavía no está activa ni es pública. La prueba interna del código 3 sigue activa y no es una publicación pública.
+
 ## Ficha de Play
 
 - **Nombre de la app (29/30):** Hall-e: Reuniones y Proyectos
-- **Descripción breve (76/80):** Reuniones al instante, grabación local, coordinación opcional entre móviles.
+- **Descripción breve (73/80):** Reuniones al instante, grabación local y sesiones compartidas con tu Mac.
 - **Descripción completa (menos de 4.000 caracteres):**
 
   Organiza tu día con más calma y claridad con Hall-e.
@@ -28,14 +30,14 @@ Esta es la app de calendario complementaria de Hall-e. La versión original 0.1.
 
   Android controla el permiso de calendario, el permiso para notificaciones y el acceso a alarmas exactas. Si alguno está desactivado, los recordatorios pueden no aparecer o llegar más tarde de lo previsto. El resumen de la mañana aparece cuando abres Hall-e desde las 4:00 hasta antes del mediodía; Android no necesariamente iniciará la app antes de que la abras.
 
-- **Contacto de soporte:** gabriel.aldea@gmail.com (correo público temporal; Hall-e no afirma ser propietario del dominio hall-e.com).
-- **URL de la política de privacidad:** https://hall-e.pages.dev/android-privacy.html (guardada en Play Console y pendiente de revisión para publicación global). La `PRIVACY.md` principal describe la app para Mac y no reemplaza la información de Android.
+- **Contacto de soporte:** gabriel.aldea@gmail.com (correo público de soporte publicado; Hall-e no afirma ser propietario del dominio hall-e.com).
+- **URL de la política de privacidad:** https://hall-e.pages.dev/android-privacy.html (guardada en Play Console; Publishing overview indica que los cambios están en revisión y las comprobaciones rápidas terminaron correctamente). La `PRIVACY.md` principal describe la app para Mac y no reemplaza la información de Android.
 - **Categoría sugerida:** Productividad
 - **Etiquetas sugeridas:** Calendario, Productividad
 
 ## Recursos gráficos
 
-- **Ícono:** [`hall-e-play-icon-512.png`](hall-e-play-icon-512.png), generado al redimensionar el ícono existente en `docs/assets/hall-e.png`.
-- **Gráfico destacado:** [`feature-graphic-1024x500.png`](feature-graphic-1024x500.png), compuesto con el ícono y los colores de marca de Hall-e. No contiene pantallas simuladas ni capturas inventadas.
+- **Ícono:** [`hall-e-play-icon-512.png`](hall-e-play-icon-512.png), marcado en Play Console como generado con IA.
+- **Gráfico destacado:** [`feature-graphic-1024x500.png`](feature-graphic-1024x500.png), marcado en Play Console como generado con IA. No contiene pantallas simuladas ni capturas inventadas.
 - **Fuente editable y pasos para regenerar:** [`generate-assets.py`](generate-assets.py) (Python 3 y Pillow).
-- **Capturas de pantalla:** Toma capturas reales de una versión Android en ejecución antes de enviar la ficha. Este paquete no incluye mockups de pantallas.
+- **Capturas:** [`03-shared-sessions.png`](screenshots/03-shared-sessions.png) y [`04-local-recording.png`](screenshots/04-local-recording.png) son capturas reales de QA, recortadas y redimensionadas de forma mecánica; su procedencia está en [`provenance.md`](screenshots/provenance.md). Están guardadas en la ficha de Play; no son imágenes generadas con IA ni están etiquetadas como tales. Usa estas en lugar de la captura 01 obsoleta.

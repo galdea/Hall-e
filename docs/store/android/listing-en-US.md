@@ -2,6 +2,8 @@
 
 This is the calendar companion for Hall-e. The original 0.1.0 build is local-only. Version 0.2.0/code 3, which adds optional recording and shared meetings, is currently available only to the owner’s Google Play internal testers; this listing draft describes that candidate for a future public release. Shared workspaces coordinate selected meeting details with paired Hall-e devices, including Hall-e for Mac.
 
+The full English and Spanish listings and real screenshots `03-shared-sessions.png` and `04-local-recording.png` are saved in Google Play Console for the 0.2.0/code 3 candidate. The app icon and feature graphic are marked AI-generated in Console. The owner explicitly confirmed sending 15 changes. The Publishing overview says: “Your changes are now in review. We may find additional issues when reviewing your app.” Quick checks completed successfully. Closed testing release 1 for code 3 is configured for Chile only with the unchanged owner-only tester list (one user); it is not active or public. The internal code 3 track remains active and is not a public release.
+
 ## Store listing
 
 - **App name (27/30):** Hall-e: Meetings & Projects
@@ -28,14 +30,14 @@ This is the calendar companion for Hall-e. The original 0.1.0 build is local-onl
 
   Android controls calendar permission, notification permission, and exact-alarm access. If a permission is off, reminders may not appear or may arrive later than requested. The morning overview is shown when you open Hall-e from 4:00 a.m. until noon; Android may not launch the app for you before you open it.
 
-- **Support contact:** gabriel.aldea@gmail.com (temporary public support email; Hall-e does not claim ownership of hall-e.com).
-- **Privacy policy URL:** https://hall-e.pages.dev/android-privacy.html (saved in Play Console and awaiting global publication review). The existing root `PRIVACY.md` describes the Mac app and is not a substitute for Android disclosures.
+- **Support contact:** gabriel.aldea@gmail.com (published public support email; Hall-e does not claim ownership of hall-e.com).
+- **Privacy policy URL:** https://hall-e.pages.dev/android-privacy.html (saved in Play Console; Publishing overview says changes are in review and quick checks completed successfully). The existing root `PRIVACY.md` describes the Mac app and is not a substitute for Android disclosures.
 - **Category suggestion:** Productivity
 - **Tags suggestion:** Calendar, Productivity
 
 ## Graphics
 
-- **App icon:** [`hall-e-play-icon-512.png`](hall-e-play-icon-512.png), made by resizing the existing Hall-e icon at `docs/assets/hall-e.png`.
-- **Feature graphic:** [`feature-graphic-1024x500.png`](feature-graphic-1024x500.png), composed from the existing icon and Hall-e brand colors. It contains no simulated app screen or fabricated screenshot.
+- **App icon:** [`hall-e-play-icon-512.png`](hall-e-play-icon-512.png), marked AI-generated in Play Console.
+- **Feature graphic:** [`feature-graphic-1024x500.png`](feature-graphic-1024x500.png), marked AI-generated in Play Console. It contains no simulated app screen or fabricated screenshot.
 - **Editable source and regeneration instructions:** [`generate-assets.py`](generate-assets.py) (Python 3 and Pillow).
-- **Screenshots:** Capture genuine screens from a running Android build before store submission. No screenshot mockups are included in this package.
+- **Screenshots:** [`03-shared-sessions.png`](screenshots/03-shared-sessions.png) and [`04-local-recording.png`](screenshots/04-local-recording.png) are real QA captures, mechanically cropped/resized with provenance in [`provenance.md`](screenshots/provenance.md). They are saved in the Play listing; they are not AI-generated or labeled as such. Use these instead of stale screenshot 01.

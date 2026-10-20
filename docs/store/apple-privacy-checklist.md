@@ -1,6 +1,6 @@
 # Apple App Privacy submission checklist (Mac App Store)
 
-Use this as a source-based review aid, not as a completed App Store Connect declaration. Apple requires the label to cover data collected by the app **and third-party partners**. “Collect” includes sending data off-device where the app or partner can access it beyond the time needed to serve the live request. Do not choose “Data Not Collected” just because Hall-e has no developer-operated backend or cloud features are optional. [Apple: App Privacy Details](https://developer.apple.com/go/?id=info-1) · [Manage app privacy](https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy)
+App Privacy is published in App Store Connect for six data types. Use this as a source-based review aid to verify that declaration against the exact candidate and current provider settings; it is not a substitute for that evidence. Apple requires the label to cover data collected by the app **and third-party partners**. “Collect” includes sending data off-device where the app or partner can access it beyond the time needed to serve the live request. Do not choose “Data Not Collected” just because Hall-e has no developer-operated backend or cloud features are optional. [Apple: App Privacy Details](https://developer.apple.com/go/?id=info-1) · [Manage app privacy](https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy)
 
 ## What the Mac App Store build enables
 
