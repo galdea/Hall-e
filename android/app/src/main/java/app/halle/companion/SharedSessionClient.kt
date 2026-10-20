@@ -500,8 +500,10 @@ class SharedSessionClient(context: Context) {
         fun setDebugEndpoint(context: Context, candidate: String) {
             check(BuildConfig.DEBUG) { "Coordinator endpoint override is debug-only." }
             val endpoint = validateEndpoint(candidate, true)
-            context.applicationContext.getSharedPreferences(DEBUG_ENDPOINT_PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_ENDPOINT, endpoint).apply()
+            check(context.applicationContext.getSharedPreferences(DEBUG_ENDPOINT_PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_ENDPOINT, endpoint).commit()) {
+                "Could not save the debug coordinator endpoint."
+            }
         }
 
         fun currentEndpoint(context: Context): String {

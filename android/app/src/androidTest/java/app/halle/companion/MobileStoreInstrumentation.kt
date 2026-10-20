@@ -20,17 +20,25 @@ class MobileStoreInstrumentation : Instrumentation() {
     private var reminderOnly = false
     private var micStopOnly = false
     private var localReminderOnly = false
+    private var configureSharedSessionE2E = false
+    private var existingE2ERecordingId: String? = null
+    private var pauseEmptyTestTransferId: String? = null
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         reminderOnly = arguments?.getString("screen-reminder") == "true"
         micStopOnly = arguments?.getString("mic-stop") == "true"
         localReminderOnly = arguments?.getString("local-reminder") == "true"
+        configureSharedSessionE2E = arguments?.getString("configure-shared-e2e") == "true"
+        existingE2ERecordingId = arguments?.getString("existing-test-recording")
+        pauseEmptyTestTransferId = arguments?.getString("pause-empty-test-transfer")
         start()
     }
 
     override fun onStart() {
         try {
             if (reminderOnly) { verifyScreenReminder(); return }
+            if (pauseEmptyTestTransferId != null) { pauseNamedEmptyTestTransfer(pauseEmptyTestTransferId!!); return }
+            if (configureSharedSessionE2E) { configureSharedCoordinatorForE2E(existingE2ERecordingId); return }
             if (localReminderOnly) { verifyLocalDraftReminder(); return }
             if (micStopOnly) { verifyMicNotificationStop(); return }
             verifyTransferSchedulingPermission()
@@ -44,6 +52,95 @@ class MobileStoreInstrumentation : Instrumentation() {
             finish(1, Bundle().apply { putString("failure", failure.toString()) })
             throw failure
         }
+    }
+
+    /** Opt-in only: points the isolated E2E app at the adb-reversed local coordinator. */
+    private fun configureSharedCoordinatorForE2E(existingRecordingId: String?) {
+        check(BuildConfig.DEBUG && targetContext.packageName.endsWith(".e2e")) {
+            "Local coordinator setup is restricted to the isolated E2E debug app."
+        }
+        check(!SharedSessionClient(targetContext).paired()) {
+            "The E2E app already has workspace credentials; preserve them and use a clean E2E install."
+        }
+        val store = MobileMeetingStore(targetContext)
+        val meetings = store.list(includeTrashed = true)
+        check(store.loadError == null && store.activeRecording() == null && !recordingServiceIsRunning()) {
+            "The isolated E2E app has unreadable store or active recording state; it was left untouched."
+        }
+        val transferPrefs = targetContext.getSharedPreferences("phone-audio-transfer", Context.MODE_PRIVATE)
+        val captureEntries = targetContext.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE)
+            .all.filter { it.key.startsWith("capture:") && it.value == true }
+        val manifestEntries = transferPrefs.all.keys.filter { it.startsWith("manifest:") }
+        val recordingsDirectory = File(targetContext.filesDir, MobileMeetingStore.RECORDINGS_DIRECTORY)
+        val audioFiles = recordingsDirectory.listFiles().orEmpty().filter { it.isFile }
+        if (existingRecordingId == null) {
+            check(meetings.isEmpty() && audioFiles.isEmpty() && captureEntries.isEmpty() && manifestEntries.isEmpty() &&
+                transferPrefs.getString("macDeviceId", null) == null) {
+                "The isolated E2E app has prior meeting/audio-transfer data; it was left untouched."
+            }
+        } else {
+            check(existingRecordingId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
+                "Recovery requires one exact generated meeting UUID."
+            }
+            val onlyMeeting = meetings.singleOrNull()
+            check(onlyMeeting != null && onlyMeeting.id == existingRecordingId && onlyMeeting.status == MobileMeetingStatus.RECORDED &&
+                onlyMeeting.trashedAtMs == null && onlyMeeting.audioFileName == "$existingRecordingId.m4a" &&
+                onlyMeeting.transferState == "queued" && onlyMeeting.transferEnrolledAtMs != null &&
+                onlyMeeting.transferReceiptJson == null && onlyMeeting.transferAudioSHA256 == null &&
+                onlyMeeting.transferTranscriptSHA256 == null && store.audioFileForTransfer(existingRecordingId) != null &&
+                audioFiles.map { it.name } == listOf("$existingRecordingId.m4a") &&
+                captureEntries.size == 1 && captureEntries.entries.single().key == "capture:$existingRecordingId" &&
+                manifestEntries.isEmpty() && transferPrefs.getString("macDeviceId", null) == null) {
+                "Recovery refused: expected exactly the named queued recording and its capture marker, with no other audio or transfer state. Nothing was changed."
+            }
+        }
+        SharedSessionClient.setDebugEndpoint(targetContext, E2E_COORDINATOR_ENDPOINT)
+        finish(0, Bundle().apply { putString("result", "configured") })
+    }
+
+    /** One-recording, debug E2E recovery: pause only this upload without touching its audio or manifest. */
+    private fun pauseNamedEmptyTestTransfer(recordingId: String) {
+        check(BuildConfig.DEBUG && targetContext.packageName.endsWith(".e2e")) {
+            "Transfer recovery is restricted to the isolated E2E debug app."
+        }
+        check(recordingId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
+            "Recovery requires one exact generated meeting UUID."
+        }
+        val store = MobileMeetingStore(targetContext)
+        val scheduler = targetContext.getSystemService(Context.JOB_SCHEDULER_SERVICE) as android.app.job.JobScheduler
+        val allMeetings = store.list(includeTrashed = true)
+        check(store.loadError == null && store.activeRecording() == null && !recordingServiceIsRunning() &&
+            !PhoneAudioTransferJobService.isRunning() && scheduler.getPendingJob(0x48414c) == null) {
+            "Recovery requires idle, readable E2E capture and transfer services; no data was changed."
+        }
+        val meeting = allMeetings.filter { it.trashedAtMs == null }.singleOrNull()
+        check(allMeetings.all { it.id == recordingId || (it.trashedAtMs != null &&
+            it.status == MobileMeetingStatus.DRAFT && it.discardedRecordingAtMs != null &&
+            it.audioFileName == null && it.discardPendingAudioName == null && it.transferState == null) }) {
+            "Recovery found unrelated meeting data; nothing was changed."
+        }
+        val audio = store.audioFileForTransfer(recordingId)
+        val transferPrefs = targetContext.getSharedPreferences("phone-audio-transfer", Context.MODE_PRIVATE)
+        val manifests = transferPrefs.all.keys.filter { it.startsWith("manifest:") }
+        val captureEntries = targetContext.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE)
+            .all.filter { it.key.startsWith("capture:") && it.value == true }
+        check(meeting != null && meeting.id == recordingId && meeting.status == MobileMeetingStatus.RECORDED &&
+            meeting.trashedAtMs == null && meeting.audioFileName == "$recordingId.m4a" &&
+            meeting.transferState == "uploaded" && meeting.transferEnrolledAtMs != null &&
+            meeting.transferReceiptJson == null && meeting.transferAudioSHA256 == null &&
+            meeting.transferTranscriptSHA256 == null && audio != null && audio.length() > 0L &&
+            manifests == listOf("manifest:$recordingId") && captureEntries.size == 1 &&
+            captureEntries.entries.single().key == "capture:$recordingId") {
+            "Recovery refused: the named recording is not the single expected uploaded test transfer without a receipt. No data was changed."
+        }
+        check(store.setTransferState(recordingId, "paused") && store.find(recordingId)?.transferState == "paused" &&
+            store.audioFileForTransfer(recordingId)?.isFile == true) {
+            "Could not pause the named transfer while preserving its audio."
+        }
+        finish(0, Bundle().apply {
+            putString("result", "paused")
+            putString("meetingId", recordingId)
+        })
     }
 
     /** Explicit opt-in receiver/PendingIntent test; leaves unrelated alarms and notifications alone. */
@@ -401,6 +498,7 @@ class MobileStoreInstrumentation : Instrumentation() {
     }
 
     companion object {
+        private const val E2E_COORDINATOR_ENDPOINT = "http://127.0.0.1:8787"
         private val TEST_AUDIO_BYTES = byteArrayOf(0x00, 0x10, 0x20, 0x30, 0x40)
     }
 }

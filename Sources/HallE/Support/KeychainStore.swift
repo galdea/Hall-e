@@ -8,7 +8,18 @@ import Security
 /// so a self-signed app without Apple-issued entitlements can store items whose
 /// ACL is keyed on our stable designated requirement.
 enum KeychainStore {
-    static let service = "cl.gabriel.hall-e"
+    static var service: String {
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["HALLE_DEBUG_KEYCHAIN_SERVICE"],
+           override.hasPrefix("cl.gabriel.hall-e.debug."), override.count <= 128,
+           override.utf8.allSatisfy({
+               (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46
+           }) {
+            return override
+        }
+        #endif
+        return "cl.gabriel.hall-e"
+    }
 
     enum KeychainError: Error, LocalizedError {
         case unexpectedStatus(OSStatus)

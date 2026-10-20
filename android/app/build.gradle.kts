@@ -4,6 +4,11 @@ android {
     namespace = "app.halle.companion"
     compileSdk = 36
     buildFeatures { buildConfig = true }
+    val requestedTestBuildType = providers.gradleProperty("halleTestBuildType").orElse("debug").get()
+    if (requestedTestBuildType !in setOf("debug", "e2e")) {
+        throw GradleException("halleTestBuildType must be either 'debug' or 'e2e'.")
+    }
+    testBuildType = requestedTestBuildType
     defaultConfig {
         applicationId = "app.halle.companion"
         minSdk = 31
@@ -34,6 +39,13 @@ android {
     }
     buildTypes {
         debug { applicationIdSuffix = ".preview" }
+        // Isolated device data for the real coordinator + QR + phone-to-Mac E2E. Never shares
+        // the installed preview app's meeting store or transfer queue.
+        create("e2e") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".e2e"
+            matchingFallbacks += listOf("debug")
+        }
         release {
             isMinifyEnabled = false
             if (signingConfigs.names.contains("release")) signingConfig = signingConfigs.getByName("release")

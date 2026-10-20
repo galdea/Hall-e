@@ -2,8 +2,8 @@ const NS='http://www.w3.org/2000/svg';
 let nextId=0;
 const element=(name,attrs={})=>{const e=document.createElementNS(NS,name);for(const [k,v]of Object.entries(attrs))e.setAttribute(k,String(v));return e;};
 
-// Articulated cuts of the original landing artwork. No replacement character,
-// floating lens, or alternate robot pose is loaded on recording transitions.
+// Original artwork stays as the fixed head/chassis; an authored mechanical
+// heart pose blends into the articulated arms without replacing the character.
 export function mountRobotRig(root,host,image,preference){
   const source=root.querySelector('.hall-e-art');
   const width=image.naturalWidth,height=image.naturalHeight,scale=360/height;
@@ -29,18 +29,36 @@ export function mountRobotRig(root,host,image,preference){
     const upper=element('g',{'data-robot-arm':part.side}),lower=element('g',{'data-robot-forearm':part.side});
     lower.append(picture(`${prefix}-${part.side}-lower`));upper.append(picture(`${prefix}-${part.side}-upper`),lower);rig.append(upper);arms.push({...part,upperElement:upper,lowerElement:lower});
   }
+  // The authored heart pose has actual segmented fingers, not crossed claws.
+  // Only the mid-body plate is composited; the original head and wheels stay put.
+  const heartMask=mask(`${prefix}-heart-arms`);
+  heartMask.append(shape('M0 39H100V78H79L73 73H35L27 78H0Z','white'));
+  defs.append(heartMask);
+  const heart=element('g',{'data-heart-hands':'true',opacity:0});
+  heart.append(element('image',{href:'/hall-e-heart.webp',width,height,preserveAspectRatio:'none',mask:`url(#${prefix}-heart-arms)`}));
+  rig.append(heart);
   const lens=(attrs={})=>element('ellipse',{cx:.58*width,cy:.5745*height,rx:.0385*width,ry:.0322*height,...attrs});
   const gradient=element('radialGradient',{id:`${prefix}-glow`});
   for(const [offset,color,opacity]of [[0,'#fff0c7',.9],[.18,'#ff6840',.8],[.45,'#ff291c',.45],[1,'#ff291c',0]])gradient.append(element('stop',{offset,'stop-color':color,'stop-opacity':opacity}));
   defs.append(gradient);
-  const lensMask=mask(`${prefix}-lens`);lensMask.append(lens({fill:'white'}));defs.append(lensMask);
+  const lensMask=mask(`${prefix}-lens`);lensMask.append(lens({cx:.56*width,fill:'white'}));defs.append(lensMask);
   const glow=element('g',{class:'robot-chest-glow'});
-  glow.append(lens({rx:.11*width,ry:.092*height,fill:`url(#${prefix}-glow)`}));
-  const lit=picture(`${prefix}-lens`);lit.setAttribute('class','robot-lit-lens');glow.append(lit);
+  glow.append(lens({cx:.56*width,rx:.11*width,ry:.092*height,fill:`url(#${prefix}-glow)`}));
+  const lit=picture(`${prefix}-lens`);lit.setAttribute('href','/hall-e-heart.webp');lit.setAttribute('class','robot-lit-lens');glow.append(lit);
   rig.append(lens({class:'robot-chest-idle',fill:'#160300',opacity:.45}),glow);
   source.replaceWith(rig);
   let ready=false,frame=0,position=0,started=0,from=0,target=0,disposed=false;
-  const pose=value=>{position=value;for(const arm of arms){arm.upperElement.setAttribute('transform',`rotate(${(arm.upper*value).toFixed(3)} ${arm.shoulder.join(' ')})`);arm.lowerElement.setAttribute('transform',`rotate(${(arm.lowerAngle*Math.max(0,(value-.08)/.92)).toFixed(3)} ${arm.elbow.join(' ')})`);}};
+  const pose=value=>{
+    position=value;
+    const blend=Math.max(0,Math.min(1,(value-.35)/.65)),smoothBlend=blend*blend*(3-2*blend);
+    for(const arm of arms){
+      arm.upperElement.setAttribute('transform',`rotate(${(arm.upper*value).toFixed(3)} ${arm.shoulder.join(' ')})`);
+      arm.lowerElement.setAttribute('transform',`rotate(${(arm.lowerAngle*Math.max(0,(value-.08)/.92)).toFixed(3)} ${arm.elbow.join(' ')})`);
+      arm.upperElement.setAttribute('opacity',String(1-smoothBlend));
+    }
+    heart.setAttribute('opacity',String(smoothBlend));
+    heart.setAttribute('transform',`translate(0 ${(1-smoothBlend)*38})`);
+  };
   function tick(now){
     if(disposed)return;
     if(!started)started=now;

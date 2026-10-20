@@ -23,7 +23,7 @@ struct SharedMeetingsView: View {
     var body: some View {
         Form {
             Section("Pair devices") {
-                Text("Pair Hall-e on trusted devices to coordinate meetings. Selected titles, projects, optional links and times are encrypted and sent to the coordinator; device and recording-segment status is visible there. Audio stays on the device that records it.")
+                Text("Pair Hall-e on trusted devices to coordinate meetings. Meeting details are shared encrypted. After you stop a new phone recording, its audio is sent encrypted to your selected Mac for transcription. Audio is deleted only after the transcript is saved and verified.")
                     .font(.callout).foregroundStyle(.secondary)
                 switch coordinator.credentialsLoadState {
                 case .loading:
@@ -119,7 +119,7 @@ struct SharedMeetingsView: View {
                 ForEach(coordinator.credentialsLoadState == .paired ? coordinator.meetings : []) { meeting in
                     meetingRow(meeting)
                 }
-                Text("Only meeting details and recording-segment status are shared. Full audio stays on the device that captured it.")
+                Text("Create a shared meeting here, or start recording on your phone. New phone recordings reach your selected Mac after you stop; the verified transcript remains when audio is deleted.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Meetings") }
 
@@ -149,7 +149,7 @@ struct SharedMeetingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Connecting links this device to the invitation’s owner and shares meeting titles, project names, times, and recording-segment status. It does not transfer audio.")
+            Text("Connecting shares encrypted meeting details with the invitation’s owner. New phone recordings can be sent encrypted to the Mac you select after you stop. Audio is deleted only after the transcript is saved and verified.")
         }
         .confirmationDialog("Unlink this device?", isPresented: $showDisconnectConfirmation, titleVisibility: .visible) {
             Button("Unlink device", role: .destructive) { Task { await coordinator.disconnect() } }

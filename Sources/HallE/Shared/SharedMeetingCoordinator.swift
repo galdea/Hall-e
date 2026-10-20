@@ -158,7 +158,39 @@ private final class SharedNoRedirect: NSObject, URLSessionTaskDelegate, @uncheck
 @MainActor @Observable
 final class SharedMeetingCoordinator {
     static let shared = SharedMeetingCoordinator()
-    nonisolated static let endpoint = "https://halle-shared-session-coordinator.gabriel-aldea.workers.dev"
+    nonisolated static let productionEndpoint = "https://halle-shared-session-coordinator.gabriel-aldea.workers.dev"
+    nonisolated static var endpoint: String {
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["HALLE_SHARED_COORDINATOR_ENDPOINT"] {
+            return normalizedLoopbackEndpoint(override) ?? override.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        #endif
+        return productionEndpoint
+    }
+
+    nonisolated static func isAllowedCoordinatorEndpoint(_ raw: String) -> Bool {
+        guard raw == endpoint else { return false }
+        if raw == productionEndpoint { return true }
+        #if DEBUG
+        return normalizedLoopbackEndpoint(raw) != nil
+        #else
+        return false
+        #endif
+    }
+
+    nonisolated static func normalizedLoopbackEndpoint(_ raw: String) -> String? {
+        guard let components = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = components.host?.lowercased(), ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host),
+              components.user == nil, components.password == nil, components.query == nil,
+              components.fragment == nil, components.path.isEmpty || components.path == "/",
+              components.port == nil || (1...65535).contains(components.port!) else { return nil }
+        var result = URLComponents()
+        result.scheme = scheme
+        result.host = host
+        result.port = components.port
+        return result.string
+    }
     private static let account = "shared-meetings-v1"
     private var credentials: SharedCredentials?
     private var ownedLease: SharedRecordingLease?
@@ -241,7 +273,7 @@ final class SharedMeetingCoordinator {
             }
             guard let data = raw.data(using: .utf8),
                   let stored = try? decoder.decode(SharedCredentials.self, from: data),
-                  stored.endpoint == Self.endpoint,
+                  Self.isAllowedCoordinatorEndpoint(stored.endpoint),
                   stored.workspaceId.isEmpty == false, stored.deviceId.isEmpty == false,
                   stored.deviceToken.isEmpty == false,
                   SharedMeetingCrypto.urlDecode(stored.key)?.count == 32 else {
@@ -346,7 +378,9 @@ final class SharedMeetingCoordinator {
         }
         guard let bytes = SharedMeetingCrypto.urlDecode(encoded),
               let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              object["v"] as? Int == 1, object["endpoint"] as? String == endpoint,
+              object["v"] as? Int == 1,
+              let invitationEndpoint = object["endpoint"] as? String,
+              isAllowedCoordinatorEndpoint(invitationEndpoint),
               let workspace = object["workspaceId"] as? String, UUID(uuidString: workspace) != nil,
               let invitation = object["inviteToken"] as? String, invitation.count >= 32, invitation.count <= 128,
               let key = object["key"] as? String, SharedMeetingCrypto.urlDecode(key)?.count == 32 else {
@@ -650,7 +684,7 @@ final class SharedMeetingCoordinator {
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
                          config: SharedCredentials?, authenticated: Bool = true) async throws -> Data {
         let base = config?.endpoint ?? Self.endpoint
-        guard base == Self.endpoint else { throw SharedMeetingError.invalidInvitation }
+        guard base == Self.endpoint, Self.isAllowedCoordinatorEndpoint(base) else { throw SharedMeetingError.invalidInvitation }
         let route = config.map { "/v1/workspaces/\($0.workspaceId)" + path } ?? path
         guard let url = URL(string: base + route) else { throw SharedMeetingError.unavailable }
         var request = URLRequest(url: url)

@@ -61,6 +61,37 @@ struct PhoneAudioTransferCryptoTests {
         #expect(PhoneAudioTransferCrypto.receiptMAC(key: key, canonical: canonical).base64URLEncoded ==
             "0OmdHJEiKJOnUvDTDe3U24_60X48OtuCiRufSX2Jfd8")
     }
+
+    @Test func emptyTranscriptCannotAuthorizePhoneAudioReceipt() {
+        #expect(!PhoneAudioTransferCrypto.isMeaningfulTranscript(""))
+        #expect(!PhoneAudioTransferCrypto.isMeaningfulTranscript(" \n\t \r\n"))
+        #expect(PhoneAudioTransferCrypto.isMeaningfulTranscript("spoken words"))
+    }
+
+    @Test func storedReceiptMustBindCurrentTranscriptAndManifest() throws {
+        let key = Data(repeating: 1, count: 32)
+        let fields = ["1", "1", "40000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000001",
+            "30000000-0000-4000-8000-000000000001", "50000000-0000-4000-8000-000000000001",
+            String(repeating: "a", count: 64), "3", "262144", "1"]
+        let transcriptHash = String(repeating: "b", count: 64)
+        let savedAtMs = 1_700_000_000_000
+        let canonical = "halle-phone-audio-receipt-v1\n" +
+            (Array(fields.prefix(11)) + [transcriptHash, "true", String(savedAtMs)]).joined(separator: "\n")
+        let receipt: [String: Any] = ["v": 1, "protocolVersion": 1, "transferId": fields[2],
+            "workspaceId": fields[3], "deviceId": fields[4], "macDeviceId": fields[5], "recordingId": fields[6],
+            "audioSHA256": fields[7], "plaintextLength": 3, "chunkSize": 262_144, "chunkCount": 1,
+            "transcriptSHA256": transcriptHash, "macAudioPurged": true, "savedAtMs": savedAtMs,
+            "mac": PhoneAudioTransferCrypto.receiptMAC(key: key, canonical: canonical).base64URLEncoded]
+        #expect(PhoneAudioTransferCrypto.storedReceiptMatches(receipt, fields: fields, transcriptHash: transcriptHash, key: key))
+        #expect(!PhoneAudioTransferCrypto.storedReceiptMatches(receipt, fields: fields,
+            transcriptHash: String(repeating: "c", count: 64), key: key))
+        var stale = receipt
+        stale["recordingId"] = "different-recording"
+        #expect(!PhoneAudioTransferCrypto.storedReceiptMatches(stale, fields: fields, transcriptHash: transcriptHash, key: key))
+        stale = receipt; stale["macAudioPurged"] = false
+        #expect(!PhoneAudioTransferCrypto.storedReceiptMatches(stale, fields: fields, transcriptHash: transcriptHash, key: key))
+    }
 }
 
 private extension Data {

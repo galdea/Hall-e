@@ -14,7 +14,7 @@ const result = await build({entryPoints:['src/app.imba'],bundle:true,minify:true
 }]});
 await copyFile('src/app.css',out+'/app.css');
 await copyFile('src/index.html',out+'/index.html');
-for (const name of ['hall-e.webp','hal.webp','wall-e.webp']) await copyFile('src/'+name,out+'/'+name);
+for (const name of ['hall-e.webp','hall-e-heart.webp','hal.webp','wall-e.webp']) await copyFile('src/'+name,out+'/'+name);
 await copyFile('THIRD_PARTY_NOTICES.txt',out+'/THIRD_PARTY_NOTICES.txt');
 const bytes=Object.values(result.metafile.outputs).reduce((sum,o)=>sum+o.bytes,0);
 await writeFile(out+'/build-info.json',JSON.stringify({compiler:'imba@2.0.0-alpha.253',javascriptBytes:bytes,networkDependencies:0},null,2)+'\n');

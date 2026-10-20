@@ -7,10 +7,13 @@ enum AppPaths {
     /// User Application Support/Hall-e (container-resolved by App Sandbox).
     static var appSupport: URL {
         #if DEBUG
+        if let debugDirectory = ProcessInfo.processInfo.environment["HALLE_DEBUG_DATA_DIR"], !debugDirectory.isEmpty {
+            let root = URL(fileURLWithPath: debugDirectory, isDirectory: true)
+            try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            return root
+        }
         if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1" {
-            let root = ProcessInfo.processInfo.environment["HALLE_DEBUG_DATA_DIR"]
-                .map { URL(fileURLWithPath: $0, isDirectory: true) }
-                ?? FileManager.default.temporaryDirectory.appendingPathComponent("Hall-e-Preview-\(ProcessInfo.processInfo.processIdentifier)")
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("Hall-e-Preview-\(ProcessInfo.processInfo.processIdentifier)")
             try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             return root
         }

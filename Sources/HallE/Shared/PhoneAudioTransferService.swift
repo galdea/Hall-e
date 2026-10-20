@@ -20,7 +20,7 @@ struct PhoneAudioTransferCredentials: Decodable {
     static func validated(_ raw: String) -> Self? {
         guard raw.utf8.count <= 8192, let data = raw.data(using: .utf8),
               let value = try? JSONDecoder().decode(Self.self, from: data),
-              value.endpoint == SharedMeetingCoordinator.endpoint,
+              SharedMeetingCoordinator.isAllowedCoordinatorEndpoint(value.endpoint),
               UUID(uuidString: value.workspaceId) != nil, UUID(uuidString: value.deviceId) != nil,
               (40...60).contains(value.deviceToken.count),
               value.deviceToken.utf8.allSatisfy({
@@ -55,6 +55,30 @@ enum PhoneAudioTransferCrypto {
 
     static func manifestMAC(key: Data, canonical: String) -> Data {
         Data(HMAC<SHA256>.authenticationCode(for: Data(canonical.utf8), using: SymmetricKey(data: deriveKey(key, purpose: "manifest-binding"))))
+    }
+
+    static func isMeaningfulTranscript(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func storedReceiptMatches(_ receipt: [String: Any], fields: [String], transcriptHash: String, key: Data) -> Bool {
+        guard fields.count == 11,
+              (receipt["v"] as? Int) == 1, (receipt["protocolVersion"] as? Int) == 1,
+              (receipt["transferId"] as? String) == fields[2], (receipt["workspaceId"] as? String) == fields[3],
+              (receipt["deviceId"] as? String) == fields[4], (receipt["macDeviceId"] as? String) == fields[5],
+              (receipt["recordingId"] as? String) == fields[6], (receipt["audioSHA256"] as? String) == fields[7],
+              (receipt["plaintextLength"] as? Int) == Int(fields[8]), (receipt["chunkSize"] as? Int) == Int(fields[9]),
+              (receipt["chunkCount"] as? Int) == Int(fields[10]),
+              let savedAtMs = receipt["savedAtMs"] as? Int, savedAtMs > 0,
+              (receipt["transcriptSHA256"] as? String) == transcriptHash,
+              (receipt["macAudioPurged"] as? Bool) == true,
+              let encodedMAC = receipt["mac"] as? String,
+              let suppliedMAC = SharedMeetingCrypto.urlDecode(encodedMAC) else { return false }
+        let values = ["1", "1", fields[2], fields[3], fields[4], fields[5], fields[6], fields[7],
+            fields[8], fields[9], fields[10], transcriptHash, "true", String(savedAtMs)]
+        let canonical = "halle-phone-audio-receipt-v1\n" + values.joined(separator: "\n")
+        return HMAC<SHA256>.isValidAuthenticationCode(suppliedMAC, authenticating: Data(canonical.utf8),
+            using: SymmetricKey(data: deriveKey(key, purpose: "transcript-receipt")))
     }
 
     enum TransferCryptoError: Error { case invalidChunk }
@@ -166,6 +190,24 @@ final class PhoneAudioTransferService {
         }
         let transcriptBytes = try Data(contentsOf: librarySession.transcriptFileURL)
         let transcriptHash = sha256(transcriptBytes)
+        guard PhoneAudioTransferCrypto.isMeaningfulTranscript(libraryTranscript.plainText) else {
+            throw TransferError.emptyTranscript
+        }
+        let receiptFile = partialRoot.appendingPathComponent(m.transferId + ".receipt.json")
+        let receiptFields: [(String, Any)] = [("v", 1), ("protocolVersion", 1), ("transferId", m.transferId),
+            ("workspaceId", c.workspaceId), ("deviceId", m.deviceId), ("macDeviceId", c.deviceId),
+            ("recordingId", m.recordingId), ("audioSHA256", m.audioSHA256), ("plaintextLength", m.plaintextLength),
+            ("chunkSize", m.chunkSize), ("chunkCount", m.chunkCount)]
+        let priorReceipt: [String: Any]?
+        if FileManager.default.fileExists(atPath: receiptFile.path) {
+            guard let prior = try? Data(contentsOf: receiptFile),
+                  let value = try? JSONSerialization.jsonObject(with: prior) as? [String: Any],
+                  PhoneAudioTransferCrypto.storedReceiptMatches(value, fields: receiptFields.map { String(describing: $0.1) },
+                      transcriptHash: transcriptHash, key: key) else { throw TransferError.invalidStoredReceipt }
+            priorReceipt = value
+        } else {
+            priorReceipt = nil
+        }
         // The phone only deletes after receipt, so the Mac can now clean its
         // imported audio copies. The library session and transcript are durable.
         let libraryAudio = librarySession.folderURL.appendingPathComponent("phone.m4a")
@@ -173,15 +215,11 @@ final class PhoneAudioTransferService {
         if FileManager.default.fileExists(atPath: partial.path) { try FileManager.default.removeItem(at: partial) }
         guard !FileManager.default.fileExists(atPath: libraryAudio.path),
               !FileManager.default.fileExists(atPath: partial.path) else { throw TransferError.macAudioCleanupFailed }
-        let receiptFile = partialRoot.appendingPathComponent(m.transferId + ".receipt.json")
         let receipt: [String: Any]
-        if let prior = try? Data(contentsOf: receiptFile), let value = try? JSONSerialization.jsonObject(with: prior) as? [String: Any] {
-            receipt = value
+        if let priorReceipt {
+            receipt = priorReceipt
         } else {
-            let fields: [(String, Any)] = [("v", 1), ("protocolVersion", 1), ("transferId", m.transferId),
-                ("workspaceId", c.workspaceId), ("deviceId", m.deviceId), ("macDeviceId", c.deviceId),
-                ("recordingId", m.recordingId), ("audioSHA256", m.audioSHA256), ("plaintextLength", m.plaintextLength),
-                ("chunkSize", m.chunkSize), ("chunkCount", m.chunkCount), ("transcriptSHA256", transcriptHash),
+            let fields: [(String, Any)] = receiptFields + [("transcriptSHA256", transcriptHash),
                 ("macAudioPurged", true),
                 ("savedAtMs", Int(Date().timeIntervalSince1970 * 1000))]
             let canonical = "halle-phone-audio-receipt-v1\n" + fields.map { String(describing: $0.1) }.joined(separator: "\n")
@@ -253,7 +291,8 @@ final class PhoneAudioTransferService {
     }
     private func transferURL(_ path: String, config c: PhoneAudioTransferCredentials) -> URL? {
         guard path.hasPrefix("/"), var components = URLComponents(string: c.endpoint),
-              components.scheme == "https", components.host != nil,
+              SharedMeetingCoordinator.isAllowedCoordinatorEndpoint(c.endpoint),
+              components.scheme == "https" || components.scheme == "http",
               components.user == nil, components.password == nil, components.query == nil, components.fragment == nil else { return nil }
         components.path = "/v1/workspaces/\(c.workspaceId)" + path
         return components.url
@@ -263,5 +302,5 @@ final class PhoneAudioTransferService {
         [String(m.v), String(m.protocolVersion), m.workspaceId, m.deviceId, m.macDeviceId, m.transferId, m.recordingId,
             m.audioSHA256, String(m.plaintextLength), String(m.chunkSize), String(m.chunkCount)]
     }
-    private enum TransferError: Error { case invalidCredentials, invalidManifest, invalidChunk, audioHashMismatch, transcriptNotDurable, sessionNotDurable, macAudioCleanupFailed, requestFailed }
+    private enum TransferError: Error { case invalidCredentials, invalidManifest, invalidChunk, audioHashMismatch, emptyTranscript, invalidStoredReceipt, transcriptNotDurable, sessionNotDurable, macAudioCleanupFailed, requestFailed }
 }

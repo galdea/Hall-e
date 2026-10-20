@@ -102,7 +102,7 @@ class MainActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
                 val path = request.url.path.orEmpty()
-                val mime = when (path) { "/index.html" -> "text/html"; "/app.js" -> "application/javascript"; "/app.css" -> "text/css"; "/hall-e.webp", "/hal.webp", "/wall-e.webp" -> "image/webp"; else -> null }
+                val mime = when (path) { "/index.html" -> "text/html"; "/app.js" -> "application/javascript"; "/app.css" -> "text/css"; "/hall-e.webp", "/hall-e-heart.webp", "/hal.webp", "/wall-e.webp" -> "image/webp"; else -> null }
                 if (request.url.scheme != "https" || request.url.host != ASSET_HOST || request.method != "GET" || mime == null)
                     return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 return WebResourceResponse(mime, "UTF-8", assets.open("orbita" + path))

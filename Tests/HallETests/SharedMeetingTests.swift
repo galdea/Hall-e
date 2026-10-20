@@ -143,4 +143,14 @@ private actor CredentialReaderGate {
             try SharedMeetingCoordinator.parseInvitation("https://hall-e.pages.dev/pair#\(wrongEndpointCode)")
         }
     }
+
+    @Test func debugCoordinatorOverrideIsRestrictedToLoopbackHTTP() {
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("http://127.0.0.1:8787") == "http://127.0.0.1:8787")
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("http://localhost:8787/") == "http://localhost:8787")
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("https://[::1]:8787") == "https://[::1]:8787")
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("https://relay.example.test") == nil)
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("http://192.168.1.25:8787") == nil)
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("http://127.0.0.1:8787/path") == nil)
+        #expect(SharedMeetingCoordinator.normalizedLoopbackEndpoint("http://user@127.0.0.1:8787") == nil)
+    }
 }

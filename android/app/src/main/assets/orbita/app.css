@@ -15,3 +15,25 @@ halle-app halle-intro{display:flex;position:relative;align-items:center;justify-
 .orbit-hero[data-idle-home=true]{min-height:calc(100svh - 8px)}.today-section{min-height:calc(100svh - 120px);padding-top:12px;border-top:1px solid var(--line)}
 /* Keep the robot fixed when capture controls or discard feedback change height. */
 halle-app{overflow-anchor:none}
+
+/* A viewport-sized control deck keeps the robot, capture and project bay together. */
+.orbit-hero{display:flex;flex-direction:column;align-items:stretch;min-height:calc(100svh - 14px);padding-bottom:114px}
+.orbit-hero>.eyebrow{flex:none;margin:9px 0 9px}.orbit-hero h1{flex:none;font-size:clamp(27px,7.2vw,34px)}
+halle-app halle-intro{flex:1 1 auto;height:auto;min-height:230px;max-height:460px;margin:6px 0 0}
+.landing-intro{height:100%;min-height:230px;max-height:460px;aspect-ratio:492/448;width:100%;overflow:visible}
+.landing-intro .mechanism{width:auto;height:100%;min-height:230px;max-height:min(48svh,400px);max-width:100%;aspect-ratio:492/448}
+.landing-intro .heart-flight,.landing-intro .mind-flight,.landing-intro .assembly-status{display:none!important}
+.capture-readout{flex:none;margin:2px 0 10px;min-height:28px}.hero-record.tech-record{flex:none;margin:0 auto 14px;min-height:58px;width:100%;max-width:360px}
+.project-bay{flex:none;width:100%;max-width:360px;min-height:144px;margin:0 auto;text-align:left;display:grid;grid-template-rows:0fr}
+.project-bay[data-open=true]{grid-template-rows:1fr}.record-project{position:relative;width:100%;padding:12px 15px 8px;border:1px solid #38504d;border-radius:5px 5px 18px 18px;background:linear-gradient(135deg,#172426e8,#0d171be8);box-shadow:inset 0 1px #6d82733d,0 8px 20px #0002;animation:deploy-bay .65s cubic-bezier(.19,1,.22,1) both;transform-origin:top}
+.record-project:before,.record-project:after{content:'';position:absolute;top:-1px;width:20px;height:3px;background:#8dbdaf;box-shadow:0 0 8px #74e5c54a}.record-project:before{left:16px}.record-project:after{right:16px}
+.project-bay-heading{display:flex;gap:8px;align-items:center;color:#95afa5;font:9px/1.4 ui-monospace,monospace;letter-spacing:1.7px}.bay-signal{height:4px;width:4px;background:#91cfba;box-shadow:0 0 7px #74e5c55e}.record-project .field{margin:9px 0 0;gap:5px;font-size:11px}.record-project select{border-radius:6px;min-height:46px;padding:10px 11px;background:#0c1619;border-color:#314b47;font-size:14px}.record-project .text-button{min-height:36px;padding:7px 0 0;font-size:11px}
+.today-section{padding-top:18px}.orbit-hero[data-idle-home=true]{min-height:calc(100svh - 14px)}
+@keyframes deploy-bay{from{opacity:0;clip-path:inset(0 0 100%);transform:translateY(-10px) scaleY(.94)}to{opacity:1;clip-path:inset(0);transform:none}}
+@media(max-height:740px){.orbit-hero{padding-bottom:98px}.project-bay{min-height:132px}halle-app halle-intro,.landing-intro{min-height:202px}.landing-intro .mechanism{min-height:202px;max-height:34svh}.orbit-hero h1{font-size:27px}.orbit-hero>.eyebrow{margin:4px 0 6px}.record-project{padding:10px 12px 4px}.hero-record.tech-record{min-height:54px;margin-bottom:10px}.capture-readout{margin-bottom:6px}}
+@media(prefers-reduced-motion:reduce){.record-project{animation:none}}
+/* Size the character from the usable screen height, including the deployed bay. */
+halle-app halle-intro{flex:0 0 auto;height:clamp(218px,calc(100svh - 410px),400px);min-height:0;max-height:none;margin:4px 0 0}
+.landing-intro{height:100%;min-height:0;max-height:none;aspect-ratio:auto}.landing-intro .mechanism{height:100%;width:auto;min-height:0;max-height:none;max-width:none}
+.project-bay{min-height:132px}.orbit-hero{padding-bottom:92px}
+@media(max-height:740px){.orbit-hero{padding-bottom:82px}.project-bay{min-height:124px}}

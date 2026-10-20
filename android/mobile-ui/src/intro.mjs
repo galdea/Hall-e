@@ -30,8 +30,7 @@ export function mountIntro(host) {
   }
   function renderAt(time) {
     assembly.render(time);
-    const t=Math.max(0,Math.min(1,(time-8.6)/2.5)); const p=t*t*(3-2*t);
-    svg.setAttribute('viewBox', `${254*p} ${66*p} ${1000-508*p} ${620-172*p}`);
+    svg.setAttribute('viewBox', '254 66 492 448');
   }
   function settle() {
     renderAt(assembly.duration);
@@ -57,7 +56,7 @@ export function mountIntro(host) {
   document.addEventListener('visibilitychange', visibility);
   preference.addEventListener('change', reducedMotion);
   loadingTimer=setTimeout(fallback,3000);
-  Promise.all(['/hall-e.webp','/wall-e.webp','/hal.webp'].map(async url=>{
+  Promise.all(['/hall-e.webp','/hall-e-heart.webp'].map(async url=>{
     const image=new Image(); image.src=url; await image.decode(); return [url,image];
   })).then(images=>{
     if(disposed||settled) return;

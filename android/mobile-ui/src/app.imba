@@ -28,14 +28,15 @@ tag halle-meetings
 				<button.trash-button aria-label="Eliminar {item.title}" disabled=(item.status == 'RECORDING' || item.status == 'STARTING') @click=model.askDelete(item)> '×'
 
 tag halle-project-picker
+	prop pending
 	<self>
 		<label.field>
 			<span> 'Proyecto'
-			<select bind=ui.project @change=model.selectProject>
+			<select bind=ui.project disabled=pending @change=model.selectProject>
 				<option value=''> 'Sin proyecto'
 				for project in data.projects
 					<option value=project> project
-		<button.text-button @click=(ui.newProject = true)> '+ Nuevo proyecto'
+		<button.text-button disabled=pending @click=(ui.newProject = true)> '+ Nuevo proyecto'
 
 tag halle-app
 	def go page
@@ -94,12 +95,17 @@ tag halle-app
 							<span.record-glyph aria-hidden='true'>
 							<span> if ui.starting then 'Activando…' else 'Grabar'
 							<span.record-channel aria-hidden='true'> 'MIC'
+					<div.project-bay data-open=((ui.page == 'record' || data.active != null) && (model.chosen! != null || ui.starting))>
+						if (ui.page == 'record' || data.active) && (model.chosen! || ui.starting)
+							<div.record-project>
+								<div.project-bay-heading aria-hidden='true'>
+									<span.bay-signal>
+									<span> 'ARCHIVO DE MISIÓN'
+								<halle-project-picker pending=!model.chosen!>
 				if ui.page == 'record' || data.active
 					if model.chosen!
 						if model.chosen!.error && !model.chosen!.discardedRecordingAtMs
 							<p.error role='alert'> model.chosen!.error
-						<div.record-project>
-							<halle-project-picker>
 						if !data.active
 							<div.notice role='status'>
 								if model.chosen!.discardedRecordingAtMs
@@ -196,7 +202,7 @@ tag halle-app
 					<span> if data.calendarPermission then 'Calendarios seleccionados' else 'Conectar calendario'
 					<span.muted> '→'
 				<button.settings-row @click=model.send('reminders')>
-					<span> 'Avisos · {data.reminderMinutes} min antes'
+						<span> "Avisos · {data.reminderMinutes} min antes"
 					<span.muted> '→'
 				if !data.notificationsAllowed
 					<button.settings-row @click=model.send('notifications')> 'Activar notificaciones'
