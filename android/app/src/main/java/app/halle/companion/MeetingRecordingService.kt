@@ -267,7 +267,7 @@ class MeetingRecordingService : Service() {
         if (shouldDiscardShort) getSharedPreferences(MainActivity.TRANSFER_PREFS, MODE_PRIVATE).edit().remove("capture:$id").commit()
         // Only new Órbita captures enroll; notification/background stops share this path.
         if (saved && getSharedPreferences(MainActivity.TRANSFER_PREFS, MODE_PRIVATE).getBoolean("capture:$id", false)) {
-            if (store.setTransferState(id, "queued")) PhoneAudioTransferWorker.kick(this)
+            if (store.setTransferState(id, "queued")) PhoneAudioTransferWorker.kick(this, prioritizeNow = true)
         }
         sharedLease?.let { lease ->
             val client = sharedLeaseClient

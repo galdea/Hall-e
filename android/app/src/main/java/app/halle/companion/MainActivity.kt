@@ -201,7 +201,7 @@ class MainActivity : Activity() {
             "reminders" -> chooseReminders()
             "notifications" -> maybeRequestNotifications(force = true)
             "exactAlarms" -> startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
-            "retryTransfers" -> { PhoneAudioTransferWorker.kick(this); message("Se reintentarán los envíos al Mac vinculado.") }
+            "retryTransfers" -> { PhoneAudioTransferWorker.kick(this, prioritizeNow = true); message("Se reintentarán los envíos al Mac vinculado.") }
             "trashList" -> showTrash()
         }
     }

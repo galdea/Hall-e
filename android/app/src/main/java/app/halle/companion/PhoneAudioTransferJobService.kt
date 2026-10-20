@@ -14,26 +14,42 @@ class PhoneAudioTransferJobService : JobService() {
         private val lock = Any()
         @Volatile private var running = false
         private var rerunRequested = false
+        private var rerunPrioritized = false
         fun isRunning(): Boolean = running
-        fun requestAnotherRun() = synchronized(lock) { rerunRequested = true }
+        fun requestAnotherRunIfRunning(prioritizeNow: Boolean): Boolean = synchronized(lock) {
+            if (!running) return@synchronized false
+            rerunRequested = true
+            rerunPrioritized = rerunPrioritized || prioritizeNow
+            true
+        }
     }
 
     override fun onStartJob(params: JobParameters): Boolean {
-        synchronized(lock) {
-            if (running) return false
-            running = true
+        val started = synchronized(lock) {
+            if (running) {
+                rerunRequested = true
+                false
+            } else {
+                running = true
+                true
+            }
         }
+        if (!started) return false
         val generation = generations.incrementAndGet()
         executor.execute {
             val retry = runCatching {
                 PhoneAudioTransferWorker.perform(applicationContext) { generations.get() == generation }
             }.getOrDefault(false).not()
-            val rerun = synchronized(lock) {
+            val (rerun, prioritizeRerun) = synchronized(lock) {
                 running = false
+                val requested = rerunRequested
+                val prioritized = rerunPrioritized
+                rerunRequested = false
+                rerunPrioritized = false
                 if (generations.get() == generation) jobFinished(params, retry)
-                rerunRequested.also { rerunRequested = false }
+                requested to prioritized
             }
-            if (rerun) PhoneAudioTransferWorker.kick(applicationContext)
+            if (rerun) PhoneAudioTransferWorker.kick(applicationContext, prioritizeNow = prioritizeRerun)
         }
         return true
     }

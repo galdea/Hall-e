@@ -22,25 +22,30 @@ object PhoneAudioTransferWorker {
         require(recipientChoices(context).any { it.first == deviceId }) { "Select a registered Mac device." }
         context.applicationContext.getSharedPreferences("phone-audio-transfer", Context.MODE_PRIVATE)
             .edit().putString("macDeviceId", deviceId).commit()
-        kick(context)
+        kick(context, prioritizeNow = true)
     }
 
     /** Call after stop and at app startup; retries remain safe and never resume capture. */
-    fun kick(context: Context) {
+    fun kick(context: Context, prioritizeNow: Boolean = false) {
         val app = context.applicationContext
         val scheduler = app.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-        if (scheduler.getPendingJob(JOB_ID) != null) return
-        if (PhoneAudioTransferJobService.isRunning()) {
-            PhoneAudioTransferJobService.requestAnotherRun()
-            return
-        }
-        val job = JobInfo.Builder(JOB_ID, ComponentName(app, PhoneAudioTransferJobService::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPersisted(true)
-            .setBackoffCriteria(2 * 60_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
-            .build()
-        scheduler.schedule(job)
+        TransferKickCoordinator.kick(object : TransferKickPort {
+            override fun requestAnotherRunIfRunning(prioritizeNow: Boolean) =
+                PhoneAudioTransferJobService.requestAnotherRunIfRunning(prioritizeNow)
+            override fun hasPendingJob() = scheduler.getPendingJob(JOB_ID) != null
+            override fun cancelPendingJob() = scheduler.cancel(JOB_ID)
+            override fun schedule() {
+                val job = JobInfo.Builder(JOB_ID, ComponentName(app, PhoneAudioTransferJobService::class.java))
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                    .setPersisted(true)
+                    .setBackoffCriteria(2 * 60_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
+                    .build()
+                scheduler.schedule(job)
+            }
+        }, prioritizeNow)
     }
+
+    internal const val JOB_ID = 0x48414c
 
     internal fun perform(context: Context, isCurrent: () -> Boolean = { true }): Boolean {
         ensureCurrent(isCurrent)
@@ -185,6 +190,25 @@ object PhoneAudioTransferWorker {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+}
 
-    private const val JOB_ID = 0x48414c
+internal interface TransferKickPort {
+    fun requestAnotherRunIfRunning(prioritizeNow: Boolean): Boolean
+    fun hasPendingJob(): Boolean
+    fun cancelPendingJob()
+    fun schedule()
+}
+
+/** Coalesces an active worker, preserves routine backoff, and replaces pending backoff on urgent kicks. */
+internal object TransferKickCoordinator {
+    fun kick(port: TransferKickPort, prioritizeNow: Boolean) {
+        if (port.requestAnotherRunIfRunning(prioritizeNow)) return
+        if (port.hasPendingJob()) {
+            if (!prioritizeNow) return
+            port.cancelPendingJob()
+        }
+        // Cancellation may race the OS starting the job; route that case through the active run.
+        if (port.requestAnotherRunIfRunning(prioritizeNow)) return
+        port.schedule()
+    }
 }
