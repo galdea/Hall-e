@@ -161,7 +161,14 @@ class MainActivity : Activity() {
             "range" -> { rangeDate = LocalDate.parse(p.getString("date")); refreshCalendar() }
             "quickRecord" -> quickRecord()
             "recordMeeting" -> recordMeeting(p.getString("id"))
-            "stop" -> { MeetingRecordingService.stop(this); handler.postDelayed({ publish(true); PhoneAudioTransferWorker.kick(this) }, 500) }
+            "stop" -> {
+                val recordingId = meetings.activeRecording()?.id
+                MeetingRecordingService.stop(this)
+                handler.postDelayed({
+                    publish(true)
+                    if (recordingId != null && meetings.transferState(recordingId) == "queued") PhoneAudioTransferWorker.kick(this)
+                }, 500)
+            }
             "updateMeeting" -> {
                 val id = p.getString("id"); val title = p.optString("title").trim()
                 val previous = meetings.find(id) ?: error("La reunión ya no está disponible.")
@@ -259,11 +266,21 @@ class MainActivity : Activity() {
             .put("active", active?.let(::meetingJSON) ?: JSONObject.NULL).put("preparing", pendingStartId != null).put("paired", paired).put("notificationsAllowed", androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()).put("calendarPermission", calendar.hasPermission())
             .put("today", LocalDate.now().toString()).put("preview", preview).put("error", meetings.loadError ?: JSONObject.NULL).put("reminderMinutes", store.alertMinutes).toString()
         if (force || body != lastSnapshot) { lastSnapshot = body; web.evaluateJavascript("window.hallEReceive && window.hallEReceive($body)", null) }
+        meetings.takeDiscardFeedback()?.let { feedback ->
+            result(JSONObject().put("captureOutcome", "discarded_short")
+                .put("meetingId", feedback.meetingId).put("reason", feedback.reason)
+                .put("discardCleanupPending", feedback.cleanupPending))
+            message(feedback.reason)
+        }
     }
     private fun meetingJSON(m: MobileMeeting): JSONObject = JSONObject().put("id", m.id).put("title", m.title).put("project", m.projectName ?: "")
         .put("date", Instant.ofEpochMilli(m.scheduledStartAtMs ?: m.createdAtMs).atZone(ZoneId.systemDefault()).toLocalDate().toString()).put("time", time(m.scheduledStartAtMs ?: m.createdAtMs)).put("startAtMs", m.scheduledStartAtMs ?: m.createdAtMs)
         .put("status", m.status.name).put("elapsedMs", if (m.status == MobileMeetingStatus.RECORDING && m.recordingStartedElapsedMs != null) (android.os.SystemClock.elapsedRealtime() - m.recordingStartedElapsedMs).coerceAtLeast(0) else m.durationMs)
-        .put("hasAudio", m.audioFileName == "${m.id}.m4a" && File(File(filesDir, MobileMeetingStore.RECORDINGS_DIRECTORY), "${m.id}.m4a").isFile).put("transferState", m.transferState ?: JSONObject.NULL).put("error", m.error ?: JSONObject.NULL)
+        .put("hasAudio", m.audioFileName == "${m.id}.m4a" && File(File(filesDir, MobileMeetingStore.RECORDINGS_DIRECTORY), "${m.id}.m4a").isFile)
+        .put("discardedRecordingAtMs", m.discardedRecordingAtMs ?: JSONObject.NULL)
+        .put("discardCleanupPending", m.discardPendingAudioName != null)
+        .put("trashedAtMs", m.trashedAtMs ?: JSONObject.NULL)
+        .put("transferState", m.transferState ?: JSONObject.NULL).put("error", m.error ?: JSONObject.NULL)
     private fun time(ms: Long) = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
     private fun result(value: JSONObject) { if (ready) web.evaluateJavascript("window.hallEResult && window.hallEResult($value)", null) }
     private fun showError(value: String) = result(JSONObject().put("error", value))

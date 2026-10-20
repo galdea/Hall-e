@@ -6,38 +6,45 @@ const element=(name,attrs={})=>{const e=document.createElementNS(NS,name);for(co
 // floating lens, or alternate robot pose is loaded on recording transitions.
 export function mountRobotRig(root,host,image,preference){
   const source=root.querySelector('.hall-e-art');
-  const width=360*image.naturalWidth/image.naturalHeight;
-  const rig=element('g',{class:'robot-rig',transform:`translate(${-width/2} -172) scale(${width/100} 3.6)`});
+  const width=image.naturalWidth,height=image.naturalHeight,scale=360/height;
+  const rig=element('g',{class:'robot-rig',transform:`translate(${-width*scale/2} -172) scale(${scale})`});
   const defs=root.querySelector('defs');
   const prefix=`robot-${++nextId}`;
-  const cuts=[['left','M0 66L16 59L25 65L25 79L22 100H0Z',20,65,-24],['right','M80 64L89 60L100 67V100H82L79 82Z',83,65,24]];
-  const picture=mask=>element('image',{href:'/hall-e.webp',width:100,height:100,preserveAspectRatio:'none',mask:`url(#${mask})`});
-  const body=element('mask',{id:`${prefix}-body`,maskUnits:'userSpaceOnUse',x:0,y:0,width:100,height:100,'mask-type':'luminance'});
-  body.append(element('rect',{width:100,height:100,fill:'white'}));
-  const arms=[];
-  for(const [side,d,x,y,angle]of cuts){
-    body.append(element('path',{d,fill:'black'}));
-    const mask=element('mask',{id:`${prefix}-${side}`,maskUnits:'userSpaceOnUse',x:0,y:0,width:100,height:100,'mask-type':'luminance'});
-    mask.append(element('path',{d,fill:'white'}));defs.append(mask);
-    const arm=element('g',{'data-robot-arm':side});arm.append(picture(`${prefix}-${side}`));rig.append(arm);arms.push({arm,x,y,angle});
-  }
+  // Shoulder and elbow articulation lets the claws lift to the chest, instead
+  // of making a small wrist swing. The original hands frame the red lens.
+  const cuts=[
+    {side:'left',full:'M0 38L28 39L35 47L31 57L26 65L25 79L22 100H0Z',lower:'M0 66L16 59L25 65L25 79L22 100H0Z',shoulder:[300,690],elbow:[229,892],upper:-13,lowerAngle:-113},
+    {side:'right',full:'M76 42L100 40V100H82L79 82L80 65L76 61L76 55L72 49Z',lower:'M80 64L89 60L100 67V100H82L79 82Z',shoulder:[875,704],elbow:[957,914],upper:-21,lowerAngle:143},
+  ];
+  const shape=(d,fill)=>element('path',{d,fill,transform:`scale(${width/100} ${height/100})`});
+  const mask=id=>element('mask',{id,maskUnits:'userSpaceOnUse',x:0,y:0,width,height,'mask-type':'luminance'});
+  const picture=id=>element('image',{href:'/hall-e.webp',width,height,preserveAspectRatio:'none',mask:`url(#${id})`});
+  const body=mask(`${prefix}-body`);body.append(element('rect',{width,height,fill:'white'}));
+  for(const part of cuts)body.append(shape(part.full,'black'));
   defs.append(body);rig.append(picture(`${prefix}-body`));
+  const arms=[];
+  for(const part of cuts){
+    const upperMask=mask(`${prefix}-${part.side}-upper`),lowerMask=mask(`${prefix}-${part.side}-lower`);
+    upperMask.append(shape(part.full,'white'),shape(part.lower,'black'));lowerMask.append(shape(part.lower,'white'));defs.append(upperMask,lowerMask);
+    const upper=element('g',{'data-robot-arm':part.side}),lower=element('g',{'data-robot-forearm':part.side});
+    lower.append(picture(`${prefix}-${part.side}-lower`));upper.append(picture(`${prefix}-${part.side}-upper`),lower);rig.append(upper);arms.push({...part,upperElement:upper,lowerElement:lower});
+  }
+  const lens=(attrs={})=>element('ellipse',{cx:.58*width,cy:.5745*height,rx:.0385*width,ry:.0322*height,...attrs});
   const gradient=element('radialGradient',{id:`${prefix}-glow`});
   for(const [offset,color,opacity]of [[0,'#fff0c7',.9],[.18,'#ff6840',.8],[.45,'#ff291c',.45],[1,'#ff291c',0]])gradient.append(element('stop',{offset,'stop-color':color,'stop-opacity':opacity}));
   defs.append(gradient);
-  const lensMask=element('mask',{id:`${prefix}-lens`,maskUnits:'userSpaceOnUse',x:0,y:0,width:100,height:100,'mask-type':'luminance'});
-  lensMask.append(element('ellipse',{cx:58,cy:57.45,rx:3.85,ry:3.22,fill:'white'}));defs.append(lensMask);
+  const lensMask=mask(`${prefix}-lens`);lensMask.append(lens({fill:'white'}));defs.append(lensMask);
   const glow=element('g',{class:'robot-chest-glow'});
-  glow.append(element('ellipse',{cx:58,cy:57.45,rx:11,ry:9.2,fill:`url(#${prefix}-glow)`}));
+  glow.append(lens({rx:.11*width,ry:.092*height,fill:`url(#${prefix}-glow)`}));
   const lit=picture(`${prefix}-lens`);lit.setAttribute('class','robot-lit-lens');glow.append(lit);
-  rig.append(element('ellipse',{class:'robot-chest-idle',cx:58,cy:57.45,rx:3.85,ry:3.22,fill:'#160300',opacity:.45}),glow);
+  rig.append(lens({class:'robot-chest-idle',fill:'#160300',opacity:.45}),glow);
   source.replaceWith(rig);
   let ready=false,frame=0,position=0,started=0,from=0,target=0,disposed=false;
-  const pose=value=>{position=value;for(const {arm,x,y,angle}of arms)arm.setAttribute('transform',`rotate(${(angle*value).toFixed(3)} ${x} ${y})`);};
+  const pose=value=>{position=value;for(const arm of arms){arm.upperElement.setAttribute('transform',`rotate(${(arm.upper*value).toFixed(3)} ${arm.shoulder.join(' ')})`);arm.lowerElement.setAttribute('transform',`rotate(${(arm.lowerAngle*Math.max(0,(value-.08)/.92)).toFixed(3)} ${arm.elbow.join(' ')})`);}};
   function tick(now){
     if(disposed)return;
     if(!started)started=now;
-    const t=Math.min(1,(now-started)/850),p=t*t*(3-2*t);
+    const t=Math.min(1,(now-started)/1150),p=t*t*(3-2*t);
     pose(from+(target-from)*p);
     if(t<1)frame=requestAnimationFrame(tick);else frame=0;
   }

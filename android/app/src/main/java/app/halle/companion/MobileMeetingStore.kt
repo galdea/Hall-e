@@ -34,6 +34,10 @@ data class MobileMeeting(
     val transferAudioSHA256: String? = null,
     val transferTranscriptSHA256: String? = null,
     val transferEnrolledAtMs: Long? = null,
+    val discardedRecordingAtMs: Long? = null,
+    val discardPendingAudioName: String? = null,
+    val discardFeedbackShownAtMs: Long? = null,
+    val discardFinalReason: String? = null,
 )
 
 /** Local-only meeting metadata and app-private recording files. */
@@ -102,6 +106,62 @@ class MobileMeetingStore(private val context: Context) {
     }
 
     fun find(id: String): MobileMeeting? = synchronized(lock) { readAll().firstOrNull { it.meeting.id == id }?.meeting }
+
+    /** Atomically records a short-capture discard before unlinking only that capture's partial file. */
+    internal fun discardShortRecording(id: String, partial: File, durationMs: Long, reason: String): ShortCaptureDiscardResult? = synchronized(lock) {
+        if (!RecordingDurationPolicy.shouldDiscard(durationMs) || !isSafeRecordingId(id) ||
+            partial.name != "$id.m4a.partial" || partial.parentFile?.canonicalFile != recordingDirectory().canonicalFile) return@synchronized null
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.id == id }
+        if (index < 0) return@synchronized null
+        val old = values[index]
+        if (old.meeting.status != MobileMeetingStatus.RECORDING || old.ownerToken != processToken) return@synchronized null
+        val shortReason = reason.take(MAX_ERROR_LENGTH)
+        val now = System.currentTimeMillis()
+        val instant = (old.meeting.scheduledStartAtMs == null || old.meeting.scheduledEndAtMs == null) &&
+            old.meeting.sourceEventKey == null && old.meeting.sharedSessionId == null
+        val pendingReason = if (instant) {
+            "La grabación duró menos de 10 segundos y no se guardó en tu lista; la eliminación del audio temporal sigue pendiente."
+        } else {
+            "La grabación duró menos de 10 segundos; la reunión se conservó y la eliminación del audio temporal sigue pendiente."
+        }
+        val discarded = old.meeting.copy(
+            status = MobileMeetingStatus.DRAFT,
+            audioFileName = null,
+            recordingStartedAtMs = null,
+            recordingStartedElapsedMs = null,
+            durationMs = 0,
+            error = pendingReason.take(MAX_ERROR_LENGTH),
+            transferState = null,
+            transferReceiptJson = null,
+            transferAudioSHA256 = null,
+            transferTranscriptSHA256 = null,
+            transferEnrolledAtMs = null,
+            discardedRecordingAtMs = now,
+            discardPendingAudioName = partial.name,
+            discardFeedbackShownAtMs = null,
+            discardFinalReason = shortReason,
+            trashedAtMs = if (instant) now else old.meeting.trashedAtMs,
+        )
+        values[index] = old.copy(meeting = discarded, ownerToken = null)
+        if (!writeAll(values)) return@synchronized null
+        val persisted = runCatching { readAll().firstOrNull { it.meeting.id == id }?.meeting }.getOrNull()
+        ShortCaptureDiscardResult(
+            metadataCommitted = persisted?.discardedRecordingAtMs != null,
+            cleanupComplete = persisted?.discardPendingAudioName == null && !partial.exists(),
+        ).takeIf { it.metadataCommitted }
+    }
+
+    /** Returns and marks one saved discard explanation so MainActivity can show it on resume. */
+    internal fun takeDiscardFeedback(): DiscardFeedback? = synchronized(lock) {
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.discardedRecordingAtMs != null && it.meeting.discardFeedbackShownAtMs == null }
+        if (index < 0) return@synchronized null
+        val old = values[index]
+        val reason = old.meeting.error ?: return@synchronized null
+        values[index] = old.copy(meeting = old.meeting.copy(discardFeedbackShownAtMs = System.currentTimeMillis()))
+        if (writeAll(values)) DiscardFeedback(old.meeting.id, reason, old.meeting.discardPendingAudioName != null) else null
+    }
 
     fun audioFileForTransfer(id: String): File? = synchronized(lock) {
         val meeting = readAll().firstOrNull { it.meeting.id == id }?.meeting ?: return@synchronized null
@@ -295,6 +355,10 @@ class MobileMeetingStore(private val context: Context) {
                     recordingStartedElapsedMs = SystemClock.elapsedRealtime(),
                     durationMs = 0,
                     error = null,
+                    discardedRecordingAtMs = null,
+                    discardPendingAudioName = null,
+                    discardFeedbackShownAtMs = null,
+                    discardFinalReason = null,
                 ), ownerToken = processToken)
                 if (!writeAll(values)) {
                     partial.delete()
@@ -307,9 +371,17 @@ class MobileMeetingStore(private val context: Context) {
         }
     }
 
-    internal fun markRecordingStarted(id: String): Boolean = update(id) { stored ->
+    internal fun markRecordingStarted(
+        id: String,
+        captureStartedAtMs: Long = System.currentTimeMillis(),
+        captureStartedElapsedMs: Long = SystemClock.elapsedRealtime(),
+    ): Boolean = update(id) { stored ->
         if (stored.meeting.status != MobileMeetingStatus.STARTING || stored.ownerToken != processToken) stored
-        else stored.copy(meeting = stored.meeting.copy(status = MobileMeetingStatus.RECORDING))
+        else stored.copy(meeting = stored.meeting.copy(
+            status = MobileMeetingStatus.RECORDING,
+            recordingStartedAtMs = captureStartedAtMs,
+            recordingStartedElapsedMs = captureStartedElapsedMs,
+        ))
     }
 
     internal fun completeRecording(id: String, partial: File, durationMs: Long): Boolean = synchronized(lock) {
@@ -440,6 +512,10 @@ class MobileMeetingStore(private val context: Context) {
                         transferAudioSHA256 = json.optNullableString("transferAudioSHA256"),
                         transferTranscriptSHA256 = json.optNullableString("transferTranscriptSHA256"),
                         transferEnrolledAtMs = json.optNullableLong("transferEnrolledAtMs"),
+                        discardedRecordingAtMs = json.optNullableLong("discardedRecordingAtMs"),
+                        discardPendingAudioName = json.optNullableString("discardPendingAudioName"),
+                        discardFeedbackShownAtMs = json.optNullableLong("discardFeedbackShownAtMs"),
+                        discardFinalReason = json.optNullableString("discardFinalReason"),
                     ), json.optNullableString("ownerToken")))
                 }
             }
@@ -449,7 +525,19 @@ class MobileMeetingStore(private val context: Context) {
             val meeting = stored.meeting
             val finalFile = File(recordingDirectory(), "${meeting.id}.m4a")
             val partialFile = File(recordingDirectory(), "${meeting.id}.m4a.partial")
-            if ((meeting.status == MobileMeetingStatus.STARTING || meeting.status == MobileMeetingStatus.RECORDING) &&
+            val pendingDiscard = meeting.discardPendingAudioName
+            if (meeting.discardedRecordingAtMs != null && pendingDiscard != null && pendingDiscard == "${meeting.id}.m4a.partial") {
+                val discardFile = File(recordingDirectory(), pendingDiscard)
+                if (!discardFile.exists() || discardFile.delete()) {
+                    repaired = true
+                    stored.copy(meeting = meeting.copy(
+                        discardPendingAudioName = null,
+                        error = meeting.discardFinalReason ?: meeting.error,
+                        discardFinalReason = null,
+                        discardFeedbackShownAtMs = null,
+                    ))
+                } else stored
+            } else if ((meeting.status == MobileMeetingStatus.STARTING || meeting.status == MobileMeetingStatus.RECORDING) &&
                 stored.ownerToken != processToken && !partialFile.exists() && finalFile.isFile && finalFile.length() > 0L) {
                 repaired = true
                 stored.copy(meeting = meeting.copy(
@@ -487,6 +575,10 @@ class MobileMeetingStore(private val context: Context) {
                 putNullable("transferReceiptJson", m.transferReceiptJson); putNullable("transferAudioSHA256", m.transferAudioSHA256)
                 putNullable("transferTranscriptSHA256", m.transferTranscriptSHA256)
                 putNullable("transferEnrolledAtMs", m.transferEnrolledAtMs)
+                putNullable("discardedRecordingAtMs", m.discardedRecordingAtMs)
+                putNullable("discardPendingAudioName", m.discardPendingAudioName)
+                putNullable("discardFeedbackShownAtMs", m.discardFeedbackShownAtMs)
+                putNullable("discardFinalReason", m.discardFinalReason)
                 putNullable("ownerToken", stored.ownerToken)
             })
         }
@@ -524,3 +616,11 @@ class MobileMeetingStore(private val context: Context) {
         internal val processToken: String = UUID.randomUUID().toString()
     }
 }
+
+internal object RecordingDurationPolicy {
+    const val MINIMUM_SAVED_CAPTURE_MS = 10_000L
+    fun shouldDiscard(durationMs: Long): Boolean = durationMs in 0 until MINIMUM_SAVED_CAPTURE_MS
+}
+
+internal data class DiscardFeedback(val meetingId: String, val reason: String, val cleanupPending: Boolean)
+internal data class ShortCaptureDiscardResult(val metadataCommitted: Boolean, val cleanupComplete: Boolean)

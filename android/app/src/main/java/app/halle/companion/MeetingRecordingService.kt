@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Color
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
@@ -27,7 +28,7 @@ class MeetingRecordingService : Service() {
     private var recorder: MediaRecorder? = null
     private var meetingId: String? = null
     private var partialFile: File? = null
-    private var startedElapsedMs: Long = 0
+    private var startedElapsedMs: Long? = null
     private var audioCallback: android.media.AudioManager.AudioRecordingCallback? = null
     private var leaseGuard: (() -> Boolean)? = null
     private var sharedLease: SharedRecordingLease? = null
@@ -100,7 +101,7 @@ class MeetingRecordingService : Service() {
         }
         meetingId = id
         partialFile = output
-        startedElapsedMs = SystemClock.elapsedRealtime()
+        startedElapsedMs = null
         sharedLease = assignedLease
         leaseGuard = suppliedGuard
         if (assignedLease != null) {
@@ -161,10 +162,13 @@ class MeetingRecordingService : Service() {
                 return false
             }
             media.start()
-            if (!store.markRecordingStarted(id)) {
+            val captureStartedElapsedMs = SystemClock.elapsedRealtime()
+            val captureStartedAtMs = System.currentTimeMillis()
+            if (!store.markRecordingStarted(id, captureStartedAtMs, captureStartedElapsedMs)) {
                 finishRecording("The recording could not be confirmed in local storage.")
                 return false
             }
+            startedElapsedMs = captureStartedElapsedMs
             registerSilenceMonitor(media)
             screenReminder = runCatching { RecordingScreenReminder(this, handler).also { it.start() } }.getOrNull()
             if (assignedLease != null) {
@@ -217,7 +221,7 @@ class MeetingRecordingService : Service() {
     private fun finishRecording(interruption: String?) {
         val id = meetingId ?: run { stopSelf(); return }
         val output = partialFile
-        val elapsed = (SystemClock.elapsedRealtime() - startedElapsedMs).coerceAtLeast(0)
+        val elapsed = startedElapsedMs?.let { (SystemClock.elapsedRealtime() - it).coerceAtLeast(0) } ?: 0L
         screenReminder?.stop()
         screenReminder = null
         handler.removeCallbacks(leasePoll)
@@ -237,15 +241,30 @@ class MeetingRecordingService : Service() {
             }
         }
         val store = MobileMeetingStore(this)
-        val saved = if (output != null && finalized) {
+        val shouldDiscardShort = startedElapsedMs != null && RecordingDurationPolicy.shouldDiscard(elapsed) && output != null
+        val shortDiscard = shouldDiscardShort &&
+            runCatching {
+                val meeting = store.find(id)
+                val reason = if ((meeting != null && meeting.scheduledStartAtMs != null && meeting.scheduledEndAtMs != null) ||
+                    meeting?.sourceEventKey != null) {
+                    "La grabación duró menos de 10 segundos y se eliminó. La reunión programada se conservó para que puedas volver a grabarla."
+                } else {
+                    "La grabación duró menos de 10 segundos y se eliminó. No quedó guardada en tu lista."
+                }
+                store.discardShortRecording(id, output, elapsed, reason)?.metadataCommitted == true
+            }.getOrDefault(false)
+        val saved = if (shouldDiscardShort) false else if (output != null && finalized) {
             if (interruption == null) store.completeRecording(id, output, elapsed)
             else store.finalizeInterruptedRecording(id, output, interruption, elapsed)
         } else false
-        if (!saved && (interruption != null || !finalized || output == null)) {
+        if (shouldDiscardShort && !shortDiscard) {
+            store.interruptRecording(id, "No se pudo confirmar el descarte de la grabación corta; se conservó el audio temporal para evitar perderlo.", elapsed)
+        } else if (!shortDiscard && !saved && (interruption != null || !finalized || output == null)) {
             store.interruptRecording(id, interruption ?: "Recording stopped before a complete audio file was created.", elapsed)
-        } else if (!saved) {
+        } else if (!shortDiscard && !saved) {
             store.interruptRecording(id, "The audio file could not be finalized. The saved file may be incomplete.", elapsed)
         }
+        if (shouldDiscardShort) getSharedPreferences(MainActivity.TRANSFER_PREFS, MODE_PRIVATE).edit().remove("capture:$id").commit()
         // Only new Órbita captures enroll; notification/background stops share this path.
         if (saved && getSharedPreferences(MainActivity.TRANSFER_PREFS, MODE_PRIVATE).getBoolean("capture:$id", false)) {
             if (store.setTransferState(id, "queued")) PhoneAudioTransferWorker.kick(this)
@@ -260,6 +279,7 @@ class MeetingRecordingService : Service() {
         }
         meetingId = null
         partialFile = null
+        startedElapsedMs = null
         sharedLease = null
         sharedLeaseClient = null
         sharedLeaseDeadline = null
@@ -295,9 +315,11 @@ class MeetingRecordingService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Grabando · $title")
-            .setContentText("La grabación está activa en este teléfono. Toca Terminar grabación para guardarla.")
+            .setContentText("La grabación está activa en este teléfono. Toca Terminar grabación para detenerla.")
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setColor(Color.RED)
+            .setColorized(true)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .addAction(android.R.drawable.ic_media_pause, "Terminar grabación", stopAction)
@@ -307,8 +329,11 @@ class MeetingRecordingService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Meeting recording", NotificationManager.IMPORTANCE_LOW)
-                    .apply { description = "Shows when Hall-e is recording audio on this device." },
+                NotificationChannel(CHANNEL_ID, "Grabación de reuniones", NotificationManager.IMPORTANCE_LOW)
+                    .apply {
+                        description = "Indica cuándo Hall-e está grabando audio en este teléfono."
+                        setShowBadge(true)
+                    },
             )
         }
     }

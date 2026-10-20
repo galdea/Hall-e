@@ -8,6 +8,7 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
 import android.os.SystemClock
 import androidx.core.app.NotificationManagerCompat
@@ -35,6 +36,7 @@ class MobileStoreInstrumentation : Instrumentation() {
             verifyTransferSchedulingPermission()
             verifyNormalFinalization()
             verifyInterruptedFinalization()
+            verifyShortCaptureReturnsScheduledDraft()
             verifyTrashedDraftCannotRecord()
             verifyHiddenOccurrenceRoundTrip()
             finish(0, Bundle().apply { putString("result", "passed") })
@@ -108,7 +110,7 @@ class MobileStoreInstrumentation : Instrumentation() {
         })
     }
 
-    /** Real microphone check, explicitly selected by instrumentation argument and bounded to five seconds. */
+    /** Real microphone check, explicitly selected by instrumentation argument. Captures are bounded and kept local. */
     private fun verifyMicNotificationStop() {
         check(BuildConfig.DEBUG) { "The mic test is allowed only in a debug/test variant" }
         check(targetContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -120,13 +122,16 @@ class MobileStoreInstrumentation : Instrumentation() {
         val power = targetContext.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
         val keyguard = targetContext.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         check(power.isInteractive && !keyguard.isKeyguardLocked) { "Mic test requires the device to be awake and unlocked" }
+        check(!SharedSessionClient(targetContext).paired()) {
+            "Mic test requires an unpaired phone so no audio can be uploaded to an external Mac."
+        }
 
         val meetings = MobileMeetingStore(targetContext)
         check(meetings.activeRecording() == null && !recordingServiceIsRunning()) {
             "Mic test will not start while another recording service/session is active"
         }
-        val meeting = meetings.createDraft("MicStopRegression ${UUID.randomUUID()}")
-        var started = false
+        val shortMeeting = meetings.createDraft("MicStopShort ${UUID.randomUUID()}")
+        var activeTestMeetingId: String? = null
         try {
             val launch = Intent(targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -135,58 +140,113 @@ class MobileStoreInstrumentation : Instrumentation() {
             waitFor(2_000L) { activity.hasWindowFocus() } // Do not start capture while the test app is backgrounded.
             check(activity.hasWindowFocus()) { "MainActivity did not become the foreground activity" }
 
-            check(MeetingRecordingService.start(activity, meeting.id)) { "Could not start the explicitly requested test recording" }
-            started = true
-            // The service enrolls explicit captures in phone-to-Mac transfer; this diagnostic clip stays local.
-            check(targetContext.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE).edit()
-                .remove("capture:${meeting.id}").commit()) { "Could not keep the diagnostic clip local" }
-            val deadline = SystemClock.elapsedRealtime() + 5_500L
-            var recordingNotification: Notification? = null
-            while (SystemClock.elapsedRealtime() < deadline) {
-                val current = meetings.find(meeting.id)
-                recordingNotification = targetContext.getSystemService(NotificationManager::class.java)
-                    ?.activeNotifications?.map { it.notification }
-                    ?.firstOrNull { it.category == Notification.CATEGORY_SERVICE &&
-                        it.extras?.getString(Notification.EXTRA_TITLE)?.contains("Grabando · ${meeting.title}") == true }
-                if (current?.status == MobileMeetingStatus.RECORDING && recordingNotification != null) break
-                Thread.sleep(100)
+            startLocalTestCapture(activity, shortMeeting.id)
+            activeTestMeetingId = shortMeeting.id
+            val shortStop = waitForStopAction(shortMeeting, 6_000L)
+            Thread.sleep(1_000L) // Enough input for a valid short AAC file before the discard boundary is exercised.
+            val shortCaptureMs = requireNotNull(meetings.recordingElapsedMs(shortMeeting.id))
+            check(shortCaptureMs < RecordingDurationPolicy.MINIMUM_SAVED_CAPTURE_MS) {
+                "Short mic test crossed the discard threshold before Stop: ${shortCaptureMs}ms"
             }
-            check(meetings.find(meeting.id)?.status == MobileMeetingStatus.RECORDING) { "Real microphone capture did not start" }
-            val stop = recordingNotification?.actions?.firstOrNull { it.title?.toString() == "Terminar grabación" }?.actionIntent
-            check(stop != null) { "Ongoing recording notification has no Stop PendingIntent" }
-            Thread.sleep(1_000L) // Give MediaRecorder enough input to finalize a valid short clip.
-            check(SystemClock.elapsedRealtime() - (meetings.find(meeting.id)?.recordingStartedElapsedMs ?: SystemClock.elapsedRealtime()) < 8_000L) {
-                "Mic test exceeded its approximately eight-second capture bound before Stop"
+            shortStop.send()
+            waitFor(3_000L) { meetings.find(shortMeeting.id)?.discardedRecordingAtMs != null && !recordingServiceIsRunning() }
+            val discarded = requireNotNull(meetings.find(shortMeeting.id))
+            val channel = targetContext.getSystemService(NotificationManager::class.java)
+                ?.getNotificationChannel("meeting-recording")
+            val shortAudio = File(targetContext.filesDir, "${MobileMeetingStore.RECORDINGS_DIRECTORY}/${shortMeeting.id}.m4a")
+            val shortPartial = File(targetContext.filesDir, "${MobileMeetingStore.RECORDINGS_DIRECTORY}/${shortMeeting.id}.m4a.partial")
+            check(discarded.status == MobileMeetingStatus.DRAFT && discarded.error?.contains("menos de 10 segundos") == true &&
+                discarded.audioFileName == null && discarded.discardPendingAudioName == null &&
+                discarded.transferState == null && discarded.transferEnrolledAtMs == null &&
+                !shortAudio.exists() && !shortPartial.exists() && meetings.list().none { it.id == shortMeeting.id }) {
+                "A short instant capture was not discarded cleanly: $discarded"
             }
-            stop.send()
-            waitFor(2_000L) { meetings.find(meeting.id)?.status in setOf(MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED) }
-            val saved = meetings.find(meeting.id)
-            val audio = File(targetContext.filesDir, "${MobileMeetingStore.RECORDINGS_DIRECTORY}/${meeting.id}.m4a")
-            check(saved?.status == MobileMeetingStatus.RECORDED && audio.isFile && audio.length() > 0L) {
-                "Notification Stop did not save the generated microphone audio: ${saved?.status} ${saved?.error.orEmpty()}"
+            check(targetContext.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE)
+                .getBoolean("capture:${shortMeeting.id}", false).not()) { "Short capture retained transfer enrollment" }
+            check(channel?.canShowBadge() == true) { "Recording channel does not permit app badges" }
+            activeTestMeetingId = null
+
+            val retainedMeeting = meetings.createDraft("MicStopRetained ${UUID.randomUUID()}")
+            startLocalTestCapture(activity, retainedMeeting.id)
+            activeTestMeetingId = retainedMeeting.id
+            val longStop = waitForStopAction(retainedMeeting, 20_000L, requiredCaptureMs = 10_000L)
+            val recordingNotification = activeServiceNotification()
+            check(recordingNotification?.color == Color.RED) { "Recording notification is not marked red" }
+            val retainedCaptureMs = requireNotNull(meetings.recordingElapsedMs(retainedMeeting.id))
+            check(retainedCaptureMs >= RecordingDurationPolicy.MINIMUM_SAVED_CAPTURE_MS) {
+                "Retention mic test stopped before ten seconds: ${retainedCaptureMs}ms"
             }
-            waitFor(1_500L) { !recordingServiceIsRunning() }
+            targetContext.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            waitFor(2_000L) { !activity.hasWindowFocus() }
+            check(!activity.hasWindowFocus()) { "The test app did not enter the background" }
+            check(meetings.find(retainedMeeting.id)?.status == MobileMeetingStatus.RECORDING &&
+                activeServiceNotification() != null) {
+                "Recording notification did not remain active after the app went to the background"
+            }
+            longStop.send()
+            waitFor(3_000L) {
+                meetings.find(retainedMeeting.id)?.status == MobileMeetingStatus.RECORDED && !recordingServiceIsRunning()
+            }
+            val saved = requireNotNull(meetings.find(retainedMeeting.id))
+            val audio = File(targetContext.filesDir, "${MobileMeetingStore.RECORDINGS_DIRECTORY}/${retainedMeeting.id}.m4a")
+            check(saved.status == MobileMeetingStatus.RECORDED && saved.durationMs >= RecordingDurationPolicy.MINIMUM_SAVED_CAPTURE_MS &&
+                audio.isFile && audio.length() > 0L) {
+                "A capture at or above ten seconds was not retained: $saved"
+            }
             check(meetings.activeRecording() == null && !recordingServiceIsRunning()) { "Recording service stayed active after Stop" }
-            started = false
+            waitFor(1_500L) { activeServiceNotification() == null }
+            check(activeServiceNotification() == null) { "The recording notification/badge source remained after Stop" }
+            activeTestMeetingId = null
             finish(0, Bundle().apply {
                 putString("result", "passed")
-                putString("meetingId", meeting.id)
+                putString("discardedMeetingId", shortMeeting.id)
+                putLong("discardedCaptureMs", shortCaptureMs)
+                putString("retainedMeetingId", retainedMeeting.id)
                 putLong("audioBytes", audio.length())
                 putLong("savedDurationMs", saved.durationMs)
                 putString("audioPath", audio.absolutePath)
-                putString("captureBound", "approximately <= 8 seconds")
+                putString("retainedCaptureMinimum", "10 seconds")
             })
         } finally {
-            // If an assertion interrupts the run after startup, stop only this generated meeting; keep its audio/draft.
-            if (started && meetings.activeRecording()?.id == meeting.id) {
-                MeetingRecordingService.requestStop(targetContext, meeting.id, "mic-test-cleanup")
+            // If an assertion interrupts the run, stop only its generated active meeting and preserve saved audio.
+            activeTestMeetingId?.let { id ->
+                if (meetings.activeRecording()?.id == id) MeetingRecordingService.requestStop(targetContext, id, "mic-test-cleanup")
             }
         }
+    }
+
+    private fun startLocalTestCapture(activity: android.app.Activity, meetingId: String) {
+        check(MeetingRecordingService.start(activity, meetingId)) { "Could not start the explicitly requested test recording" }
+        // This diagnostic audio must stay local even if the device is paired with a Mac.
+        check(targetContext.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE).edit()
+            .remove("capture:$meetingId").commit()) { "Could not keep the diagnostic clip local" }
+    }
+
+    private fun waitForStopAction(meeting: MobileMeeting, timeoutMs: Long, requiredCaptureMs: Long = 0L): android.app.PendingIntent {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val current = MobileMeetingStore(targetContext).find(meeting.id)
+            val notification = targetContext.getSystemService(NotificationManager::class.java)?.activeNotifications
+                ?.map { it.notification }
+                ?.firstOrNull { it.category == Notification.CATEGORY_SERVICE &&
+                    it.extras?.getString(Notification.EXTRA_TITLE)?.contains("Grabando · ${meeting.title}") == true }
+            val action = notification?.actions?.firstOrNull { it.title?.toString() == "Terminar grabación" }?.actionIntent
+            val captureMs = MobileMeetingStore(targetContext).recordingElapsedMs(meeting.id) ?: 0L
+            if (current?.status == MobileMeetingStatus.RECORDING && action != null && captureMs >= requiredCaptureMs) return action
+            Thread.sleep(100)
+        }
+        error("Recording notification/Stop was not ready within ${timeoutMs}ms (required capture ${requiredCaptureMs}ms)")
     }
 
     private fun activeNotification(id: Int): Notification? =
         targetContext.getSystemService(NotificationManager::class.java)?.activeNotifications
             ?.firstOrNull { it.id == id }?.notification
+
+    private fun activeServiceNotification(): Notification? =
+        targetContext.getSystemService(NotificationManager::class.java)?.activeNotifications
+            ?.firstOrNull { it.notification.category == Notification.CATEGORY_SERVICE &&
+                it.notification.extras?.getString(Notification.EXTRA_TITLE)?.startsWith("Grabando · ") == true }
+            ?.notification
 
     private fun awaitNotification(id: Int, timeoutMs: Long): Notification? {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
@@ -283,6 +343,34 @@ class MobileStoreInstrumentation : Instrumentation() {
             check(File(targetContext.filesDir, "${MobileMeetingStore.RECORDINGS_DIRECTORY}/${meeting.id}.m4a").isFile) { "Interrupted final audio file is missing" }
             check(!partial.exists()) { "Partial audio file remains after interrupted finalization" }
             check(store.playbackUri(meeting.id) != null) { "Finalized interrupted audio cannot be opened for playback" }
+        } finally {
+            cleanup(store, meeting.id)
+        }
+    }
+
+    private fun verifyShortCaptureReturnsScheduledDraft() {
+        val store = MobileMeetingStore(targetContext)
+        val scheduledStart = System.currentTimeMillis() + 60 * 60_000L
+        val meeting = store.createDraft(
+            "StoreRegressionTest scheduled short ${UUID.randomUUID()}",
+            sourceEventKey = "StoreRegressionTest:${UUID.randomUUID()}",
+            scheduledStartAtMs = scheduledStart,
+            scheduledEndAtMs = scheduledStart + 30 * 60_000L,
+        )
+        try {
+            val partial = requireNotNull(store.claimRecording(meeting.id)) { "Could not claim scheduled short test recording" }
+            partial.writeBytes(TEST_AUDIO_BYTES)
+            check(store.markRecordingStarted(meeting.id)) { "Could not confirm scheduled short test capture" }
+            check(store.discardShortRecording(meeting.id, partial, 9_999L, "Short test capture discarded; scheduled meeting kept.")?.metadataCommitted == true) {
+                "A confirmed 9,999ms capture was not discarded"
+            }
+            val discarded = requireNotNull(store.find(meeting.id))
+            check(discarded.status == MobileMeetingStatus.DRAFT && discarded.scheduledStartAtMs == scheduledStart &&
+                discarded.sourceEventKey == meeting.sourceEventKey && discarded.error == "Short test capture discarded; scheduled meeting kept." &&
+                discarded.discardedRecordingAtMs != null && discarded.discardPendingAudioName == null &&
+                discarded.audioFileName == null && !partial.exists() && store.list().any { it.id == meeting.id }) {
+                "Short capture discard did not preserve the scheduled meeting metadata: $discarded"
+            }
         } finally {
             cleanup(store, meeting.id)
         }

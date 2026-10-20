@@ -70,7 +70,7 @@ tag halle-app
 			<p.error role='alert'> data.error
 		<main>
 			if ui.page == 'home' || ui.page == 'record'
-				<section.orbit-hero data-capturing=(data.active || ui.starting)>
+				<section.orbit-hero data-idle-home=(ui.page == 'home' && !data.active && !ui.starting) data-capturing=(data.active || ui.starting)>
 					<p.eyebrow> data.today && model.parseDate(data.today).toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})
 					<h1> 'Deja fluir las ideas.'
 					<halle-intro active=model.recording! engaged=(data.active != null || ui.starting)>
@@ -78,6 +78,8 @@ tag halle-app
 						if data.active || ui.starting
 							<span.capture-clock role='timer' aria-label='Duración de la grabación'> if data.active then model.duration(data.active.elapsedMs) else '00:00'
 							<span.capture-state role='status'> if model.recording! then 'Grabando' else 'Activando micrófono…'
+						elif ui.page == 'record' && (ui.captureOutcome == 'discarded_short' || model.chosen! && model.chosen!.discardedRecordingAtMs)
+							<span.capture-state role='status'> if (model.chosen! ? model.chosen!.discardCleanupPending : ui.discardCleanupPending) then 'Eliminando grabación…' else 'Grabación descartada'
 						elif ui.page == 'record' && model.chosen!
 							<span.capture-state> 'Grabación guardada'
 						else
@@ -94,20 +96,24 @@ tag halle-app
 							<span.record-channel aria-hidden='true'> 'MIC'
 				if ui.page == 'record' || data.active
 					if model.chosen!
-						if model.chosen!.error
+						if model.chosen!.error && !model.chosen!.discardedRecordingAtMs
 							<p.error role='alert'> model.chosen!.error
 						<div.record-project>
 							<halle-project-picker>
 						if !data.active
 							<div.notice role='status'>
-								<strong> model.transferText(model.chosen!.transferState) || model.statusText(model.chosen!)
-								<p> 'El audio se conserva hasta que tu Mac confirme la transcripción guardada y verificada.'
+								if model.chosen!.discardedRecordingAtMs
+									<strong> 'Reunión programada conservada'
+									<p> if model.chosen!.discardCleanupPending then 'La grabación duró menos de 10 segundos. Su eliminación está pendiente; no se enviará al Mac.' else 'La grabación duró menos de 10 segundos y se eliminó. Puedes volver a grabar esta reunión.'
+								else
+									<strong> model.transferText(model.chosen!.transferState) || model.statusText(model.chosen!)
+									<p> 'El audio se conserva hasta que tu Mac confirme la transcripción guardada y verificada.'
 				else
-					<p.capture-hint> 'Micrófono del teléfono · elige proyecto al grabar'
-					<div.section-heading>
-						<h2> 'Reuniones de hoy'
-						<button.text-button @click=calendar> 'Ver calendario →'
-					<halle-meetings items=model.meetingsFor(data.today)>
+					<section.today-section>
+						<div.section-heading>
+							<h2> 'Reuniones de hoy'
+							<button.text-button @click=calendar> 'Ver calendario →'
+						<halle-meetings items=model.meetingsFor(data.today)>
 			elif ui.page == 'calendar'
 				<p.eyebrow> 'Tu tiempo'
 				<h1> 'Calendario'
@@ -127,15 +133,9 @@ tag halle-app
 						else
 							<span>
 				<div.section-heading>
-					<h2> if ui.calendarView == 'week' then 'Esta semana' else model.nice(ui.date)
+					<h2> model.nice(ui.date)
 					<button.icon-button aria-label='Crear reunión' @click=model.beginSchedule!> '+'
-				if ui.calendarView == 'month'
-					<halle-meetings items=model.meetingsFor(ui.date)>
-				else
-					for key in model.weekDates(ui.date)
-						<section.week-day>
-							<h3> model.parseDate(key).toLocaleDateString('es-CL',{weekday:'long',day:'numeric'})
-							<halle-meetings items=model.meetingsFor(key)>
+				<halle-meetings items=model.meetingsFor(ui.date)>
 			elif ui.page == 'detail'
 				if model.chosen!
 					<button.text-button @click=back> '← Volver'
