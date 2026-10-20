@@ -11,8 +11,9 @@ export const statusText = m => ({DRAFT:'Por comenzar',STARTING:'Preparando micr�
 export const transferText = state => ({queued:'Esperando conexión con tu Mac',uploading:'Enviando audio cifrado al Mac',uploaded:'Esperando transcripción en tu Mac',receipt_received:'Texto verificado · eliminando audio',audio_deleted:'Texto en tu Mac · audio eliminado',purged:'Texto en tu Mac · audio eliminado',failed:'Envío pendiente · audio conservado'}[state]||state);
 const now=new Date();
 export const ui = {page:'home',date:dateKey(now),calendarView:'month',detailId:null,returnPage:'home',title:'',project:'',scheduledDate:dateKey(now),scheduledTime:'14:00',starting:false,pendingDelete:null,deleted:[],message:'',newProject:false,projectName:''};
-export const data = {meetings:[],projects:[],active:null,paired:false,calendarPermission:false,preview:false,error:null,today:dateKey(now),reminderMinutes:5};
+export const data = {meetings:[],projects:[],active:null,paired:false,calendarPermission:false,notificationsAllowed:true,preview:false,error:null,today:dateKey(now),reminderMinutes:10};
 let repaint=()=>{};
+const pageTop=()=>globalThis.scrollTo?.(0,0);
 export const connect = fn => {repaint=fn;};
 export function send(action,payload={}) {
   if(globalThis.HallENative){globalThis.HallENative.dispatch(action,JSON.stringify(payload));return;}
@@ -32,13 +33,13 @@ export function receive(snapshot) {
 export const meetingsFor = key => data.meetings.filter(m=>m.date===key).sort((a,b)=>(a.startAtMs||0)-(b.startAtMs||0));
 export const chosen = () => data.meetings.find(m=>m.id===ui.detailId)||data.active;
 export const recording = () => data.active?.status==='RECORDING';
-export function navigate(page){ui.page=page;if(page==='home')ui.date=data.today;repaint();}
-export function quickRecord(){if(data.active||ui.starting){openRecord();return;}ui.starting=true;ui.detailId=null;ui.page='record';ui.project='';ui.title='';send('quickRecord');repaint();}
+export function navigate(page){ui.page=page;if(page==='home')ui.date=data.today;repaint();pageTop();}
+export function quickRecord(){if(data.active||ui.starting){openRecord();return;}ui.starting=true;ui.detailId=null;ui.page='record';ui.project='';ui.title='';send('quickRecord');repaint();pageTop();}
 export function stop(){send('stop');}
-export function openMeeting(m){ui.returnPage=ui.page;ui.detailId=m.id;ui.title=m.title;ui.project=m.project||'';ui.page=m.status==='RECORDING'||m.status==='STARTING'?'record':'detail';repaint();}
-export function openRecord(){if(data.active){ui.detailId=data.active.id;ui.title=data.active.title;ui.project=data.active.project||'';}ui.page='record';repaint();}
+export function openMeeting(m){ui.returnPage=ui.page;ui.detailId=m.id;ui.title=m.title;ui.project=m.project||'';ui.page=m.status==='RECORDING'||m.status==='STARTING'?'record':'detail';repaint();pageTop();}
+export function openRecord(){if(data.active){ui.detailId=data.active.id;ui.title=data.active.title;ui.project=data.active.project||'';}ui.page='record';repaint();pageTop();}
 export function saveDetails(){const m=chosen();if(m)send('updateMeeting',{id:m.id,title:ui.title,project:ui.project});}
-export function recordExisting(){const m=chosen();if(!m)return;ui.starting=true;ui.page='record';send('recordMeeting',{id:m.id});repaint();}
+export function recordExisting(){const m=chosen();if(!m)return;ui.starting=true;ui.page='record';send('recordMeeting',{id:m.id});repaint();pageTop();}
 export function askDelete(m){if(m.status==='RECORDING'||m.status==='STARTING')return;ui.pendingDelete=m;repaint();}
 export function deleteMeeting(){if(!ui.pendingDelete)return;send('trash',{id:ui.pendingDelete.id,calendar:!!ui.pendingDelete.calendar});ui.pendingDelete=null;}
 export function undo(){const entry=ui.deleted.pop();if(entry)send('restore',entry);repaint();}
@@ -49,7 +50,7 @@ export function requestRange(){send('range',{date:ui.date});}
 export function selectDate(key){ui.date=key;repaint();}
 export function toast(message){ui.message=message;repaint();}
 export function setView(view){ui.calendarView=view;repaint();}
-export function beginSchedule(){ui.title='';ui.project='';ui.scheduledDate=ui.date;ui.page='schedule';repaint();}
+export function beginSchedule(){ui.title='';ui.project='';ui.scheduledDate=ui.date;ui.page='schedule';repaint();pageTop();}
 export function nativeResult(result){if(result.trash){ui.deleted.push(result.trash);if(ui.page==='detail')ui.page=ui.returnPage;}if(result.error){ui.starting=false;ui.message=result.error;}if(result.message)ui.message=result.message;repaint();}
 globalThis.hallEReceive=receive;globalThis.hallEResult=nativeResult;
 // Browser-only review fixture. Native builds always replace this via their trusted bridge.

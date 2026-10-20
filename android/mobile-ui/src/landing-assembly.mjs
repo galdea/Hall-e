@@ -100,7 +100,7 @@ function anchorIn(bounds, anchor) {
 
 function partArtwork(bounds, mask, anchor, portrait = false) {
   const local = svg('g', { transform: `translate(${-anchor.x} ${-anchor.y})` });
-  const clipped = svg('g', portrait ? { 'clip-path': 'url(#portraitWindow)' } : {});
+  const clipped = svg('g'); // Mobile settles to the whole robot, without a portrait crop.
   const fitted = svg('g', { transform: `translate(${bounds.x} ${bounds.y}) scale(${bounds.width / 100} ${bounds.height / 100})` });
   fitted.append(svg('image', { href: bounds.url, width: 100, height: 100, preserveAspectRatio: 'none', mask: `url(#${mask})` }));
   clipped.append(fitted);
@@ -250,7 +250,7 @@ export function createMechanicalAssembly(decoded, root = document) {
   resizeObserver.observe(mechanism);
 
   return {
-    duration: 10.6,
+    duration: 11.1,
     dispose() { resizeObserver.disconnect(); },
     render(time) {
       lastTime = time;

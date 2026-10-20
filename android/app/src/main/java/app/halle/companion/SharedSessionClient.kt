@@ -44,11 +44,14 @@ data class SharedWorkspaceState(
     val ownerDeviceId: String, val devices: List<SharedDevice>, val sessions: List<SharedSession>,
     val activeLease: SharedLease?, val segments: List<SharedSegment>,
 )
-data class SharedRecordingLease(
+data class SharedRecordingLease internal constructor(
     val sessionId: String, val segmentId: String, val leaseId: String,
     val generation: Long, val generationToken: String, val localDeadlineElapsedMs: Long,
     val cancellationRequested: AtomicBoolean = AtomicBoolean(false),
+    internal val credentialSnapshot: LeaseCredentialSnapshot,
 )
+internal data class LeaseCredentialSnapshot(val endpoint: String, val workspaceId: String, val token: String)
+internal class WorkspaceChangeBlockedException(message: String) : IllegalStateException(message)
 
 /** HTTPS coordinator API client. It never uploads recordings or plaintext meeting payloads. */
 class SharedSessionClient(context: Context) {
@@ -118,16 +121,22 @@ class SharedSessionClient(context: Context) {
 
     /** Creates a workspace and returns a pairing link. The invite token is not persisted. */
     fun createWorkspace(deviceName: String): String {
-        val endpoint = currentEndpoint(appContext)
-        val workspaceKey = ByteArray(32).also(SecureRandom()::nextBytes)
-        val response = request(endpoint, "POST", "/workspaces", null,
-            JSONObject().put("deviceName", cleanDeviceName(deviceName)).toString())
-        val workspaceId = response.getString("workspaceId")
-        val deviceId = response.getString("deviceId")
-        val token = response.getString("deviceToken")
-        val inviteToken = response.getString("inviteToken")
-        vault.save(Credentials(endpoint, workspaceId, deviceId, token, workspaceKey))
-        return makePairingLink(endpoint, workspaceId, inviteToken, workspaceKey)
+        check(!vault.hasStoredEntry()) { "Saved workspace credentials must be reviewed before creating a replacement workspace." }
+        check(credentialGate.reserveReplacement { !vault.hasStoredEntry() }) { "Wait for the current workspace operation before creating a workspace." }
+        try {
+            val endpoint = currentEndpoint(appContext)
+            val workspaceKey = ByteArray(32).also(SecureRandom()::nextBytes)
+            val response = request(endpoint, "POST", "/workspaces", null,
+                JSONObject().put("deviceName", cleanDeviceName(deviceName)).toString())
+            val workspaceId = response.getString("workspaceId")
+            val deviceId = response.getString("deviceId")
+            val token = response.getString("deviceToken")
+            val inviteToken = response.getString("inviteToken")
+            vault.save(Credentials(endpoint, workspaceId, deviceId, token, workspaceKey))
+            return makePairingLink(endpoint, workspaceId, inviteToken, workspaceKey)
+        } finally {
+            credentialGate.finishReplacement()
+        }
     }
 
     /** Owner-only; coordinator invalidates any earlier invitation when issuing a new one. */
@@ -142,14 +151,32 @@ class SharedSessionClient(context: Context) {
     /** Parsing is side-effect-free; caller must confirm with the user before joining. */
     fun joinWorkspace(pairingInput: String, deviceName: String): SharedPairingPayload {
         val pairing = parsePairingInput(pairingInput)
-        val response = request(pairing.endpoint, "POST", "/workspaces/" + pathPart(pairing.workspaceId) + "/join", null,
-            JSONObject().put("inviteToken", pairing.inviteToken)
-                .put("deviceName", cleanDeviceName(deviceName)).toString())
-        val returnedWorkspace = response.getString("workspaceId")
-        require(returnedWorkspace == pairing.workspaceId) { "The coordinator returned a different workspace." }
-        vault.save(Credentials(pairing.endpoint, returnedWorkspace, response.getString("deviceId"),
-            response.getString("deviceToken"), pairing.workspaceKey))
-        return pairing
+        var replacingSavedCredentials = false
+        val reserved = credentialGate.reserveReplacement {
+            replacingSavedCredentials = vault.hasStoredEntry()
+            !replacingSavedCredentials || canReplaceSavedWorkspace()
+        }
+        if (!reserved) throw WorkspaceChangeBlockedException("Termina la grabación o transferencia al Mac antes de cambiar de espacio.")
+        try {
+            val response = request(pairing.endpoint, "POST", "/workspaces/" + pathPart(pairing.workspaceId) + "/join", null,
+                JSONObject().put("inviteToken", pairing.inviteToken)
+                    .put("deviceName", cleanDeviceName(deviceName)).toString())
+            val returnedWorkspace = response.getString("workspaceId")
+            require(returnedWorkspace == pairing.workspaceId) { "The coordinator returned a different workspace." }
+            // The old vault remains intact until the server accepts the invitation. Clear the
+            // workspace-scoped Mac selection before committing the new credential blob.
+            if (replacingSavedCredentials) {
+                check(appContext.getSharedPreferences(TRANSFER_PREFERENCES, Context.MODE_PRIVATE)
+                    .edit().remove(TRANSFER_MAC_DEVICE_ID).commit()) {
+                    "Could not reset the saved Mac recipient for the new workspace."
+                }
+            }
+            vault.save(Credentials(pairing.endpoint, returnedWorkspace, response.getString("deviceId"),
+                response.getString("deviceToken"), pairing.workspaceKey))
+            return pairing
+        } finally {
+            credentialGate.finishReplacement()
+        }
     }
 
     fun state(): SharedWorkspaceState {
@@ -254,11 +281,11 @@ class SharedSessionClient(context: Context) {
                 credentials.token, segmentBody(segmentId, sessionId, startedAtMs, null, "recording",
                     leaseId, generation, generationToken).toString())
         } catch (error: Exception) {
-            runCatching { releaseLease(leaseId, generation, generationToken) }
+            runCatching { releaseLease(credentials, leaseId, generation, generationToken) }
             throw error
         }
         return SharedRecordingLease(sessionId, segmentId, leaseId, generation, generationToken,
-            requestStarted + LEASE_CLIENT_WINDOW_MS)
+            requestStarted + LEASE_CLIENT_WINDOW_MS, credentialSnapshot = credentials.leaseSnapshot())
     }
 
     /** Called only in response to a local user's explicit request to use this device. */
@@ -278,7 +305,7 @@ class SharedSessionClient(context: Context) {
     /** Finalize metadata after local stop; release follows the finalization attempt. */
     fun finalizeSegmentAndRelease(lease: SharedRecordingLease, status: String, endedAtMs: Long = System.currentTimeMillis()): Boolean {
         require(status == "complete" || status == "interrupted")
-        val credentials = requireCredentials()
+        val credentials = lease.credentialSnapshot
         val finalized = runCatching {
             val response = request(credentials.endpoint, "PATCH",
                 "/workspaces/" + pathPart(credentials.workspaceId) + "/sessions/" + pathPart(lease.sessionId)
@@ -297,7 +324,7 @@ class SharedSessionClient(context: Context) {
 
     /** Renewal/deadline loop. Its callback only requests a local stop; it never starts a recorder. */
     fun renewWhileRecording(lease: SharedRecordingLease, guard: LeaseDeadline, onStopRequired: () -> Unit): AutoCloseable {
-        val credentials = requireCredentials()
+        val credentials = lease.credentialSnapshot
         val stopIssued = AtomicBoolean(false)
         val stopOnce = { if (stopIssued.compareAndSet(false, true)) onStopRequired() }
         val executor = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -329,17 +356,19 @@ class SharedSessionClient(context: Context) {
     }
 
     fun leaveWorkspace() {
-        require(!recordingPreparationActive()) { "Wait until this phone finishes preparing its recording before leaving the shared workspace." }
-        require(MobileMeetingStore(appContext).activeRecording() == null) {
-            "Stop this phone's active recording before leaving the shared workspace."
+        check(credentialGate.reserveReplacement { canReplaceSavedWorkspace() }) {
+            "Stop capture and finish phone-to-Mac transfer work before leaving the shared workspace."
         }
-        val credentials = requireCredentials()
-        request(credentials.endpoint, "POST", "/workspaces/" + pathPart(credentials.workspaceId) + "/leave", credentials.token, "{}")
-        vault.clear()
+        try {
+            val credentials = requireCredentials()
+            request(credentials.endpoint, "POST", "/workspaces/" + pathPart(credentials.workspaceId) + "/leave", credentials.token, "{}")
+            vault.clear()
+        } finally {
+            credentialGate.finishReplacement()
+        }
     }
 
-    private fun releaseLease(leaseId: String, generation: Long, generationToken: String) {
-        val credentials = requireCredentials()
+    private fun releaseLease(credentials: Credentials, leaseId: String, generation: Long, generationToken: String) {
         request(credentials.endpoint, "POST", "/workspaces/" + pathPart(credentials.workspaceId) + "/lease/release",
             credentials.token, JSONObject().put("leaseId", leaseId).put("generation", generation)
                 .put("generationToken", generationToken).toString())
@@ -376,6 +405,26 @@ class SharedSessionClient(context: Context) {
     }
 
     private fun requireCredentials(): Credentials = vault.load() ?: error("This device is not paired to a shared workspace.")
+
+    private fun canReplaceSavedWorkspace(): Boolean {
+        if (recordingPreparationActive()) return false
+        val store = MobileMeetingStore(appContext)
+        if (store.activeRecording() != null) return false
+        val meetings = store.list(includeTrashed = true)
+        if (store.loadError != null) return false
+        val capturePrefs = appContext.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE)
+        return meetings.none { meeting ->
+            val explicitlyStarted = capturePrefs.getBoolean("capture:${meeting.id}", false)
+            val hasTransferEnrollment = meeting.transferEnrolledAtMs != null
+            val finalizedNewCapture = explicitlyStarted && meeting.status in setOf(
+                MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED,
+            )
+            (hasTransferEnrollment || finalizedNewCapture) && meeting.transferState != "audio_deleted"
+        }
+    }
+
+    internal fun beginWorkspaceOperation(): Boolean = credentialGate.beginOperation()
+    internal fun finishWorkspaceOperation() = credentialGate.endOperation()
 
     private fun request(endpoint: String, method: String, path: String, token: String? = null, jsonBody: String? = null): JSONObject {
         val url = URL(validateEndpoint(endpoint, BuildConfig.DEBUG) + "/v1" + path)
@@ -428,15 +477,24 @@ class SharedSessionClient(context: Context) {
         const val PAIRING_PAGE = "https://hall-e.pages.dev/pair"
         private const val DEBUG_ENDPOINT_PREFS = "shared-session-debug"
         private const val KEY_ENDPOINT = "endpoint"
+        private const val TRANSFER_PREFERENCES = "phone-audio-transfer"
+        private const val TRANSFER_MAC_DEVICE_ID = "macDeviceId"
         private const val HTTP_TIMEOUT_MS = 8_000
         private const val MAX_REQUEST_BYTES = 16 * 1024
         private const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
         private const val LEASE_CLIENT_WINDOW_MS = 15_000L
         private const val LEASE_RENEW_INTERVAL_MS = 5_000L
         private val recordingPreparation = AtomicBoolean(false)
+        private val credentialGate = WorkspaceCredentialGate()
 
-        fun beginRecordingPreparation(): Boolean = recordingPreparation.compareAndSet(false, true)
-        fun finishRecordingPreparation() { recordingPreparation.set(false) }
+        fun beginRecordingPreparation(): Boolean = synchronized(credentialGate) {
+            if (!credentialGate.beginOperation()) return@synchronized false
+            if (recordingPreparation.compareAndSet(false, true)) true
+            else { credentialGate.endOperation(); false }
+        }
+        fun finishRecordingPreparation() = synchronized(credentialGate) {
+            if (recordingPreparation.compareAndSet(true, false)) credentialGate.endOperation()
+        }
         fun recordingPreparationActive(): Boolean = recordingPreparation.get()
 
         fun setDebugEndpoint(context: Context, candidate: String) {
@@ -562,7 +620,11 @@ private data class Credentials(
     val token: String, val workspaceKey: ByteArray,
 )
 
+private fun Credentials.leaseSnapshot() = LeaseCredentialSnapshot(endpoint, workspaceId, token)
+
 private class SharedSessionVault(private val context: Context) {
+    fun hasStoredEntry(): Boolean = context.getSharedPreferences(VAULT_PREFS, Context.MODE_PRIVATE).contains(VAULT_KEY)
+
     fun save(credentials: Credentials) {
         val raw = JSONObject().put("endpoint", credentials.endpoint).put("workspaceId", credentials.workspaceId)
             .put("deviceId", credentials.deviceId).put("token", credentials.token)

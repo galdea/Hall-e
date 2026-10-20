@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -52,7 +53,7 @@ class MeetingRecordingService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 val requestedId = intent.getStringExtra(EXTRA_MEETING_ID)
-                if (requestedId == null || meetingId == requestedId) {
+                if (notificationStopTargetsActiveRecording(requestedId, meetingId)) {
                     val reason = intent.getStringExtra("stopReason")
                     finishRecording(when (reason) {
                         null, "user" -> null
@@ -285,19 +286,21 @@ class MeetingRecordingService : Service() {
     }
 
     private fun notification(title: String): Notification {
+        val targetMeetingId = requireNotNull(meetingId) { "Cannot publish a recording notification without its meeting ID." }
         val stopIntent = Intent(this, MeetingRecordingService::class.java).setAction(ACTION_STOP)
-            .putExtra(EXTRA_MEETING_ID, meetingId)
-        val stopAction = PendingIntent.getService(this, NOTIFICATION_ID, stopIntent,
+            .setData(Uri.parse("halle://recording/stop/${Uri.encode(targetMeetingId)}"))
+            .putExtra(EXTRA_MEETING_ID, targetMeetingId)
+        val stopAction = PendingIntent.getService(this, targetMeetingId.hashCode(), stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("Recording · $title")
-            .setContentText("Tap Stop to finish and save this recording on this phone.")
+            .setContentTitle("Grabando · $title")
+            .setContentText("La grabación está activa en este teléfono. Toca Terminar grabación para guardarla.")
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopAction)
+            .addAction(android.R.drawable.ic_media_pause, "Terminar grabación", stopAction)
             .build()
     }
 
@@ -384,3 +387,6 @@ class MeetingRecordingService : Service() {
         }
     }
 }
+
+internal fun notificationStopTargetsActiveRecording(requestedId: String?, activeId: String?): Boolean =
+    !requestedId.isNullOrBlank() && requestedId == activeId

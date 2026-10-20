@@ -270,33 +270,41 @@ class MobileMeetingStore(private val context: Context) {
         }
     }
 
-    internal fun claimRecording(id: String): File? = synchronized(lock) {
-        val values = readAll().toMutableList()
-        val index = values.indexOfFirst { it.meeting.id == id }
-        if (index < 0) return@synchronized null
-        val current = values[index]
-        if (current.meeting.status != MobileMeetingStatus.DRAFT || current.meeting.trashedAtMs != null) return@synchronized null
-        if (values.any {
-                it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING
-            }) return@synchronized null
-        val directory = recordingDirectory()
-        if (!directory.exists() && !directory.mkdirs()) return@synchronized null
-        val partialName = "$id.m4a.partial"
-        val partial = File(directory, partialName)
-        if (partial.exists() && !partial.delete()) return@synchronized null
-        values[index] = current.copy(meeting = current.meeting.copy(
-            status = MobileMeetingStatus.STARTING,
-            audioFileName = partialName,
-            recordingStartedAtMs = System.currentTimeMillis(),
-            recordingStartedElapsedMs = SystemClock.elapsedRealtime(),
-            durationMs = 0,
-            error = null,
-        ), ownerToken = processToken)
-        if (!writeAll(values)) {
-            partial.delete()
-            return@synchronized null
+    internal fun claimRecording(id: String): File? {
+        val sessionClient = SharedSessionClient(context)
+        if (!sessionClient.beginWorkspaceOperation()) return null
+        try {
+            return synchronized(lock) {
+                val values = readAll().toMutableList()
+                val index = values.indexOfFirst { it.meeting.id == id }
+                if (index < 0) return@synchronized null
+                val current = values[index]
+                if (current.meeting.status != MobileMeetingStatus.DRAFT || current.meeting.trashedAtMs != null) return@synchronized null
+                if (values.any {
+                        it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING
+                    }) return@synchronized null
+                val directory = recordingDirectory()
+                if (!directory.exists() && !directory.mkdirs()) return@synchronized null
+                val partialName = "$id.m4a.partial"
+                val partial = File(directory, partialName)
+                if (partial.exists() && !partial.delete()) return@synchronized null
+                values[index] = current.copy(meeting = current.meeting.copy(
+                    status = MobileMeetingStatus.STARTING,
+                    audioFileName = partialName,
+                    recordingStartedAtMs = System.currentTimeMillis(),
+                    recordingStartedElapsedMs = SystemClock.elapsedRealtime(),
+                    durationMs = 0,
+                    error = null,
+                ), ownerToken = processToken)
+                if (!writeAll(values)) {
+                    partial.delete()
+                    return@synchronized null
+                }
+                partial
+            }
+        } finally {
+            sessionClient.finishWorkspaceOperation()
         }
-        partial
     }
 
     internal fun markRecordingStarted(id: String): Boolean = update(id) { stored ->

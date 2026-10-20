@@ -17,8 +17,10 @@ data class MeetingOccurrence(
     val declined: Boolean,
     val meetingUrl: String?,
     val calendarName: String,
+    val reminderKey: String? = null,
+    val localMeetingId: String? = null,
 ) {
-    val occurrenceId: String get() = "$calendarId:$eventId:$beginMillis"
+    val occurrenceId: String get() = reminderKey ?: "$calendarId:$eventId:$beginMillis"
     val eventKey: String get() = "$calendarId:$eventId"
     fun startsAt(zone: ZoneId = ZoneId.systemDefault()): String =
         if (allDay) "All day" else DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())

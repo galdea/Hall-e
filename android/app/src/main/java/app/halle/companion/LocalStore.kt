@@ -7,7 +7,7 @@ class LocalStore(context: Context) {
     private val prefs = context.getSharedPreferences("halle-local", Context.MODE_PRIVATE)
 
     var alertMinutes: Int
-        get() = prefs.getInt("alertMinutes", 5)
+        get() = prefs.getInt("alertMinutes", ReminderPlanner.DEFAULT_ALERT_MINUTES)
         set(value) { prefs.edit().putInt("alertMinutes", value.coerceIn(0, 1440)).apply() }
     var morningSummaryEnabled: Boolean
         get() = prefs.getBoolean("morningSummaryEnabled", true)

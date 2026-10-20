@@ -79,7 +79,9 @@ class MainActivity : Activity() {
         override fun run() {
             if (!foreground) return
             checkStartup(); publish()
-            handler.postDelayed(this, if (meetings.activeRecording() != null || pendingStartId != null) 250 else 1500)
+            val active = meetings.activeRecording()
+            if (active?.status == MobileMeetingStatus.RECORDING) maybeRequestNotifications()
+            handler.postDelayed(this, if (active != null || pendingStartId != null) 250 else 1500)
         }
     }
 
@@ -170,7 +172,7 @@ class MainActivity : Activity() {
             "createProject" -> { check(store.addProject(p.getString("name")).isNotBlank()); publish(true) }
             "schedule" -> {
                 val at = LocalDate.parse(p.getString("date")).atTime(LocalTime.parse(p.getString("time"))).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                meetings.createDraft(p.optString("title").ifBlank { "Nueva reunión" }, p.optString("project").takeIf(String::isNotBlank), null, at, at + 3_600_000); publish(true)
+                meetings.createDraft(p.optString("title").ifBlank { "Nueva reunión" }, p.optString("project").takeIf(String::isNotBlank), null, at, at + 3_600_000); publish(true); refreshReminders(); maybeRequestNotifications()
             }
             "trash" -> {
                 val id = p.getString("id"); val external = p.optBoolean("calendar")
@@ -190,6 +192,7 @@ class MainActivity : Activity() {
             "chooseMac" -> chooseMac()
             "calendarAccess" -> if (calendar.hasPermission()) chooseCalendars() else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), CALENDAR_PERMISSION)
             "reminders" -> chooseReminders()
+            "notifications" -> maybeRequestNotifications(force = true)
             "exactAlarms" -> startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
             "retryTransfers" -> { PhoneAudioTransferWorker.kick(this); message("Se reintentarán los envíos al Mac vinculado.") }
             "trashList" -> showTrash()
@@ -253,7 +256,7 @@ class MainActivity : Activity() {
                 .put("date", Instant.ofEpochMilli(e.beginMillis).atZone(if (e.allDay) ZoneOffset.UTC else ZoneId.systemDefault()).toLocalDate().toString()).put("time", if (e.allDay) "Todo el día" else time(e.beginMillis)).put("startAtMs", e.beginMillis).put("status", "DRAFT").put("hasMeetingUrl", e.meetingUrl != null))
         }
         val body = JSONObject().put("meetings", array).put("projects", JSONArray((store.projects() + all.mapNotNull { it.projectName }).distinct().sorted()))
-            .put("active", active?.let(::meetingJSON) ?: JSONObject.NULL).put("preparing", pendingStartId != null).put("paired", paired).put("calendarPermission", calendar.hasPermission())
+            .put("active", active?.let(::meetingJSON) ?: JSONObject.NULL).put("preparing", pendingStartId != null).put("paired", paired).put("notificationsAllowed", androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()).put("calendarPermission", calendar.hasPermission())
             .put("today", LocalDate.now().toString()).put("preview", preview).put("error", meetings.loadError ?: JSONObject.NULL).put("reminderMinutes", store.alertMinutes).toString()
         if (force || body != lastSnapshot) { lastSnapshot = body; web.evaluateJavascript("window.hallEReceive && window.hallEReceive($body)", null) }
     }
@@ -292,7 +295,27 @@ class MainActivity : Activity() {
     private fun chooseCalendars() {
         val values = calendar.calendars(); val selected = store.selectedCalendarIds.toMutableSet()
         AlertDialog.Builder(this).setTitle("Calendarios").setMultiChoiceItems(values.map { it.name }.toTypedArray(), values.map { it.id in selected }.toBooleanArray()) { _, index, checked -> if (checked) selected.add(values[index].id) else selected.remove(values[index].id) }
-            .setPositiveButton("Guardar") { _, _ -> store.selectedCalendarIds = selected; refreshCalendar(); refreshReminders() }.setNegativeButton("Cancelar", null).show()
+            .setPositiveButton("Guardar") { _, _ -> store.selectedCalendarIds = selected; refreshCalendar(); refreshReminders(); maybeRequestNotifications() }.setNegativeButton("Cancelar", null).show()
+    }
+    private fun maybeRequestNotifications(force: Boolean = false) {
+        if (preview || !foreground) return
+        if (android.os.Build.VERSION.SDK_INT < 33) {
+            if (force && !androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled())
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            if (force && !androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled())
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            return
+        }
+        val prompts = getSharedPreferences("ui-permission-prompts", MODE_PRIVATE)
+        if (!force && prompts.getBoolean("notificationsAsked", false)) return
+        if (force && prompts.getBoolean("notificationsAsked", false) && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)); return
+        }
+        prompts.edit().putBoolean("notificationsAsked", true).apply()
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION)
     }
     private fun chooseReminders() {
         val values = intArrayOf(0, 1, 5, 10, 15, 30)
@@ -309,8 +332,8 @@ class MainActivity : Activity() {
                 if (hidden) meetings.restore(id) else meetings.trash(id)
                 error("No se pudo actualizar el calendario local. Vuelve a intentarlo.")
             }
-            refreshReminders()
         }
+        refreshReminders()
     }
     private fun showTrash() {
         val all = meetings.list(includeTrashed = true)
@@ -329,6 +352,7 @@ class MainActivity : Activity() {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) pendingStartId?.let { startCapture(it) }
             else { pendingStartId = null; showError("No se concedió acceso al micrófono. Puedes volver a intentarlo.") }
         }
+        if (requestCode == NOTIFICATION_PERMISSION) refreshReminders()
         if (requestCode == CALENDAR_PERMISSION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { refreshCalendar(); chooseCalendars() }; publish(true)
     }
     override fun onDestroy() { ready = false; handler.removeCallbacksAndMessages(null); io.shutdown(); player?.release(); web.removeJavascriptInterface("HallENative"); web.destroy(); super.onDestroy() }

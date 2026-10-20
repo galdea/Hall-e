@@ -51,7 +51,7 @@ tag halle-app
 	def dismiss
 		ui.message = ''
 	def back
-		ui.page = ui.returnPage
+		model.navigate(ui.returnPage)
 	def showProject
 		ui.newProject = true
 	def cancelProject
@@ -119,8 +119,14 @@ tag halle-app
 			elif ui.page == 'record'
 				<section.recording-panel>
 					<p.eyebrow role='status'> if model.recording! then 'Grabando en este teléfono' else if ui.starting || data.active then 'Preparando micrófono' else if model.chosen! then 'Grabación guardada' else 'Sin grabación activa'
-					<h1.record-heading> if data.active then (model.recording! ? 'Te estoy escuchando.' : 'Un momento…') else if model.chosen! then 'Todo capturado.' else 'Tu voz, aquí.'
-					<p.hero-caption> 'Micrófono del teléfono. No captura el audio interno de otras apps.'
+					if data.active || ui.starting
+						<div.record-lens-frame>
+							<span.chest-lens.capture-eye data-active=model.recording! aria-label=(model.recording! ? 'Grabando' : 'Preparando micrófono')>
+								<span.chest-light>
+							<p.capture-clock> if data.active then model.duration(data.active.elapsedMs) else '00:00'
+					else
+						<h1.record-heading> if model.chosen! then 'Todo capturado.' else 'Tu voz, aquí.'
+					<p.capture-hint> 'Micrófono del teléfono'
 				if model.chosen!
 					if model.chosen!.error
 						<p.error role='alert'> model.chosen!.error
@@ -135,7 +141,6 @@ tag halle-app
 					<div.notice role='status'>
 						<strong> if model.chosen! then model.transferText(model.chosen!.transferState) || model.statusText(model.chosen!) else 'Revisa tus reuniones de hoy'
 						<p> 'El audio se conserva hasta que tu Mac confirme la transcripción guardada y verificada.'
-					<button.primary @click=go('home')> 'Volver a Inicio'
 			elif ui.page == 'detail'
 				if model.chosen!
 					<button.text-button @click=back> '← Volver'
@@ -196,8 +201,10 @@ tag halle-app
 					<span> if data.calendarPermission then 'Calendarios seleccionados' else 'Conectar calendario'
 					<span.muted> '→'
 				<button.settings-row @click=model.send('reminders')>
-					<span> 'Avisos y resumen del día'
+					<span> 'Avisos · {data.reminderMinutes} min antes'
 					<span.muted> '→'
+				if !data.notificationsAllowed
+					<button.settings-row @click=model.send('notifications')> 'Activar notificaciones'
 				<button.settings-row @click=model.send('retryTransfers')>
 					<span> 'Reintentar envíos pendientes'
 					<span.muted> '↻'
