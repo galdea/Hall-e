@@ -17,3 +17,7 @@ client_secret*.json
 *.m4a
 *.aiff
 *.mp3
+
+# Local coordinator runtime state and generated Kotlin cache
+.wrangler/
+.kotlin/

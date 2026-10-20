@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "halle-shared-session-coordinator",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-09-15",
+  "workers_dev": true,
+  "account_id": "f98cd22e4bc305b68c12a8c383d6a61d",
+  "limits": { "cpu_ms": 50 },
+  "observability": { "enabled": false },
+  "durable_objects": {
+    "bindings": [
+      { "name": "WORKSPACES", "class_name": "WorkspaceCoordinator" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WorkspaceCoordinator"] }
+  ],
+  "ratelimits": [
+    {
+      "name": "PUBLIC_RATE_LIMITER",
+      "namespace_id": "920261020",
+      "simple": { "limit": 20, "period": 60 }
+    }
+  ]
+}
