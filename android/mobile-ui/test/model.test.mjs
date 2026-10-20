@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {daysOfMonth,weekDates,duration,dateKey,parseDate,quickRecord,receive,ui,data,nativeResult,deleteMeeting,undo} from '../src/model.mjs';
+import {daysOfMonth,weekDates,duration,dateKey,parseDate,quickRecord,receive,ui,data,nativeResult,deleteMeeting,undo,selectProject,createProject} from '../src/model.mjs';
 test('February leap year and Sunday-first month keep Monday calendar alignment',()=>{
   assert.equal(daysOfMonth('2028-02-15').filter(Boolean).length,29);
   assert.equal(daysOfMonth('2026-11-01').slice(0,6).every(d=>d===null),true);
@@ -20,3 +20,22 @@ test('trash is acknowledged before Undo becomes available and maintains a stack'
   nativeResult({trash:{id:'a',calendar:false}});nativeResult({trash:{id:'b',calendar:true}});undo();undo();assert.deepEqual(sent.slice(-2),[['restore',{id:'b',calendar:true}],['restore',{id:'a',calendar:false}]]);delete globalThis.HallENative;
 });
 test('recording duration remains correct past an hour and clamps negative values',()=>{assert.equal(duration(3_661_000),'61:01');assert.equal(duration(-5),'00:00');});
+test('capture project changes save immediately without sending a stale or empty meeting name',()=>{
+  const sent=[];globalThis.HallENative={dispatch:(a,p)=>sent.push([a,JSON.parse(p)])};
+  data.active=null;data.meetings=[{id:'capture-project',title:'Original title'}];ui.page='record';ui.detailId='capture-project';ui.title='Stale editor value';
+  selectProject({target:{value:'Marketing'}});
+  assert.deepEqual(sent,[['updateMeeting',{id:'capture-project',project:'Marketing'}]]);
+  ui.projectName='New project';createProject();
+  assert.deepEqual(sent.slice(-2),[['createProject',{name:'New project'}],['updateMeeting',{id:'capture-project',project:'New project'}]]);
+  ui.page='schedule';selectProject({target:{value:'Operations'}});assert.equal(sent.length,3,'scheduled meeting selection remains a draft until Create');
+  delete globalThis.HallENative;
+});
+test('returning to Home with native capture binds the picker to that recording, not an old detail',()=>{
+  const sent=[];globalThis.HallENative={dispatch:(a,p)=>sent.push([a,JSON.parse(p)])};
+  ui.page='home';ui.detailId='old-detail';ui.project='Old project';
+  receive({preparing:false,active:{id:'native-capture',status:'RECORDING',project:'Hall-e'}});
+  assert.equal(ui.detailId,'native-capture');assert.equal(ui.project,'Hall-e');
+  selectProject({target:{value:'Marketing'}});
+  assert.deepEqual(sent,[['updateMeeting',{id:'native-capture',project:'Marketing'}]]);
+  data.active=null;delete globalThis.HallENative;
+});

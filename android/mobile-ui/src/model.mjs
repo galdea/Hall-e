@@ -20,12 +20,16 @@ export function send(action,payload={}) {
   demoAction(action,payload);
 }
 export function receive(snapshot) {
+  const previousActiveId=data.active?.id;
   Object.assign(data,snapshot);
   if (!recording() && typeof document !== 'undefined') document.documentElement.classList.remove('recording-reminder');
   ui.starting=Boolean(snapshot.preparing);
   if(snapshot.active && ['STARTING','RECORDING'].includes(snapshot.active.status)){
     if(ui.detailId!==snapshot.active.id && ui.starting)ui.page='record';
-    if(ui.page==='record'){ui.detailId=snapshot.active.id;}
+    if(ui.page==='record'||ui.page==='home'){
+      if(ui.detailId!==snapshot.active.id||previousActiveId!==snapshot.active.id)ui.project=snapshot.active.project||'';
+      ui.detailId=snapshot.active.id;
+    }
   }
   if(snapshot.message)ui.message=snapshot.message;
   repaint();
@@ -33,17 +37,20 @@ export function receive(snapshot) {
 export const meetingsFor = key => data.meetings.filter(m=>m.date===key).sort((a,b)=>(a.startAtMs||0)-(b.startAtMs||0));
 export const chosen = () => data.meetings.find(m=>m.id===ui.detailId)||data.active;
 export const recording = () => data.active?.status==='RECORDING';
-export function navigate(page){ui.page=page;if(page==='home')ui.date=data.today;repaint();pageTop();}
+export function navigate(page){if(page==='home'&&data.active){openRecord();return;}ui.page=page;if(page==='home')ui.date=data.today;repaint();pageTop();}
 export function quickRecord(){if(data.active||ui.starting){openRecord();return;}ui.starting=true;ui.detailId=null;ui.page='record';ui.project='';ui.title='';send('quickRecord');repaint();pageTop();}
 export function stop(){send('stop');}
 export function openMeeting(m){ui.returnPage=ui.page;ui.detailId=m.id;ui.title=m.title;ui.project=m.project||'';ui.page=m.status==='RECORDING'||m.status==='STARTING'?'record':'detail';repaint();pageTop();}
 export function openRecord(){if(data.active){ui.detailId=data.active.id;ui.title=data.active.title;ui.project=data.active.project||'';}ui.page='record';repaint();pageTop();}
 export function saveDetails(){const m=chosen();if(m)send('updateMeeting',{id:m.id,title:ui.title,project:ui.project});}
+export function saveProject(){const m=data.active||chosen();if(m)send('updateMeeting',{id:m.id,project:ui.project});}
+const capturePage=()=>ui.page==='record'||(ui.page==='home'&&data.active);
+export function selectProject(event){ui.project=event.target.value;if(capturePage())saveProject();}
 export function recordExisting(){const m=chosen();if(!m)return;ui.starting=true;ui.page='record';send('recordMeeting',{id:m.id});repaint();pageTop();}
 export function askDelete(m){if(m.status==='RECORDING'||m.status==='STARTING')return;ui.pendingDelete=m;repaint();}
 export function deleteMeeting(){if(!ui.pendingDelete)return;send('trash',{id:ui.pendingDelete.id,calendar:!!ui.pendingDelete.calendar});ui.pendingDelete=null;}
 export function undo(){const entry=ui.deleted.pop();if(entry)send('restore',entry);repaint();}
-export function createProject(){const name=ui.projectName.trim();if(!name){ui.message='Escribe un nombre para el proyecto.';repaint();return;}ui.project=name;send('createProject',{name});ui.projectName='';ui.newProject=false;repaint();}
+export function createProject(){const name=ui.projectName.trim();if(!name){ui.message='Escribe un nombre para el proyecto.';repaint();return;}ui.project=name;send('createProject',{name});if(capturePage())saveProject();ui.projectName='';ui.newProject=false;repaint();}
 export function schedule(){if(!ui.scheduledDate||!ui.scheduledTime){ui.message='Elige fecha y hora.';repaint();return;}send('schedule',{title:ui.title.trim()||'Nueva reunión',project:ui.project,date:ui.scheduledDate,time:ui.scheduledTime});ui.page='calendar';ui.date=ui.scheduledDate;requestRange();}
 export function movePeriod(sign){const d=parseDate(ui.date);if(ui.calendarView==='month'){d.setDate(1);d.setMonth(d.getMonth()+sign);}else d.setDate(d.getDate()+7*sign);ui.date=dateKey(d);requestRange();repaint();}
 export function requestRange(){send('range',{date:ui.date});}

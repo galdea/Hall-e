@@ -81,12 +81,6 @@ class MobileStoreInstrumentation : Instrumentation() {
             check(activeNotification(withdrawnEvent.occurrenceId.hashCode()) == null) {
                 "A withdrawn local draft still produced a reminder notification"
             }
-            finish(0, Bundle().apply {
-                putString("result", "passed")
-                putLong("plannedTriggerAtMs", triggerAt)
-                putString("postedOccurrence", postedEvent.occurrenceId)
-                putString("suppressedOccurrence", withdrawnEvent.occurrenceId)
-            })
         } finally {
             ReminderScheduler.cancel(targetContext, postedEvent.occurrenceId)
             ReminderScheduler.cancel(targetContext, withdrawnEvent.occurrenceId)
@@ -95,7 +89,23 @@ class MobileStoreInstrumentation : Instrumentation() {
             // Store has no hard-delete API; mark only these generated drafts trashed for suppression.
             meetings.trash(postedDraft.id)
             meetings.trash(withdrawnDraft.id)
+            // Instrumentation.finish may terminate the process; cleanup must precede it.
+            // Recover only our strictly named synthetic DRAFT fixtures from earlier runs.
+            meetings.list().filter { it.status == MobileMeetingStatus.DRAFT &&
+                it.title.matches(Regex("ReminderRegression [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}( withdrawn)?"))
+            }.forEach { fixture ->
+                val occurrence = "local:${fixture.id}"
+                ReminderScheduler.cancel(targetContext, occurrence)
+                notificationManager?.cancel(occurrence.hashCode())
+                meetings.trash(fixture.id)
+            }
         }
+        finish(0, Bundle().apply {
+            putString("result", "passed")
+            putLong("plannedTriggerAtMs", beginsAt - ReminderPlanner.DEFAULT_ALERT_MINUTES * 60_000L)
+            putString("postedOccurrence", postedEvent.occurrenceId)
+            putString("suppressedOccurrence", withdrawnEvent.occurrenceId)
+        })
     }
 
     /** Real microphone check, explicitly selected by instrumentation argument and bounded to five seconds. */

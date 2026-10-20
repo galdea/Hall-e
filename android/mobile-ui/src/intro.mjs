@@ -1,5 +1,6 @@
 import markup from './landing-intro.svg';
 import {createMechanicalAssembly} from './landing-assembly.mjs';
+import {mountRobotRig} from './robot.mjs';
 
 // Landing assembly, packaged locally. The final image stays in the same SVG at
 // exactly the assembled coordinates: there is no replacement or last-frame jump.
@@ -7,17 +8,16 @@ let shown = false;
 export function mountIntro(host) {
   const robot = document.createElement('div'); robot.className = 'robot-art';
   const still = document.createElement('img');
-  Object.assign(still, {src:'/hall-e.webp', alt:'Hall-e', width:164, height:198, className:'hero-character'});
+  Object.assign(still, {src:'/hall-e.webp', alt:'Hall-e', width:197, height:238, className:'hero-character'});
   robot.append(still); host.append(robot);
   const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
-  if (shown || preference.matches) { shown = true; return () => robot.remove(); }
-  shown = true; robot.hidden = true;
+  const playOpening=!shown&&!preference.matches; shown=true; robot.hidden=playOpening;
   const instrument = document.createElement('div'); instrument.className = 'instrument landing-intro';
-  instrument.setAttribute('aria-label', 'WALL-E y HAL se ensamblan para formar Hall-e');
+  instrument.setAttribute('role','img');instrument.setAttribute('aria-label','Hall-e');
   const parsed = new DOMParser().parseFromString(markup, 'image/svg+xml');
   instrument.append(document.importNode(parsed.documentElement, true));
   const svg = instrument.querySelector('svg');
-  let assembly, frame=0, previous=null, elapsed=0, disposed=false, settled=false, loadingTimer=0;
+  let assembly, rig, frame=0, previous=null, elapsed=0, disposed=false, settled=false, loadingTimer=0, acceleration=null;
   function detachListeners() {
     document.removeEventListener('visibilitychange', visibility);
     preference.removeEventListener('change', reducedMotion);
@@ -26,7 +26,7 @@ export function mountIntro(host) {
   function fallback() {
     if (disposed) return;
     settled=true; stopClock(); assembly?.dispose(); detachListeners();
-    instrument.remove(); robot.hidden=false;
+    instrument.remove(); rig?.dispose();robot.hidden=false;
   }
   function renderAt(time) {
     assembly.render(time);
@@ -39,10 +39,13 @@ export function mountIntro(host) {
     // The source-mask union and this whole image have identical bounds/pixels.
     instrument.classList.remove('intro-playing');
     instrument.dataset.assemblyPhase='complete';
+    rig.ready();
   }
   function tick(now) {
     if (disposed || settled || document.hidden) { previous=null; return; }
-    if(previous!==null) elapsed+=(now-previous)/1000; previous=now;
+    if(host.dataset.engaged==='true'&&!acceleration)acceleration={at:now,from:elapsed};
+    if(acceleration){const t=Math.min(1,(now-acceleration.at)/650);elapsed=acceleration.from+(assembly.duration-acceleration.from)*(t*t*(3-2*t));}
+    else if(previous!==null) elapsed+=(now-previous)/1000; previous=now;
     if(elapsed>=assembly.duration) { settle(); return; }
     renderAt(elapsed); frame=requestAnimationFrame(tick);
   }
@@ -50,7 +53,7 @@ export function mountIntro(host) {
     cancelAnimationFrame(frame); previous=null;
     if(!disposed&&!settled&&assembly&&!document.hidden) frame=requestAnimationFrame(tick);
   }
-  function reducedMotion() { if(preference.matches) fallback(); }
+  function reducedMotion() { if(preference.matches&&assembly&&!settled) settle(); }
   document.addEventListener('visibilitychange', visibility);
   preference.addEventListener('change', reducedMotion);
   loadingTimer=setTimeout(fallback,3000);
@@ -58,10 +61,11 @@ export function mountIntro(host) {
     const image=new Image(); image.src=url; await image.decode(); return [url,image];
   })).then(images=>{
     if(disposed||settled) return;
-    clearTimeout(loadingTimer); host.append(instrument);
-    assembly=createMechanicalAssembly(new Map(images),instrument);
-    instrument.classList.add('intro-playing'); renderAt(0);
-    frame=requestAnimationFrame(tick);
+    clearTimeout(loadingTimer); host.append(instrument);robot.hidden=true;
+    if(playOpening&&!preference.matches)assembly=createMechanicalAssembly(new Map(images),instrument);
+    rig=mountRobotRig(svg,host,images[0][1],preference);
+    if(assembly){instrument.classList.add('intro-playing');renderAt(0);frame=requestAnimationFrame(tick);}
+    else{settled=true;svg.setAttribute('viewBox','254 66 492 448');instrument.dataset.assemblyPhase='complete';rig.ready();detachListeners();}
   }).catch(error=>{console.warn('Hall-e opening animation unavailable',error);fallback();});
-  return ()=>{ disposed=true; stopClock(); assembly?.dispose(); detachListeners(); instrument.remove(); robot.remove(); };
+  return ()=>{ disposed=true; stopClock(); assembly?.dispose(); rig?.dispose();detachListeners(); instrument.remove(); robot.remove(); };
 }
