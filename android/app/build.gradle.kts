@@ -8,9 +8,9 @@ android {
         applicationId = "app.halle.companion"
         minSdk = 31
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.0"
-        testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
+        versionCode = 4
+        versionName = "0.3.0"
+        testInstrumentationRunner = "app.halle.companion.MobileStoreInstrumentation"
     }
 
     val releaseStorePath = System.getenv("ANDROID_KEYSTORE")

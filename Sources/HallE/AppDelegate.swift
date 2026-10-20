@@ -86,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RecordingStore.enqueueLegacyFailuresForRetryOnce()
         RecordingStore.enqueueAppleSpeechFallbacksForRetryOnce()
         RecordingRecovery.reconcileInterruptedCaptures()
+        PhoneAudioTransferService.shared.start()
         Log.rec.info("transcription recovery startup: \(RecordingStore.queuedSessions().count, privacy: .public) queued job(s)")
         // Resume durable jobs without replacing user-selected providers.
         Task { @MainActor in

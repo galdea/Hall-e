@@ -18,6 +18,7 @@ class MeetingAlertReceiver : BroadcastReceiver() {
         val occurrence = intent.getStringExtra(EXTRA_OCCURRENCE) ?: return
         val now = System.currentTimeMillis()
         val store = LocalStore(context)
+        if (store.occurrenceHidden(occurrence)) return
         if (BuildConfig.DEBUG && store.previewActive) return
         val repository = CalendarRepository(context, store)
         if (!repository.hasPermission()) return

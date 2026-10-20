@@ -12,6 +12,9 @@ const digest = async (value) => bytesToBase64Url(new Uint8Array(await crypto.sub
 const opaqueId = () => crypto.randomUUID();
 const asString = (value, max = 256) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
 const cleanName = (value) => typeof value === "string" ? value.trim().slice(0, 80) : "";
+const AUDIO_CHUNK_BYTES = 256 * 1024;
+const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+const MAX_AUDIO_CHUNKS = 400;
 
 async function readJson(request) {
   const length = Number(request.headers.get("content-length") || 0);
@@ -185,6 +188,137 @@ export class WorkspaceCoordinator {
       target.revokedAtMs = now; await this.save(workspace); return json({ revoked: true });
     }
 
+    // Phone audio is end-to-end encrypted by paired clients and kept outside
+    // the bounded workspace metadata document. It never participates in the
+    // capture lease and is retained until the phone acknowledges a verified
+    // transcript receipt.
+    if (suffix === "/transfers/consumer" && request.method === "POST") {
+      await this.state.storage.put(`phone-consumer:${caller.id}`, { deviceId: caller.id, registeredAtMs: now });
+      await this.save(workspace); return json({ registered: true, deviceId: caller.id });
+    }
+    if (suffix === "/transfers/consumers" && request.method === "GET") {
+      const entries = await this.state.storage.list({ prefix: "phone-consumer:" });
+      const consumers = [...entries.values()].filter(c => workspace.devices[c.deviceId] && !workspace.devices[c.deviceId].revokedAtMs)
+        .map(c => ({ deviceId: c.deviceId, name: workspace.devices[c.deviceId].name }));
+      return json({ consumers });
+    }
+    const transferPath = suffix.match(/^\/transfers(?:\/([0-9a-f-]+))?(?:\/chunks\/(\d+)|\/(receipt|ack))?$/i);
+    if (transferPath) {
+      if (request.method === "GET" && !transferPath[1]) {
+        const entries = await this.state.storage.list({ prefix: "phone-transfer:" });
+        return json({ transfers: [...entries.values()].filter(t => t.macDeviceId === caller.id && t.complete && !t.receipt && !workspace.devices[t.deviceId]?.revokedAtMs) });
+      }
+      if (request.method === "POST" && !transferPath[1]) {
+        let body; try { body = await readJson(request); } catch (e) { return parseFailure(e); }
+        if (body.protocolVersion !== 1 || body.workspaceId !== workspaceId || body.deviceId !== caller.id ||
+            !isUuid(body.recordingId) || !isSha256(body.audioSHA256) ||
+            !Number.isSafeInteger(body.plaintextLength) || body.plaintextLength < 1 || body.plaintextLength > MAX_AUDIO_BYTES ||
+            body.chunkSize !== AUDIO_CHUNK_BYTES || !Number.isSafeInteger(body.chunkCount) ||
+            body.chunkCount < 1 || body.chunkCount > MAX_AUDIO_CHUNKS ||
+            body.chunkCount !== Math.ceil(body.plaintextLength / body.chunkSize) || body.v !== 1 ||
+            !isUuid(body.macDeviceId) || body.macDeviceId === caller.id) return fail("invalid_transfer_manifest");
+        const registeredConsumer = await this.state.storage.get(`phone-consumer:${body.macDeviceId}`);
+        if (!registeredConsumer || !workspace.devices[body.macDeviceId] || workspace.devices[body.macDeviceId].revokedAtMs) return fail("consumer_not_registered", 409);
+        if (!workspace.sessions[body.recordingId]) return fail("session_not_found", 404);
+        const id = body.transferId;
+        if (!isUuid(id)) return fail("invalid_transfer_id");
+        const key = `phone-transfer:${id}`;
+        const existing = await this.state.storage.get(key);
+        const manifest = { v: 1, protocolVersion: 1, transferId: id, workspaceId, deviceId: caller.id, macDeviceId: body.macDeviceId,
+          recordingId: body.recordingId, audioSHA256: body.audioSHA256, plaintextLength: body.plaintextLength,
+          chunkSize: body.chunkSize, chunkCount: body.chunkCount, createdAtMs: now, complete: false, receivedChunks: [], receipt: null };
+        if (existing) {
+          if (JSON.stringify(existing) !== JSON.stringify(manifest) && !sameManifest(existing, manifest)) return fail("transfer_conflict", 409);
+          return json(existing, 200);
+        }
+        const transfers = await this.state.storage.list({ prefix: "phone-transfer:" });
+        if (transfers.size >= 20) {
+          const acknowledged = [...transfers.entries()].filter(([, item]) => item.acknowledgedAtMs)
+            .sort((a, b) => a[1].acknowledgedAtMs - b[1].acknowledgedAtMs);
+          while (transfers.size >= 20 && acknowledged.length) {
+            const [oldKey] = acknowledged.shift(); await this.state.storage.delete(oldKey); transfers.delete(oldKey);
+          }
+          if (transfers.size >= 20) return fail("transfer_limit", 409);
+        }
+        await this.state.storage.put(key, manifest);
+        await this.save(workspace);
+        return json(manifest, 201);
+      }
+      const transferId = transferPath[1];
+      if (!isUuid(transferId)) return fail("not_found", 404);
+      const key = `phone-transfer:${transferId}`;
+      const manifest = await this.state.storage.get(key);
+      if (!manifest || (manifest.deviceId !== caller.id && manifest.macDeviceId !== caller.id)) return fail("not_found", 404);
+      if (!workspace.devices[manifest.macDeviceId] || workspace.devices[manifest.macDeviceId].revokedAtMs) return fail("not_found", 404);
+      if (request.method === "PUT" && transferPath[2] !== undefined && caller.id === manifest.deviceId) {
+        if (manifest.complete) return fail("transfer_complete", 409);
+        const index = Number(transferPath[2]);
+        if (!Number.isSafeInteger(index) || index < 0 || index >= manifest.chunkCount) return fail("invalid_chunk_index");
+        const expectedPlain = index === manifest.chunkCount - 1 ? manifest.plaintextLength - index * manifest.chunkSize : manifest.chunkSize;
+        const expectedBytes = expectedPlain + 28; // AES-GCM nonce and tag
+        const declaredLength = request.headers.get("content-length");
+        const length = declaredLength === null ? expectedBytes : Number(declaredLength);
+        if (length !== expectedBytes || expectedBytes > AUDIO_CHUNK_BYTES + 28) return fail("invalid_chunk_length");
+        let bytes;
+        try { bytes = await readBounded(request, AUDIO_CHUNK_BYTES + 28); }
+        catch (error) { return parseFailure(error); }
+        if (bytes.byteLength !== expectedBytes) return fail("invalid_chunk_length");
+        const chunkKey = `phone-chunk:${transferId}:${index}`;
+        const old = await this.state.storage.get(chunkKey);
+        if (old && !equalBytes(old, bytes)) return fail("chunk_conflict", 409);
+        if (!old) await this.state.storage.put(chunkKey, bytes);
+        if (!manifest.receivedChunks.includes(index)) manifest.receivedChunks.push(index);
+        manifest.receivedChunks.sort((a, b) => a - b);
+        await this.state.storage.put(key, manifest);
+        await this.save(workspace);
+        return json({ stored: true, replay: !!old }, old ? 200 : 201);
+      }
+      if (request.method === "GET" && transferPath[2] !== undefined && caller.id === manifest.macDeviceId) {
+        const index = Number(transferPath[2]);
+        if (!Number.isSafeInteger(index) || index < 0 || index >= manifest.chunkCount) return fail("invalid_chunk_index");
+        const bytes = await this.state.storage.get(`phone-chunk:${transferId}:${index}`);
+        if (!bytes) return fail("chunk_not_found", 404);
+        return new Response(bytes, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
+      }
+      if (request.method === "GET" && !transferPath[2] && transferPath[3] === undefined) return caller.id === manifest.macDeviceId ? json(manifest) : fail("not_found", 404);
+      if (request.method === "GET" && transferPath[3] === "receipt") return caller.id === manifest.deviceId && manifest.receipt ? json(manifest.receipt) : fail("receipt_pending", 404);
+      if (request.method === "POST" && !transferPath[2] && transferPath[3] === undefined && caller.id === manifest.deviceId) {
+        if (manifest.complete) return json({ complete: true, replay: true });
+        for (let i = 0; i < manifest.chunkCount; i++) if (!(await this.state.storage.get(`phone-chunk:${transferId}:${i}`))) return fail("chunks_incomplete", 409);
+        manifest.complete = true;
+        await this.state.storage.put(key, manifest);
+        await this.save(workspace);
+        return json({ complete: true });
+      }
+      if (request.method === "POST" && transferPath[3] === "receipt" && caller.id === manifest.macDeviceId) {
+        if (!manifest.complete) return fail("transfer_incomplete", 409);
+        let body; try { body = await readJson(request); } catch (e) { return parseFailure(e); }
+        const receipt = body.receipt;
+        if (!receipt || receipt.v !== 1 || receipt.protocolVersion !== 1 || receipt.transferId !== manifest.transferId || receipt.workspaceId !== workspaceId ||
+            receipt.deviceId !== manifest.deviceId || receipt.recordingId !== manifest.recordingId ||
+            receipt.macDeviceId !== manifest.macDeviceId ||
+            receipt.audioSHA256 !== manifest.audioSHA256 || receipt.plaintextLength !== manifest.plaintextLength ||
+            receipt.chunkSize !== manifest.chunkSize || receipt.chunkCount !== manifest.chunkCount ||
+            !isSha256(receipt.transcriptSHA256) || receipt.macAudioPurged !== true ||
+            !asString(receipt.mac, 64) || !Number.isSafeInteger(receipt.savedAtMs)) return fail("invalid_receipt");
+        if (manifest.receipt && stableJSON(manifest.receipt) !== stableJSON(receipt)) return fail("receipt_conflict", 409);
+        manifest.receipt = receipt;
+        await this.state.storage.put(key, manifest);
+        await this.save(workspace);
+        return json({ stored: true });
+      }
+      if (request.method === "POST" && transferPath[3] === "ack" && caller.id === manifest.deviceId) {
+        let body; try { body = await readJson(request); } catch (e) { return parseFailure(e); }
+        if (!manifest.receipt || body.transcriptSHA256 !== manifest.receipt.transcriptSHA256) return fail("receipt_not_acknowledged", 409);
+        for (let i = 0; i < manifest.chunkCount; i++) await this.state.storage.delete(`phone-chunk:${transferId}:${i}`);
+        manifest.acknowledgedAtMs = now;
+        await this.state.storage.put(key, manifest);
+        await this.save(workspace);
+        return json({ acknowledged: true, chunksDeleted: true });
+      }
+      return fail("not_found", 404);
+    }
+
     if (suffix === "/sessions" && request.method === "POST") {
       let body; try { body = await readJson(request); } catch (e) { return parseFailure(e); }
       if (!isUuid(body.id) || !isCiphertext(body.encryptedPayload)) return fail("invalid_session");
@@ -276,6 +410,17 @@ export class WorkspaceCoordinator {
 }
 
 function isUuid(value) { return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+function isSha256(value) { return typeof value === "string" && /^[0-9a-f]{64}$/.test(value); }
+function sameManifest(a, b) { return ["v", "protocolVersion", "transferId", "workspaceId", "deviceId", "macDeviceId", "recordingId", "audioSHA256", "plaintextLength", "chunkSize", "chunkCount"].every(k => a[k] === b[k]); }
+function stableJSON(value) { return JSON.stringify(Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))); }
+async function readBounded(request, max) {
+  const reader = request.body?.getReader(); if (!reader) return new Uint8Array();
+  const chunks = []; let size = 0;
+  try { while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > max) { await reader.cancel(); throw new Error("body_too_large"); } chunks.push(value); } }
+  finally { reader.releaseLock(); }
+  const out = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; } return out;
+}
+function equalBytes(a, b) { return a.byteLength === b.byteLength && a.every((v, i) => v === b[i]); }
 function isCiphertext(value) {
   if (typeof value !== "string" || value.length > 12_000 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return false;
   try { return atob(value).length >= 28 && atob(value).length <= 8 * 1024 && btoa(atob(value)) === value; } catch { return false; }

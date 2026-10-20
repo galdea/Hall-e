@@ -454,12 +454,14 @@ enum RecordingCoordinator {
 
         let languagePreference = AppPreferences.transcriptionLanguage
         let preference = AppPreferences.transcriptionEngine
-        let resolved = TranscriptionEngineResolver.resolve(
-            preference: preference,
-            language: languagePreference,
-            availability: cloudAvailability(),
-            checkpoint: job.cloud
-        )
+        let resolved: SolvedTranscriptionEngine = session.eventDedupKey.hasPrefix("phone-transfer:")
+            ? .sfSpeech(language: languagePreference.sfSpeechCode)
+            : TranscriptionEngineResolver.resolve(
+                preference: preference,
+                language: languagePreference,
+                availability: cloudAvailability(),
+                checkpoint: job.cloud
+            )
 
         // A returned Speechmatics job ID is a durable remote checkpoint. Resume
         // it regardless of a later global engine change; creating a different

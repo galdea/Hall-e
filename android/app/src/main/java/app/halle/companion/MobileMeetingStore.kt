@@ -8,6 +8,7 @@ import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 
 enum class MobileMeetingStatus { DRAFT, STARTING, RECORDING, RECORDED, INTERRUPTED, FAILED }
@@ -27,6 +28,12 @@ data class MobileMeeting(
     val recordingStartedElapsedMs: Long?,
     val durationMs: Long,
     val error: String?,
+    val trashedAtMs: Long? = null,
+    val transferState: String? = null,
+    val transferReceiptJson: String? = null,
+    val transferAudioSHA256: String? = null,
+    val transferTranscriptSHA256: String? = null,
+    val transferEnrolledAtMs: Long? = null,
 )
 
 /** Local-only meeting metadata and app-private recording files. */
@@ -34,7 +41,35 @@ class MobileMeetingStore(private val context: Context) {
     private var writableMetadata = true
     var loadError: String? = null
         private set
-    fun list(): List<MobileMeeting> = synchronized(lock) { readAll().map { it.meeting } }
+    fun list(includeTrashed: Boolean = false): List<MobileMeeting> = synchronized(lock) {
+        readAll().map { it.meeting }.filter { includeTrashed || it.trashedAtMs == null }
+    }
+
+    fun trash(id: String): Boolean = synchronized(lock) {
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.id == id }
+        if (index < 0) return@synchronized false
+        val stored = values[index]
+        if (stored.meeting.status == MobileMeetingStatus.STARTING || stored.meeting.status == MobileMeetingStatus.RECORDING) return@synchronized false
+        if (stored.meeting.trashedAtMs != null) return@synchronized true
+        values[index] = stored.copy(meeting = stored.meeting.copy(trashedAtMs = System.currentTimeMillis()))
+        writeAll(values)
+    }
+
+    fun restore(id: String): Boolean = synchronized(lock) {
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.id == id }
+        if (index < 0) return@synchronized false
+        if (values[index].meeting.trashedAtMs == null) return@synchronized true
+        values[index] = values[index].copy(meeting = values[index].meeting.copy(trashedAtMs = null))
+        writeAll(values)
+    }
+
+    fun updateTitle(id: String, title: String): Boolean {
+        val cleanTitle = title.trim().take(MAX_TITLE_LENGTH)
+        if (cleanTitle.isEmpty()) return false
+        return update(id) { it.copy(meeting = it.meeting.copy(title = cleanTitle)) }
+    }
 
     fun createDraft(
         title: String,
@@ -67,6 +102,64 @@ class MobileMeetingStore(private val context: Context) {
     }
 
     fun find(id: String): MobileMeeting? = synchronized(lock) { readAll().firstOrNull { it.meeting.id == id }?.meeting }
+
+    fun audioFileForTransfer(id: String): File? = synchronized(lock) {
+        val meeting = readAll().firstOrNull { it.meeting.id == id }?.meeting ?: return@synchronized null
+        if (meeting.trashedAtMs != null || meeting.status !in setOf(MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED) ||
+            !isSafeRecordingId(id) || meeting.audioFileName != "$id.m4a") return@synchronized null
+        File(recordingDirectory(), "$id.m4a").takeIf { it.isFile && it.length() > 0L }
+    }
+
+    fun transferState(id: String): String? = synchronized(lock) {
+        readAll().firstOrNull { it.meeting.id == id }?.meeting?.transferState
+    }
+
+    fun setTransferState(id: String, state: String): Boolean {
+        if (state.isBlank() || state.length > MAX_TRANSFER_STATE_LENGTH) return false
+        return update(id) { stored ->
+            val meeting = stored.meeting
+            if (meeting.trashedAtMs != null) stored
+            else if (state == "queued") {
+                if (meeting.status !in setOf(MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED) || meeting.audioFileName != "${meeting.id}.m4a" ||
+                    !File(recordingDirectory(), "${meeting.id}.m4a").isFile) stored
+                else stored.copy(meeting = meeting.copy(
+                    transferState = state,
+                    transferEnrolledAtMs = meeting.transferEnrolledAtMs ?: System.currentTimeMillis(),
+                ))
+            } else if (meeting.transferEnrolledAtMs == null || state !in TRANSFER_STATES) stored
+            else stored.copy(meeting = meeting.copy(transferState = state))
+        }
+    }
+
+    /** Persists a validated durable transcript receipt before deleting its matching local audio. */
+    fun purgeTransferredAudio(id: String, audioSHA256: String, transcriptSHA256: String, receiptJson: String): Boolean = synchronized(lock) {
+        if (!isSafeRecordingId(id)) return@synchronized false
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.id == id }
+        if (index < 0) return@synchronized false
+        val old = values[index].meeting
+        if (old.trashedAtMs != null || old.status !in setOf(MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED)) return@synchronized false
+        if (old.transferEnrolledAtMs == null || old.transferState != "receipt_received") return@synchronized false
+        if (!MobileTransferReceiptPolicy.isBound(receiptJson, old.sharedSessionId ?: old.id, audioSHA256, transcriptSHA256)) return@synchronized false
+        if (old.transferReceiptJson != null && old.transferReceiptJson != receiptJson) return@synchronized false
+        val audio = audioFileForTransfer(id)
+        if (audio == null) {
+            return@synchronized old.transferReceiptJson == receiptJson && old.transferAudioSHA256 == audioSHA256 &&
+                old.transferTranscriptSHA256 == transcriptSHA256 && !File(recordingDirectory(), "$id.m4a").exists()
+        }
+        if (sha256(audio) != audioSHA256) return@synchronized false
+        values[index] = values[index].copy(meeting = old.copy(
+            transferReceiptJson = receiptJson,
+            transferAudioSHA256 = audioSHA256,
+            transferTranscriptSHA256 = transcriptSHA256,
+            transferState = "receipt_received",
+        ))
+        if (!writeAll(values)) return@synchronized false
+        val persisted = readAll().firstOrNull { it.meeting.id == id }?.meeting ?: return@synchronized false
+        if (persisted.transferReceiptJson != receiptJson || persisted.transferAudioSHA256 != audioSHA256 || persisted.transferTranscriptSHA256 != transcriptSHA256) return@synchronized false
+        if (sha256(audio) != audioSHA256) return@synchronized false
+        !audio.exists() || audio.delete()
+    }
 
     fun draftForSharedSession(sharedSessionId: String): MobileMeeting? = synchronized(lock) {
         readAll().firstOrNull {
@@ -110,7 +203,7 @@ class MobileMeetingStore(private val context: Context) {
 
     fun activeRecording(): MobileMeeting? = synchronized(lock) {
         readAll().firstOrNull {
-            it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING
+            it.meeting.trashedAtMs == null && (it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING)
         }?.meeting
     }
 
@@ -182,7 +275,7 @@ class MobileMeetingStore(private val context: Context) {
         val index = values.indexOfFirst { it.meeting.id == id }
         if (index < 0) return@synchronized null
         val current = values[index]
-        if (current.meeting.status != MobileMeetingStatus.DRAFT) return@synchronized null
+        if (current.meeting.status != MobileMeetingStatus.DRAFT || current.meeting.trashedAtMs != null) return@synchronized null
         if (values.any {
                 it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING
             }) return@synchronized null
@@ -314,7 +407,7 @@ class MobileMeetingStore(private val context: Context) {
         writableMetadata = true
         loadError = null
         val raw = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY_MEETINGS, null) ?: return emptyList()
-        return runCatching {
+        val parsed = runCatching {
             val array = JSONArray(raw)
             buildList {
                 for (index in 0 until array.length()) {
@@ -334,10 +427,33 @@ class MobileMeetingStore(private val context: Context) {
                         recordingStartedAtMs = json.optNullableLong("recordingStartedAtMs"),
                         recordingStartedElapsedMs = json.optNullableLong("recordingStartedElapsedMs"),
                         durationMs = json.optLong("durationMs").coerceAtLeast(0), error = json.optNullableString("error"),
+                        trashedAtMs = json.optNullableLong("trashedAtMs"), transferState = json.optNullableString("transferState"),
+                        transferReceiptJson = json.optNullableString("transferReceiptJson"),
+                        transferAudioSHA256 = json.optNullableString("transferAudioSHA256"),
+                        transferTranscriptSHA256 = json.optNullableString("transferTranscriptSHA256"),
+                        transferEnrolledAtMs = json.optNullableLong("transferEnrolledAtMs"),
                     ), json.optNullableString("ownerToken")))
                 }
             }
-        }.getOrElse { markMetadataUnreadable(); emptyList() }
+        }.getOrElse { markMetadataUnreadable(); return emptyList() }
+        var repaired = false
+        val reconciled = parsed.map { stored ->
+            val meeting = stored.meeting
+            val finalFile = File(recordingDirectory(), "${meeting.id}.m4a")
+            val partialFile = File(recordingDirectory(), "${meeting.id}.m4a.partial")
+            if ((meeting.status == MobileMeetingStatus.STARTING || meeting.status == MobileMeetingStatus.RECORDING) &&
+                stored.ownerToken != processToken && !partialFile.exists() && finalFile.isFile && finalFile.length() > 0L) {
+                repaired = true
+                stored.copy(meeting = meeting.copy(
+                    status = MobileMeetingStatus.RECORDED,
+                    audioFileName = "${meeting.id}.m4a",
+                    recordingStartedElapsedMs = null,
+                    error = null,
+                ), ownerToken = null)
+            } else stored
+        }
+        if (repaired) writeAll(reconciled)
+        return reconciled
     }
 
     private fun markMetadataUnreadable() {
@@ -359,6 +475,10 @@ class MobileMeetingStore(private val context: Context) {
                 putNullable("recordingStartedAtMs", m.recordingStartedAtMs)
                 putNullable("recordingStartedElapsedMs", m.recordingStartedElapsedMs)
                 put("durationMs", m.durationMs); putNullable("error", m.error)
+                putNullable("trashedAtMs", m.trashedAtMs); putNullable("transferState", m.transferState)
+                putNullable("transferReceiptJson", m.transferReceiptJson); putNullable("transferAudioSHA256", m.transferAudioSHA256)
+                putNullable("transferTranscriptSHA256", m.transferTranscriptSHA256)
+                putNullable("transferEnrolledAtMs", m.transferEnrolledAtMs)
                 putNullable("ownerToken", stored.ownerToken)
             })
         }
@@ -372,6 +492,14 @@ class MobileMeetingStore(private val context: Context) {
     private fun JSONObject.optNullableLong(key: String): Long? = if (isNull(key) || !has(key)) null else optLong(key)
     private fun JSONObject.putNullable(key: String, value: Any?) { put(key, value ?: JSONObject.NULL) }
     private fun cleanProject(value: String?): String? = value?.trim()?.take(MAX_PROJECT_LENGTH)?.takeIf(String::isNotEmpty)
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     companion object {
         const val RECORDINGS_DIRECTORY = "recordings"
@@ -381,6 +509,9 @@ class MobileMeetingStore(private val context: Context) {
         private const val MAX_TITLE_LENGTH = 160
         private const val MAX_PROJECT_LENGTH = 80
         private const val MAX_ERROR_LENGTH = 240
+        private const val MAX_TRANSFER_STATE_LENGTH = 80
+        private val TRANSFER_STATES = setOf("queued", "uploading", "uploaded", "receipt_received", "audio_deleted", "failed", "paused")
+        private fun isSafeRecordingId(id: String): Boolean = runCatching { UUID.fromString(id).toString() == id.lowercase() }.getOrDefault(false)
         private val lock = Any()
         internal val processToken: String = UUID.randomUUID().toString()
     }

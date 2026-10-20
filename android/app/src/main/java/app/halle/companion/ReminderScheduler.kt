@@ -22,7 +22,7 @@ object ReminderScheduler {
             return
         }
         val now = System.currentTimeMillis()
-        val events = repository.events(now, now + 30L * 24 * 60 * 60 * 1000)
+        val events = repository.events(now, now + 30L * 24 * 60 * 60 * 1000).filterNot { store.occurrenceHidden(it.occurrenceId) }
         val planned = ReminderPlanner.eligible(events, store.alertMinutes, now, store.deliveredOccurrenceIds)
         val nextIds = planned.map { it.first.occurrenceId }.toSet()
         (store.scheduledOccurrenceIds - nextIds).forEach { cancel(context, it) }
@@ -66,6 +66,7 @@ object ReminderScheduler {
         if (BuildConfig.DEBUG && LocalStore(context).previewActive) return false
         val begin = intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0)
         val occurrence = intent.getStringExtra(MeetingAlertReceiver.EXTRA_OCCURRENCE) ?: return false
+        if (LocalStore(context).occurrenceHidden(occurrence)) return false
         val repository = CalendarRepository(context, LocalStore(context))
         if (!repository.hasPermission()) return false
         val end = intent.getLongExtra(MeetingAlertReceiver.EXTRA_END, 0)

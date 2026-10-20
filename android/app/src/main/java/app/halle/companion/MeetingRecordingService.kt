@@ -239,6 +239,10 @@ class MeetingRecordingService : Service() {
         } else if (!saved) {
             store.interruptRecording(id, "The audio file could not be finalized. The saved file may be incomplete.", elapsed)
         }
+        // Only new Órbita captures enroll; notification/background stops share this path.
+        if (saved && getSharedPreferences(MainActivity.TRANSFER_PREFS, MODE_PRIVATE).getBoolean("capture:$id", false)) {
+            if (store.setTransferState(id, "queued")) PhoneAudioTransferWorker.kick(this)
+        }
         sharedLease?.let { lease ->
             val client = sharedLeaseClient
             if (client != null) sharedLeaseExecutor.execute {
@@ -340,6 +344,9 @@ class MeetingRecordingService : Service() {
             store.recoverInterrupted()
             val draft = store.find(meetingId) ?: return false
             if (draft.status != MobileMeetingStatus.DRAFT) return false
+            // Only new explicit user starts enroll; historical audio is never scanned.
+            if (!context.getSharedPreferences(MainActivity.TRANSFER_PREFS, Context.MODE_PRIVATE).edit()
+                    .putBoolean("capture:$meetingId", true).commit()) return false
             if (leaseGuard != null) pendingLeaseGuards[meetingId] = leaseGuard
             if (sharedLease != null) pendingSharedLeases[meetingId] = sharedLease
             val intent = Intent(context, MeetingRecordingService::class.java)

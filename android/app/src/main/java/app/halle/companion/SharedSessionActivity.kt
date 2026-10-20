@@ -61,7 +61,7 @@ class SharedSessionActivity : Activity() {
     }
 
     private fun render() {
-        val scroll = ScrollView(this).apply { setBackgroundColor(0xfff5f7f5.toInt()) }
+        val scroll = ScrollView(this).apply { setBackgroundColor(0xff080e10.toInt()) }
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(24), dp(20), dp(28))
@@ -70,7 +70,7 @@ class SharedSessionActivity : Activity() {
         setContentView(scroll)
         content.addView(label("Shared sessions", 25, 0xff1f322e.toInt(), true))
         content.addView(label(
-            "Encrypted meeting details can be shared across your Hall-e devices. Audio stays on the phone that records; this coordinator never receives audio or starts a microphone.",
+            "Encrypted meeting details are shared with your linked devices. New recordings are sent encrypted to your selected Mac after you stop. Shared handoffs never start a microphone remotely.",
             14, 0xff52675e.toInt(),
         ))
         content.addView(space(14))
@@ -335,7 +335,7 @@ class SharedSessionActivity : Activity() {
     private fun label(value: String, size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
         text = value
         textSize = size.toFloat()
-        setTextColor(color)
+        setTextColor(if (size >= 17 || bold) 0xffe4e9d9.toInt() else 0xffa4b7b1.toInt())
         if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
         setPadding(dp(2), dp(6), dp(2), dp(6))
     }

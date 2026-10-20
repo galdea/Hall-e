@@ -12,6 +12,8 @@ function fakeCloudflare() {
         const state = { storage: {
           async get(key) { const value = values.get(key); return value === undefined ? undefined : structuredClone(value); },
           async put(key, value) { values.set(key, structuredClone(value)); },
+          async list({ prefix = "" } = {}) { return new Map([...values].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => [key, structuredClone(value)])); },
+          async delete(key) { values.delete(key); },
           async setAlarm() {}, async deleteAlarm() {}, async deleteAll() { values.clear(); },
         } };
         const object = new WorkspaceCoordinator(state);
@@ -215,6 +217,40 @@ test("HTTP segment route binds metadata to the claimed session and makes finaliz
   assert.equal(replay.status, 200);
   assert.equal((await replay.json()).status, "complete");
   assert.equal((await request(env, workspacePath(owner, "/lease/release"), { method: "POST", token: phone.deviceToken, body: proof })).status, 409);
+});
+
+test("phone audio transfer is scoped to an explicit Mac consumer and purges only after receipt acknowledgment", async () => {
+  const { env } = fakeCloudflare();
+  const mac = await createWorkspace(env);
+  const phone = (await joinWorkspace(env, mac.workspaceId, mac.inviteToken)).value;
+  const recordingId = "47f13ed1-11e1-4fb7-9c88-158084e94a4a";
+  await createSession(env, mac, mac.deviceToken, recordingId);
+  const path = suffix => workspacePath(mac, suffix);
+  assert.equal((await request(env, path("/transfers/consumer"), { method: "POST", token: mac.deviceToken, body: {} })).status, 200);
+  const transferId = "670c74f6-9a38-4bc9-9fdc-e2d090d725f3";
+  const manifest = { v: 1, protocolVersion: 1, workspaceId: mac.workspaceId, deviceId: phone.deviceId,
+    transferId, recordingId, macDeviceId: mac.deviceId,
+    audioSHA256: "a".repeat(64), plaintextLength: 3, chunkSize: 262144, chunkCount: 1 };
+  const created = await request(env, path("/transfers"), { method: "POST", token: phone.deviceToken, body: manifest });
+  assert.equal(created.status, 201);
+  const bytes = new Uint8Array(31); // 3 plaintext bytes + AES-GCM nonce/tag
+  bytes.set([1, 2, 3], 12);
+  const chunkPath = path(`/transfers/${transferId}/chunks/0`);
+  assert.equal((await request(env, chunkPath, { method: "PUT", token: phone.deviceToken, body: undefined })).status, 400);
+  const upload = await worker.fetch(new Request(`https://coordinator.test${chunkPath}`, {
+    method: "PUT", headers: { authorization: `Bearer ${phone.deviceToken}` }, body: bytes,
+  }), env);
+  assert.equal(upload.status, 201);
+  assert.equal((await request(env, path(`/transfers/${transferId}`), { token: mac.deviceToken })).status, 200);
+  assert.equal((await request(env, path(`/transfers/${transferId}/chunks/0`), { token: phone.deviceToken })).status, 404);
+  assert.equal((await request(env, path(`/transfers/${transferId}`), { method: "POST", token: phone.deviceToken, body: {} })).status, 200);
+  const receipt = { v: 1, protocolVersion: 1, transferId, workspaceId: mac.workspaceId, deviceId: phone.deviceId,
+    macDeviceId: mac.deviceId, recordingId, audioSHA256: manifest.audioSHA256, plaintextLength: 3,
+    chunkSize: 262144, chunkCount: 1, transcriptSHA256: "b".repeat(64), macAudioPurged: true, savedAtMs: Date.now(), mac: "x" };
+  assert.equal((await request(env, path(`/transfers/${transferId}/receipt`), { method: "POST", token: mac.deviceToken, body: { receipt } })).status, 200);
+  assert.equal((await request(env, path(`/transfers/${transferId}/receipt`), { token: phone.deviceToken })).status, 200);
+  assert.equal((await request(env, path(`/transfers/${transferId}/ack`), { method: "POST", token: phone.deviceToken, body: { transcriptSHA256: receipt.transcriptSHA256 } })).status, 200);
+  assert.equal((await request(env, path(`/transfers/${transferId}/chunks/0`), { token: mac.deviceToken })).status, 404);
 });
 
 test("HTTP device revocation rejects future auth and request-size bounds return 413", async () => {

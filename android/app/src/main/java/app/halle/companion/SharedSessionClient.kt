@@ -58,6 +58,61 @@ class SharedSessionClient(context: Context) {
     fun paired(): Boolean = vault.load() != null
     fun endpoint(): String = vault.load()?.endpoint ?: currentEndpoint(appContext)
     fun currentDeviceId(): String? = vault.load()?.deviceId
+    internal fun currentWorkspaceId(): String? = vault.load()?.workspaceId
+    internal fun transferWorkspaceKey(): ByteArray = requireCredentials().workspaceKey.copyOf()
+
+    internal fun registerTransferConsumer() {
+        val c = requireCredentials()
+        request(c.endpoint, "POST", "/workspaces/${pathPart(c.workspaceId)}/transfers/consumer", c.token, "{}")
+    }
+
+    internal fun transferConsumers(): List<Pair<String, String>> {
+        val c = requireCredentials()
+        val body = request(c.endpoint, "GET", "/workspaces/${pathPart(c.workspaceId)}/transfers/consumers", c.token)
+        return body.optJSONArray("consumers").asSequenceOfObjects().map { it.getString("deviceId") to it.optString("name", "Mac") }
+    }
+
+    internal fun createPhoneTransfer(manifest: JSONObject): JSONObject {
+        val c = requireCredentials()
+        require(manifest.getString("macDeviceId") != c.deviceId)
+        return request(c.endpoint, "POST", "/workspaces/${pathPart(c.workspaceId)}/transfers", c.token, manifest.toString())
+    }
+
+    internal fun putPhoneTransferChunk(transferId: String, index: Int, bytes: ByteArray) {
+        val c = requireCredentials()
+        transferBinary(c, "PUT", "/workspaces/${pathPart(c.workspaceId)}/transfers/${pathPart(transferId)}/chunks/$index", bytes)
+    }
+
+    internal fun completePhoneTransfer(transferId: String) {
+        val c = requireCredentials()
+        request(c.endpoint, "POST", "/workspaces/${pathPart(c.workspaceId)}/transfers/${pathPart(transferId)}", c.token, "{}")
+    }
+
+    internal fun phoneTransferReceipt(transferId: String): JSONObject {
+        val c = requireCredentials()
+        return request(c.endpoint, "GET", "/workspaces/${pathPart(c.workspaceId)}/transfers/${pathPart(transferId)}/receipt", c.token)
+    }
+
+    internal fun acknowledgePhoneTransfer(transferId: String, transcriptSHA256: String) {
+        val c = requireCredentials()
+        request(c.endpoint, "POST", "/workspaces/${pathPart(c.workspaceId)}/transfers/${pathPart(transferId)}/ack", c.token,
+            JSONObject().put("transcriptSHA256", transcriptSHA256).toString())
+    }
+
+    private fun transferBinary(c: Credentials, method: String, path: String, bytes: ByteArray) {
+        val url = URL(validateEndpoint(c.endpoint, BuildConfig.DEBUG) + "/v1" + path)
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = method; connectTimeout = HTTP_TIMEOUT_MS; readTimeout = HTTP_TIMEOUT_MS
+            instanceFollowRedirects = false; doOutput = true
+            setRequestProperty("Authorization", "Bearer ${c.token}")
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setFixedLengthStreamingMode(bytes.size)
+        }
+        try {
+            connection.outputStream.use { it.write(bytes) }
+            if (connection.responseCode !in 200..299) throw SharedCoordinatorException(connection.responseCode, "transfer_failed")
+        } finally { connection.disconnect() }
+    }
     fun parsePairingInput(input: String): SharedPairingPayload =
         parsePairingInput(input, currentEndpoint(appContext))
 
