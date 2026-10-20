@@ -14,6 +14,7 @@ class MobileStoreInstrumentation : Instrumentation() {
 
     override fun onStart() {
         try {
+            verifyTransferSchedulingPermission()
             verifyNormalFinalization()
             verifyInterruptedFinalization()
             verifyTrashedDraftCannotRecord()
@@ -22,6 +23,22 @@ class MobileStoreInstrumentation : Instrumentation() {
         } catch (failure: Throwable) {
             finish(1, Bundle().apply { putString("failure", failure.toString()) })
             throw failure
+        }
+    }
+
+    private fun verifyTransferSchedulingPermission() {
+        check(targetContext.checkSelfPermission(android.Manifest.permission.ACCESS_NETWORK_STATE) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED) { "Network-constrained jobs require ACCESS_NETWORK_STATE" }
+        val preferences = LocalStore(targetContext)
+        val wasPreview = preferences.previewActive
+        try {
+            preferences.previewActive = true
+            PhoneAudioTransferWorker.kick(targetContext)
+        } finally {
+            val scheduler = targetContext.getSystemService(android.content.Context.JOB_SCHEDULER_SERVICE) as android.app.job.JobScheduler
+            scheduler.allPendingJobs.filter { it.service.className == PhoneAudioTransferJobService::class.java.name }
+                .forEach { scheduler.cancel(it.id) }
+            preferences.previewActive = wasPreview
         }
     }
 

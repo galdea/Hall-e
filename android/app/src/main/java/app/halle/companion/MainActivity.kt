@@ -10,6 +10,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.Settings
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -87,12 +88,17 @@ class MainActivity : Activity() {
         }
         // An explicit debug preview gets only the browser's synthetic local model.
         if (!preview) web.addJavascriptInterface(Bridge(), "HallENative")
-        setContentView(web)
-        ViewCompat.setOnApplyWindowInsetsListener(web) { view, insets ->
+        // WebView ignores padding for its document viewport; inset its parent instead.
+        val content = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(8, 14, 16))
+            addView(web, FrameLayout.LayoutParams(-1, -1))
+        }
+        setContentView(content)
+        ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()); val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom)); insets
         }
-        ViewCompat.requestApplyInsets(web); web.loadUrl(ASSET_URL); consumeIntent(intent)
+        ViewCompat.requestApplyInsets(content); web.loadUrl(ASSET_URL); consumeIntent(intent)
     }
     override fun onResume() {
         super.onResume(); foreground = true
