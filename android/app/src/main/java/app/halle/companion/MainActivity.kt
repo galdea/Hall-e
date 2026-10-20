@@ -195,6 +195,8 @@ class MainActivity : Activity() {
             "shareAudio" -> { val m = meetings.find(p.getString("id")) ?: error("La reunión ya no está disponible."); val share = meetings.shareIntent(m.id) ?: meetings.sharePartialFileIntent(m.id) ?: error("El audio ya no está en este teléfono."); startActivity(Intent.createChooser(share, "Compartir audio")) }
             "join" -> { val e = eventFor(p.getString("id")) ?: error("Actualiza el calendario y vuelve a intentarlo."); val link = e.meetingUrl ?: error("Esta reunión no tiene enlace."); startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) }
             "note" -> editNote(p.getString("id"))
+            "scanQr" -> startActivityForResult(Intent(this, SharedSessionActivity::class.java)
+                .putExtra(SharedSessionActivity.EXTRA_SCAN_ON_LAUNCH, true), SHARED_SESSION_SCAN_REQUEST)
             "pair" -> startActivity(Intent(this, SharedSessionActivity::class.java))
             "chooseMac" -> chooseMac()
             "calendarAccess" -> if (calendar.hasPermission()) chooseCalendars() else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), CALENDAR_PERMISSION)
@@ -376,6 +378,7 @@ class MainActivity : Activity() {
     companion object {
         const val EXTRA_PREVIEW = "HALLE_PREVIEW"
         const val EXTRA_START_RECORDING = "HALLE_START_RECORDING"
+        private const val SHARED_SESSION_SCAN_REQUEST = 24
         const val TRANSFER_PREFS = "orbita-new-captures"
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val ASSET_URL = "https://appassets.androidplatform.net/index.html"

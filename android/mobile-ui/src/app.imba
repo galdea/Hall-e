@@ -55,6 +55,11 @@ tag halle-app
 		ui.message = ''
 	def back
 		model.navigate(ui.returnPage)
+	def linkMac
+		if data.paired
+			model.send('pair')
+		else
+			model.send('scanQr')
 	def showProject
 		ui.newProject = true
 	def cancelProject
@@ -98,9 +103,6 @@ tag halle-app
 					<div.project-bay data-open=((ui.page == 'record' || data.active != null) && (model.chosen! != null || ui.starting))>
 						if (ui.page == 'record' || data.active) && (model.chosen! || ui.starting)
 							<div.record-project>
-								<div.project-bay-heading aria-hidden='true'>
-									<span.bay-signal>
-									<span> 'ARCHIVO DE MISIÓN'
 								<halle-project-picker pending=!model.chosen!>
 				if ui.page == 'record' || data.active
 					if model.chosen!
@@ -190,35 +192,72 @@ tag halle-app
 						<span.muted> "{data.meetings.filter(do(m) m.project == project).length} reuniones"
 				<button.secondary @click=showProject> '+ Nuevo proyecto'
 			elif ui.page == 'settings'
-				<p.eyebrow> 'Tu espacio'
-				<h1> 'Ajustes'
-				<button.settings-row @click=model.send('pair')>
-					<span> if data.paired then 'Dispositivos vinculados' else 'Vincular tu Mac'
-					<span.muted> '→'
-				<button.settings-row @click=model.send('chooseMac')>
-					<span> 'Mac para transcripciones'
-					<span.muted> 'Elegir →'
-				<button.settings-row @click=model.send('calendarAccess')>
-					<span> if data.calendarPermission then 'Calendarios seleccionados' else 'Conectar calendario'
-					<span.muted> '→'
-				<button.settings-row @click=model.send('reminders')>
-						<span> "Avisos · {data.reminderMinutes} min antes"
-					<span.muted> '→'
-				if !data.notificationsAllowed
-					<button.settings-row @click=model.send('notifications')> 'Activar notificaciones'
-				<button.settings-row @click=model.send('retryTransfers')>
-					<span> 'Reintentar envíos pendientes'
-					<span.muted> '↻'
-				<button.settings-row @click=model.send('exactAlarms')>
-					<span> 'Precisión de recordatorios'
-					<span.muted> '→'
-				<button.settings-row @click=model.send('trashList')>
-					<span> 'Papelera'
-					<span.muted> 'Restaurar →'
-				<div.notice>
-					<strong> 'Tu voz se queda contigo'
+				<header.settings-header>
+					<p.eyebrow> 'A tu manera'
+					<h1> 'Ajustes'
+					<p> 'Tu teléfono y tu Mac, en sintonía.'
+				<section.link-deck aria-label='Conexión con tu Mac'>
+					<div.link-deck-top>
+						<span.device-orbit aria-hidden='true'>
+							<span.device-screen>
+						<span.link-status data-linked=data.paired> if data.paired then 'Vinculado' else 'Por vincular'
+					<h2> if data.paired then 'Tu Mac, vinculado.' else 'Todo empieza con un QR.'
+					<p> if data.paired then 'Tus grabaciones tienen un lugar donde convertirse en texto.' else 'Abre Hall-e en tu Mac y escanea su código con este teléfono.'
+					<button.link-action @click=linkMac>
+						<span> if data.paired then 'Ver dispositivos' else 'Escanear QR del Mac'
+						<span aria-hidden='true'> '↗'
+					if data.paired
+						<button.device-choice @click=model.send('chooseMac')>
+							<span> 'Mac que recibe las grabaciones'
+							<span aria-hidden='true'> '›'
+				<section.settings-group aria-labelledby='agenda-settings'>
+					<h2#agenda-settings> 'Agenda y avisos'
+					<div.settings-surface>
+						<button.setting-item @click=model.send('calendarAccess')>
+							<span.setting-symbol aria-hidden='true'> '▦'
+							<span.setting-copy>
+								<strong> 'Calendarios'
+								<span> if data.calendarPermission then 'Elegir qué calendarios aparecen' else 'Conecta tu agenda de este teléfono'
+							<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('reminders')>
+							<span.setting-symbol aria-hidden='true'> '◷'
+							<span.setting-copy>
+								<strong> 'Antes de cada reunión'
+								<span> if data.reminderMinutes > 0 then "Avisar {data.reminderMinutes} minutos antes" else 'Sin aviso previo'
+							<span.setting-chevron aria-hidden='true'> '›'
+						if !data.notificationsAllowed
+							<button.setting-item @click=model.send('notifications')>
+								<span.setting-symbol aria-hidden='true'> '◉'
+								<span.setting-copy>
+									<strong> 'Activar notificaciones'
+									<span> 'Recibe avisos y controla la grabación'
+								<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('exactAlarms')>
+							<span.setting-symbol aria-hidden='true'> '⊙'
+							<span.setting-copy>
+								<strong> 'Precisión de los avisos'
+								<span> 'Revisar el permiso de Android'
+							<span.setting-chevron aria-hidden='true'> '›'
+				<section.settings-group aria-labelledby='recording-settings'>
+					<h2#recording-settings> 'Tus grabaciones'
+					<div.settings-surface>
+						<button.setting-item @click=model.send('retryTransfers')>
+							<span.setting-symbol aria-hidden='true'> '↻'
+							<span.setting-copy>
+								<strong> 'Reintentar envíos'
+								<span> 'Enviar las grabaciones pendientes al Mac'
+							<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('trashList')>
+							<span.setting-symbol aria-hidden='true'> '⌑'
+							<span.setting-copy>
+								<strong> 'Papelera'
+								<span> 'Recupera reuniones que hayas eliminado'
+							<span.setting-chevron aria-hidden='true'> '›'
+				<details.privacy-details>
+					<summary> 'Tu voz se queda contigo'
 					<p> 'El audio viaja cifrado a tu Mac. Se elimina de ambos dispositivos solo después de guardar y verificar el texto.'
-					<p> 'Las nuevas grabaciones empiezan en este teléfono. Cambiar de dispositivo en una sesión compartida requiere abrir Dispositivos vinculados.'
+					<p> 'Cada grabación empieza en este teléfono. Para cambiar de dispositivo durante una sesión compartida, abre Dispositivos vinculados.'
+
 		if ui.deleted.length
 			<div.undo-bar role='status'>
 				<span> 'Reunión en la papelera'

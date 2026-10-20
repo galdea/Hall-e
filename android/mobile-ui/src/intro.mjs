@@ -30,7 +30,7 @@ export function mountIntro(host) {
   }
   function renderAt(time) {
     assembly.render(time);
-    svg.setAttribute('viewBox', '254 66 492 448');
+    svg.setAttribute('viewBox', '254 50 492 480');
   }
   function settle() {
     renderAt(assembly.duration);
@@ -61,10 +61,10 @@ export function mountIntro(host) {
   })).then(images=>{
     if(disposed||settled) return;
     clearTimeout(loadingTimer); host.append(instrument);robot.hidden=true;
-    if(playOpening&&!preference.matches)assembly=createMechanicalAssembly(new Map(images),instrument);
     rig=mountRobotRig(svg,host,images[0][1],preference);
+    if(playOpening&&!preference.matches)assembly=createMechanicalAssembly(new Map(images),instrument);
     if(assembly){instrument.classList.add('intro-playing');renderAt(0);frame=requestAnimationFrame(tick);}
-    else{settled=true;svg.setAttribute('viewBox','254 66 492 448');instrument.dataset.assemblyPhase='complete';rig.ready();detachListeners();}
+    else{settled=true;svg.setAttribute('viewBox','254 50 492 480');instrument.dataset.assemblyPhase='complete';rig.ready();detachListeners();}
   }).catch(error=>{console.warn('Hall-e opening animation unavailable',error);fallback();});
   return ()=>{ disposed=true; stopClock(); assembly?.dispose(); rig?.dispose();detachListeners(); instrument.remove(); robot.remove(); };
 }

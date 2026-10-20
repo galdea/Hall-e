@@ -2,6 +2,7 @@ package app.halle.companion
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
@@ -17,6 +18,10 @@ import java.util.concurrent.Executors
 
 /** Visible, user-driven pairing and metadata sharing controls. No background path starts capture. */
 class SharedSessionActivity : Activity() {
+    companion object {
+        const val EXTRA_SCAN_ON_LAUNCH = "app.halle.companion.EXTRA_SCAN_QR_ON_LAUNCH"
+    }
+
     private lateinit var client: SharedSessionClient
     private lateinit var content: LinearLayout
     private lateinit var inviteInput: EditText
@@ -51,6 +56,12 @@ class SharedSessionActivity : Activity() {
         super.onCreate(savedInstanceState)
         client = SharedSessionClient(this)
         render()
+        val scanRequested = intent.getBooleanExtra(EXTRA_SCAN_ON_LAUNCH, false)
+        intent.removeExtra(EXTRA_SCAN_ON_LAUNCH)
+        if (savedInstanceState == null && scanRequested &&
+            callingActivity == ComponentName(this, MainActivity::class.java)) {
+            mainHandler.post { if (!closed) scanPairingCode() }
+        }
         if (client.paired()) mainHandler.post(poll)
     }
 
@@ -255,7 +266,7 @@ class SharedSessionActivity : Activity() {
             .setPrompt("Escanea el QR de invitación de Hall-e en tu Mac")
             .setBeepEnabled(false)
             .setBarcodeImageEnabled(false)
-            .setOrientationLocked(false)
+            .setOrientationLocked(true)
         options.initiateScan()
     }
 
