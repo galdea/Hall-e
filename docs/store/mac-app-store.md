@@ -8,28 +8,40 @@ local packaging script.
 
 ## Current readiness
 
-**Do not package or submit this as a release-ready Mac App Store build yet.**
-The Store-specific source flag compiles successfully, selected notes folders
-use app-scoped bookmarks, and the OAuth callback listener is bound to
-`127.0.0.1`. Clean signed, installed sandbox QA has not been completed. No
-valid signing identities or matching distribution profile are available, so
-signing and installation remain unverified. Set the packaging script's
-`STORE_SANDBOX_READY=1` gate only after code review and clean installed-package
-QA are complete.
+Core signed sandbox QA is passing for build 2004: it launched from
+`/Applications`, resolved the app container, received Calendar permission and
+enumerated calendars, completed a six-second microphone recording with
+playback, failed closed on a legacy vault configuration, and reopened a moved
+vault folder after quit/relaunch with access still writable. A headless smoke
+using the actual loopback server and verbatim `ResumeGuard` also received
+`code=qa&state=qa` on `127.0.0.1` and returned HTTP 200; its log is
+`/private/tmp/hall-e-build-20261020/sandbox-loopback-smoke.log`. The Google
+browser/account OAuth flow itself has not been run. External-volume and revoked
+folder-permission cases remain untested. Signed build 2005's notification
+feedback check confirmed the UI reports “Delivered to Notification Center.”
+
+The core Store build can now be packaged as a review candidate. The remaining
+external-volume/revoked-access and full Google OAuth cases are documented QA
+limitations, not evidence that the complete feature matrix passed. Public App
+Store submission additionally requires the documented exact-SHA hosted release
+gate in [the CI policy](../ci-policy.md), final App Privacy answers based on
+actual provider configurations, real screenshots of the installed Store
+build, App Store Connect authorization and metadata, and an explicitly
+authorized upload/submission.
 
 The source audit found these distribution-specific behaviors and remaining
 validation requirements before the gate may be set:
 
 | Area | Current behavior | App Store work required |
 | --- | --- | --- |
-| Persistent app data | `AppPaths.appSupport` uses `FileManager`'s user Application Support directory. In the Store build, the sandbox directs this app-support data into Hall-e's container. | Verify the signed installed build reads and writes its app-support state in the container. Ensure the privacy policy accurately describes the Store edition's container-scoped data. |
-| Chosen notes folders | App Store builds store and resolve a security-scoped bookmark for the selected folder, reuse one active scope while the app is running, stop it when replacing the selection or exiting, and ask the user to reselect when a legacy or revoked bookmark cannot be resolved. Direct builds keep their existing path fallback. | Installed-package QA still needs an external volume, a moved folder after restart, a legacy direct-edition config, and revoked access. |
-| Calendar | EventKit reads selected macOS calendars; Google Calendar uses OAuth with an HTTP callback listener bound to `127.0.0.1`. | Request the Calendar permission as it does today. Verify Calendar access and the loopback callback in the signed installed build with the Calendar and network entitlements. |
-| Recording audio | Microphone capture remains available. App Store builds disable process-tap recording and desktop/browser call detection pending installed sandbox QA; the manual recorder presents microphone-only behavior. | Test microphone capture in the installed package. Do not advertise app-audio capture for the Store edition without successful clean-system QA and review. |
+| Persistent app data | `AppPaths.appSupport` resolves within Hall-e's Store container. Preferences carried over for the same bundle ID. Keychain access follows macOS signing identity and access-group rules; do not describe it as a blanket separate Keychain domain. | Build 2004 confirmed a separate container from direct-download app data. Continue checking data deletion and document actual Keychain visibility accurately. |
+| Chosen notes folders | App Store builds store and resolve a security-scoped bookmark for the selected folder, reuse one active scope while the app is running, stop it when replacing the selection or exiting, and ask the user to reselect when a legacy or revoked bookmark cannot be resolved. Direct builds keep their existing path fallback. | Build 2004 confirmed a moved folder still resolves after quit/relaunch and remains writable; legacy direct-edition configuration fails closed. External-volume access and revoked permission still need QA. |
+| Calendar | EventKit reads selected macOS calendars; Google Calendar uses OAuth with an HTTP callback listener bound to `127.0.0.1`. | Build 2004 Calendar permission and enumeration passed. The actual loopback server smoke passed callback code/state and HTTP 200 with the Store entitlements. Full Google browser/account OAuth flow remains untested. |
+| Recording audio | Microphone capture remains available. App Store builds disable process-tap recording and desktop/browser call detection; capture is microphone-only. | Build 2004 six-second microphone recording, playback, and moving the test recording to Trash passed. Do not advertise app-audio capture for the Store edition. |
 | OpenClaw reports | Store compilation disables local executable discovery and `Process` launching, the report pipeline fails closed, and Settings explains the distribution limit. | Verify the feature stays unavailable in an installed Store build. Direct downloads retain the integration. |
 | Chrome integration | The Store edition does not bundle the Chrome native-messaging helper. Store builds disable the settings controls, native-message queue ingress, extension preparation, and manifest installation. | Verify Chrome integration remains unavailable in the signed installed Store build. |
 | Codex import | Store compilation removes the `~/.codex` path and importer body; coordinator methods reject refresh/link actions, and the UI offers explicit ChatGPT JSON/WhatsApp exports instead. ChatGPT ZIP extraction is disabled because the direct path uses an external process. | Verify no Codex-home access or external archive process occurs in the installed Store build. Direct downloads retain Codex and ZIP imports. |
-| Existing direct installs | Direct releases continue using their current Application Support and Keychain locations. A sandboxed Store build uses its container's Application Support and Keychain domains. | Verify this behavior with a signed Store installation. |
+| Existing direct installs | Direct releases keep their existing app data location. Store app support is container-scoped; same-bundle-ID preferences carried over, and Keychain item access follows macOS signing identity/access-group rules. | Build 2004 verified the separate app container and preference carryover. Keychain visibility must be described according to the actual signing identity and access groups. |
 
 Apple requires App Sandbox for Mac App Store distribution, restricts access to
 user-selected files to the panel/bookmark grant, and prohibits several
@@ -51,7 +63,8 @@ features identified in the code audit:
 - User-selected read/write and app-scoped bookmark access for an explicitly
   chosen notes folder.
 - Incoming network supports the ephemeral OAuth callback listener, which is
-  bound to `127.0.0.1`. Verify callback behavior in the signed installed build.
+  bound to `127.0.0.1`. The signed headless loopback smoke passed; the full
+  Google browser/account flow remains untested.
 
 No file-all, Downloads, Apple Events, Accessibility, application groups,
 privileged file operations, or temporary exception entitlement is included.
@@ -62,16 +75,44 @@ The Store edition does not bundle the Chrome native-messaging helper.
 Prerequisites are Xcode command line tools, a valid Mac App Store application
 distribution identity, a matching Mac App Store installer identity, and an
 explicit provisioning profile for bundle ID `cl.gabriel.hall-e`. No identity
-or profile is generated by the script. The script checks the certificate names,
+or profile is generated by the script. The configured development and App Store
+distribution certificates and profiles for Team ID `X6TR876MKF` have been
+validated (development profile `K5C6RLNJN7`, distribution profile
+`VCWUN27GLJ`). The script checks the certificate names,
 valid private-key-backed identities, matching Team IDs, the exact profile App
 ID and Team ID, profile expiry, and that the selected application certificate
 is authorized by the profile before building. It adds the profile's application
 identifier and team identifier to the candidate entitlements. The Store-specific
-source flag compile has passed. Clean signed, installed sandbox QA has not been
-done because no valid code-signing identities or matching distribution profile
-are available.
+source flag compile has passed. Signed builds 2004 and 2005 passed the core
+installed sandbox checks described above, including notification feedback.
+Keep the packaging gate closed until code review and the documented QA results
+are signed off.
 
-Only after source sandbox adaptation and clean-install QA are complete:
+Apple documents that modern Mac App Store distribution-signed builds may not
+launch directly before App Review, so the script's local QA mode uses an Apple
+Development identity and a matching macOS development profile instead. This
+mode signs the same Store-configured build, validates the profile, app ID,
+team, certificate, entitlements, and signature, then writes a development-
+signed app under `dist/qa/`. It bypasses only the release-readiness gate; it
+does not make an App Store distribution package.
+
+Create the local QA app on a registered test Mac:
+
+```sh
+STORE_PACKAGE_MODE=qa \
+STORE_QA_APP_IDENTITY='Apple Development: Name (TEAMID)' \
+STORE_QA_PROFILE='/secure/path/Hall-e-Mac-Development.provisionprofile' \
+VERSION=0.4.0 ./scripts/package-mac-app-store.sh
+```
+
+Builds 2004 and 2005 cover launch, sandbox/container separation, macOS Calendar
+authorization and enumeration, the loopback callback, microphone capture and
+playback, plus local vault recovery checks. Exercise the remaining advertised
+features and record untested cases; chosen folders on external volumes and
+revoked folder access still need follow-up QA. A development-signed app does
+not verify App Store receipt or distribution-signature behavior.
+
+After local sandbox QA passes, the release-mode command remains gated:
 
 ```sh
 STORE_SANDBOX_READY=1 \
@@ -81,13 +122,14 @@ APPSTORE_PROFILE='/secure/path/Hall-e-App-Store.provisionprofile' \
 VERSION=0.4.0 ./scripts/package-mac-app-store.sh
 ```
 
-The command creates a signed `.pkg` in `dist/`, validates its signatures and
-payload location, and writes a SHA-256 checksum. It **does not upload**. Inspect
-the exact package and upload it separately through Apple's Transporter or
-App Store Connect. Before upload, use a clean macOS user account to install the
-package, verify Activity Monitor reports Hall-e as sandboxed, and exercise every
-advertised feature. Check container-scoped privacy data, calendar, microphone,
-chosen-folder, notification, recording, playback, and deletion behavior.
+The command creates a signed `.pkg` in `dist/`, validates its signatures,
+payload, `/Applications` install destination, app identifier and version, and
+writes a SHA-256 checksum. It **does not upload**. The distribution-signed app
+may not launch directly before App Review, so do not use it as the local QA
+artifact. Public submission still requires the hosted exact-SHA release gate,
+completed App Privacy answers based on real provider settings, real screenshots,
+App Store Connect authorization/metadata, and an authorized upload through
+Transporter or App Store Connect.
 
 ## Store listing material
 
@@ -111,6 +153,8 @@ reuse preview images as product screenshots.
 - [Accessing the event store](https://developer.apple.com/documentation/eventkit/accessing-the-event-store)
 - [Packaging Mac software for distribution](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution)
 - [Creating distribution-signed code for macOS](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/)
+- [Testing distribution builds of Mac apps (QA1884)](https://developer.apple.com/library/archive/qa/qa1884/)
+- [Apple certificate types](https://developer.apple.com/help/account/certificates/certificates-overview/)
 - [Upload builds](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds)
 - [App Store Connect listing field limits](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information)
 - [App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)

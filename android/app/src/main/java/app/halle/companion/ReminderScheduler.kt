@@ -10,6 +10,11 @@ import android.os.Build
 object ReminderScheduler {
     fun refresh(context: Context) {
         val store = LocalStore(context)
+        if (BuildConfig.DEBUG && store.previewActive) {
+            store.scheduledOccurrenceIds.forEach { cancel(context, it) }
+            store.scheduledOccurrenceIds = emptySet()
+            return
+        }
         val repository = CalendarRepository(context, store)
         if (!repository.hasPermission()) {
             store.scheduledOccurrenceIds.forEach { cancel(context, it) }
@@ -58,6 +63,7 @@ object ReminderScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or flags)
 
     fun snooze(context: Context, intent: Intent): Boolean {
+        if (BuildConfig.DEBUG && LocalStore(context).previewActive) return false
         val begin = intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0)
         val occurrence = intent.getStringExtra(MeetingAlertReceiver.EXTRA_OCCURRENCE) ?: return false
         val repository = CalendarRepository(context, LocalStore(context))

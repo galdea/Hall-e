@@ -2,11 +2,17 @@
 
 Hall-e stores recordings, transcripts, built-in meeting notes, project data, and its SQLite database on your Mac under `~/Library/Application Support/Hall-e`. Built-in notes use stable recording IDs in the separate `Meeting Notes` directory, so deleting an audio folder does not delete your writing. Settings use macOS preferences. API keys and Google refresh tokens use macOS Keychain. Exported files and a notes folder you select may sync using your own cloud drive.
 
+## Mac App Store edition
+
+The sandboxed Mac App Store edition stores recordings, notes, projects, and its database in its macOS app container, separate from the direct-download edition's Application Support folder. Hall-e does not automatically import that recording library or database. macOS may carry over preferences for the same app identifier; credentials remain in Keychain and access follows macOS signing and permission rules. A notes folder must be selected again if its saved sandbox access is unavailable. Recording is microphone-only; app-audio capture and desktop/browser call detection are unavailable. The Store edition does not include Chrome integration, OpenClaw report launching, or import from `~/.codex`.
+
+Hall-e data remains local unless you explicitly enable an optional cloud transcription or AI provider, or connect an online calendar as described below. Each integration sends only the data needed for the feature you chose and enabled. The [Android privacy notice](https://hall-e.pages.dev/android-privacy.html) describes the separate Android app.
+
 ## Local setup and recording
 
 A new installation requires no Hall-e account. Supported Apple Speech transcription is explicitly constrained to on-device recognition; an unavailable local model produces a setup/retry state rather than an unapproved cloud upload. The optional eight-second setup check records a temporary microphone sample only after you start it. It never uses cloud transcription or enters the recording library, and Hall-e deletes it after completion or cancellation. A sample may remain in the system temporary directory after an unexpected app or system crash.
 
-For online meetings, you explicitly choose the app whose audio to record. Its other playing tabs/windows may be included. A missing app or failed audio tap never silently expands capture to all system audio. Hall-e shows a microphone-only warning when meeting audio is unavailable.
+In the direct-download edition, you explicitly choose the app whose audio to record for online meetings. Its other playing tabs/windows may be included. A missing app or failed audio tap never silently expands capture to all system audio. Hall-e shows a microphone-only warning when meeting audio is unavailable. The Mac App Store edition is microphone-only, as described above.
 
 ## What leaves your Mac
 

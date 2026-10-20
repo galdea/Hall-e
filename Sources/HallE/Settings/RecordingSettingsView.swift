@@ -86,10 +86,17 @@ struct RecordingSettingsView: View {
             }
 
             Section("Calls") {
-                Text("Manage Chrome, Zoom, WhatsApp, and approved custom call domains in Browser & Calls. Each detection asks before recording; Hall-e never starts a call recording automatically.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("Call recordings capture your microphone plus best-effort app audio. If macOS denies System Audio Recording or an app cannot be tapped, Hall-e keeps the microphone recording and marks that limitation on the session.")
-                    .font(.caption).foregroundStyle(.secondary)
+                if DistributionCapabilities.isMacAppStore {
+                    Text("Chrome and desktop-call detection are unavailable in this edition. Start a recording manually in Hall-e, or enable automatic recording above to start microphone-only capture when you join a linked calendar meeting with Hall-e’s Join button.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("App audio is not available in the Mac App Store edition; recordings capture microphone input only.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Manage Chrome, Zoom, WhatsApp, and approved custom call domains in Browser & Calls. Each detection asks before recording; Hall-e never starts a call recording automatically.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Call recordings capture your microphone plus best-effort app audio. If macOS denies System Audio Recording or an app cannot be tapped, Hall-e keeps the microphone recording and marks that limitation on the session.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)

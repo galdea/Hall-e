@@ -3,6 +3,7 @@ plugins { id("com.android.application") }
 android {
     namespace = "app.halle.companion"
     compileSdk = 36
+    buildFeatures { buildConfig = true }
     defaultConfig {
         applicationId = "app.halle.companion"
         minSdk = 31
@@ -32,6 +33,7 @@ android {
         }
     }
     buildTypes {
+        debug { applicationIdSuffix = ".preview" }
         release {
             isMinifyEnabled = false
             if (signingConfigs.names.contains("release")) signingConfig = signingConfigs.getByName("release")

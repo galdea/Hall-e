@@ -116,7 +116,8 @@ final class NotificationScheduler {
         return await authorizationStatus()
     }
 
-    func sendTestNotification() async throws {
+    @discardableResult
+    func sendTestNotification() async throws -> String {
         let status = await requestAuthorizationIfNeeded()
         guard status == .authorized || status == .provisional else {
             throw NotificationError.notAuthorized
@@ -125,10 +126,22 @@ final class NotificationScheduler {
         content.title = "Hall-e notifications are working"
         content.body = "Meeting reminders and recording prompts can appear on this Mac."
         content.sound = AppPreferences.meetingReminderSound.notificationSound
+        let identifier = "halle-notification-test-\(UUID().uuidString)"
         try await center.add(UNNotificationRequest(
-            identifier: "halle-notification-test-\(UUID().uuidString)",
+            identifier: identifier,
             content: content,
             trigger: nil))
+        return identifier
+    }
+
+    func testNotificationWasDelivered(identifier: String) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            center.getDeliveredNotifications { notifications in
+                continuation.resume(returning: notifications.contains {
+                    $0.request.identifier == identifier
+                })
+            }
+        }
     }
 
     private enum NotificationError: LocalizedError {

@@ -13,6 +13,7 @@ struct NotificationsSettingsView: View {
     @State private var alertSetting: UNNotificationSetting?
     @State private var soundSetting: UNNotificationSetting?
     @State private var permissionMessage: String?
+    @State private var testNotificationGeneration = 0
     var body: some View {
         Form {
             Section("Meeting reminders") {
@@ -73,6 +74,7 @@ struct NotificationsSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refreshStatus() }
         }
+        .onDisappear { testNotificationGeneration += 1 }
     }
     private func refreshStatus() async {
         let previous = authorizationStatus
@@ -96,10 +98,21 @@ struct NotificationsSettingsView: View {
         permissionMessage = authorizationStatus == .denied ? "macOS denied access. Use the button below to enable Hall-e." : nil
     }
     private func sendTestNotification() async {
+        testNotificationGeneration += 1
+        let generation = testNotificationGeneration
         do {
-            try await NotificationScheduler.shared.sendTestNotification()
-            permissionMessage = "macOS accepted the test request. Check Notification Center to confirm it appeared."
+            let identifier = try await NotificationScheduler.shared.sendTestNotification()
+            guard generation == testNotificationGeneration, !Task.isCancelled else { return }
+            permissionMessage = "macOS accepted the request. Checking Notification Center…"
+            try? await Task.sleep(for: .seconds(3))
+            guard generation == testNotificationGeneration, !Task.isCancelled else { return }
+            let delivered = await NotificationScheduler.shared.testNotificationWasDelivered(identifier: identifier)
+            guard generation == testNotificationGeneration, !Task.isCancelled else { return }
+            permissionMessage = delivered
+                ? "Delivered to Notification Center. Focus or notification settings may still affect the banner."
+                : "Not visible in Notification Center yet. Check Focus and Scheduled Summary; it may appear later."
         } catch {
+            guard generation == testNotificationGeneration, !Task.isCancelled else { return }
             permissionMessage = error.localizedDescription
         }
     }

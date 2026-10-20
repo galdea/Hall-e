@@ -39,10 +39,10 @@
       <section aria-labelledby="en-title">
         <h2 id="en-title">English</h2>
         <h3>Calendar access</h3>
-        <p>With your permission, Hall-e reads the calendars you select through Android’s calendar provider. It uses calendar events on your phone to show your agenda, open supported meeting links, organize meetings into local projects, and schedule reminders. Hall-e does not request calendar write access. It does not send calendar information to Hall-e’s developer or another server.</p>
+        <p>With your permission, Hall-e reads the calendars you select through Android’s calendar provider. It uses calendar events on your phone to show your agenda, open supported meeting links, organize meetings into local projects, and schedule reminders. To filter invitations declined by the calendar account, Hall-e reads attendee email addresses and response statuses on-device; it does not store attendee lists. Hall-e does not request calendar write access. It does not send calendar information to Hall-e’s developer or another server.</p>
 
         <h3>Information stored on your phone</h3>
-        <p>Hall-e stores your selected calendar IDs, project names, meeting-to-project assignments, Markdown notes, reminder settings, and reminder identifiers in the app’s private local storage. Calendar events are read from Android when Hall-e builds or refreshes your agenda. Hall-e does not create a separate server-side calendar copy.</p>
+        <p>Hall-e stores your selected calendar IDs, project names, meeting-to-project assignments, Markdown notes, reminder settings, and reminder occurrence IDs in the app’s private local storage. Each occurrence ID is derived from a calendar ID, event ID, and occurrence start time; Hall-e uses it to schedule, cancel, and avoid duplicate reminders. Calendar events are read from Android when Hall-e builds or refreshes your agenda. Hall-e does not create a separate server-side calendar copy.</p>
 
         <h3>No recording or online services</h3>
         <p>Hall-e for Android does not record meetings or audio, transcribe speech, or use a microphone. The app does not request network access, create an account, synchronize with Hall-e for Mac, or send analytics to the developer.</p>
@@ -60,10 +60,10 @@
       <section lang="es-419" aria-labelledby="es-title">
         <h2 id="es-title">Español (Latinoamérica)</h2>
         <h3>Acceso al calendario</h3>
-        <p>Con tu permiso, Hall-e lee los calendarios que seleccionas mediante el proveedor de calendarios de Android. Usa los eventos del teléfono para mostrar tu agenda, abrir enlaces de reunión compatibles, organizar reuniones en proyectos locales y programar recordatorios. Hall-e no solicita permiso para modificar el calendario. No envía información del calendario a quienes desarrollan Hall-e ni a otro servidor.</p>
+        <p>Con tu permiso, Hall-e lee los calendarios que seleccionas mediante el proveedor de calendarios de Android. Usa los eventos del teléfono para mostrar tu agenda, abrir enlaces de reunión compatibles, organizar reuniones en proyectos locales y programar recordatorios. Para filtrar invitaciones rechazadas por la cuenta del calendario, Hall-e lee localmente las direcciones de correo de asistentes y su estado de respuesta; no guarda listas de asistentes. Hall-e no solicita permiso para modificar el calendario. No envía información del calendario a quienes desarrollan Hall-e ni a otro servidor.</p>
 
         <h3>Información guardada en tu teléfono</h3>
-        <p>Hall-e guarda los identificadores de los calendarios seleccionados, los nombres de proyectos, las asignaciones de reuniones a proyectos, las notas Markdown, los ajustes y los identificadores de recordatorios en el almacenamiento privado de la app. Lee los eventos desde Android al crear o actualizar la agenda. No crea una copia del calendario en un servidor.</p>
+        <p>Hall-e guarda los identificadores de los calendarios seleccionados, los nombres de proyectos, las asignaciones de reuniones a proyectos, las notas Markdown, los ajustes y los identificadores de cada ocurrencia de recordatorio en el almacenamiento privado de la app. Cada identificador se deriva del calendario, el evento y la hora de inicio; Hall-e lo usa para programar, cancelar y evitar recordatorios duplicados. Lee los eventos desde Android al crear o actualizar la agenda. No crea una copia del calendario en un servidor.</p>
 
         <h3>Sin grabación ni servicios en línea</h3>
         <p>Hall-e para Android no graba reuniones ni audio, no transcribe conversaciones y no usa el micrófono. La app no solicita acceso a internet, no crea una cuenta, no sincroniza con Hall-e para Mac ni envía datos de analítica a quienes la desarrollan.</p>

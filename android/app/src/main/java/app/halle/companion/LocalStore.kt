@@ -18,6 +18,11 @@ class LocalStore(context: Context) {
     var calendarsInitialized: Boolean
         get() = prefs.getBoolean("calendarsInitialized", false)
         set(value) { prefs.edit().putBoolean("calendarsInitialized", value).apply() }
+    var previewActive: Boolean
+        get() = BuildConfig.DEBUG && prefs.getBoolean("previewActive", false)
+        set(value) {
+            if (BuildConfig.DEBUG) prefs.edit().putBoolean("previewActive", value).apply()
+        }
     var scheduledOccurrenceIds: Set<String>
         get() = prefs.getStringSet("scheduledOccurrenceIds", emptySet()).orEmpty()
         set(value) { prefs.edit().putStringSet("scheduledOccurrenceIds", value).apply() }

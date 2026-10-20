@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.AlarmManager
 import android.app.DatePickerDialog
 import android.app.Dialog
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
@@ -30,7 +31,12 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -45,14 +51,17 @@ class MainActivity : Activity() {
     private var selectedDate = LocalDate.now()
     private var eventsForDay: List<MeetingOccurrence> = emptyList()
     private var morningSummary: String? = null
+    private var previewMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.rgb(245, 247, 245)
         window.navigationBarColor = Color.rgb(245, 247, 245)
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         store = LocalStore(this)
         repository = CalendarRepository(this, store)
+        updatePreviewMode(intent)
         intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0).takeIf { it > 0 }?.let { begin ->
             selectedDate = Instant.ofEpochMilli(begin).atZone(ZoneId.systemDefault()).toLocalDate()
         }
@@ -63,22 +72,26 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::store.isInitialized) {
-            if (selectedDate == LocalDate.now()) maybeCreateMorningSummary()
+            if (selectedDate == LocalDate.now() && !previewMode) maybeCreateMorningSummary()
             refreshEvents()
-            ReminderScheduler.refresh(this)
+            if (!previewMode) ReminderScheduler.refresh(this)
+            render()
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        updatePreviewMode(intent)
         val begin = intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0)
         if (begin > 0) selectedDate = Instant.ofEpochMilli(begin).atZone(ZoneId.systemDefault()).toLocalDate()
         refreshEvents()
+        if (!previewMode) ReminderScheduler.refresh(this)
         render()
     }
 
     private fun maybeCreateMorningSummary() {
+        if (previewMode) return
         if (!store.morningSummaryEnabled || !repository.hasPermission()) return
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         if (hour !in 4 until 12 || !store.morningSummaryFor(LocalDate.now())) return
@@ -89,7 +102,19 @@ class MainActivity : Activity() {
         morningSummary = ReminderPlanner.summary(today, now)
     }
 
+    private fun updatePreviewMode(intent: Intent) {
+        previewMode = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_PREVIEW, false)
+        if (BuildConfig.DEBUG) {
+            store.previewActive = previewMode
+            if (previewMode) ReminderScheduler.refresh(this)
+        }
+    }
+
     private fun refreshEvents() {
+        if (previewMode) {
+            eventsForDay = previewMeetings()
+            return
+        }
         if (!repository.hasPermission()) { eventsForDay = emptyList(); return }
         runCatching {
             val start = selectedDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -100,12 +125,18 @@ class MainActivity : Activity() {
 
     private fun render() {
         val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(Color.rgb(245, 247, 245)) }
+        ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(view.paddingLeft, systemBars.top, view.paddingRight, systemBars.bottom)
+            insets
+        }
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(28))
         }
         scroll.addView(root)
         setContentView(scroll)
+        ViewCompat.requestApplyInsets(scroll)
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val icon = ImageView(this).apply { setImageResource(R.drawable.hall_e); contentDescription = "Hall-e" }
@@ -119,7 +150,15 @@ class MainActivity : Activity() {
         root.addView(header)
 
         root.addView(space(16))
-        if (!repository.hasPermission()) permissionCard() else {
+        if (previewMode) {
+            card(Color.rgb(229, 242, 236)) {
+                addView(text("Preview · synthetic meetings", 14, Color.rgb(27, 79, 63), true))
+                addView(text("Calendar access and meeting reminders are disabled. You can still send an explicit test notification. Preview projects and notes stay in the separate debug app.", 12, Color.rgb(52, 83, 71)))
+            }
+            root.addView(space(8))
+            agendaHeader()
+            eventsForDay.forEach { eventCard(it) }
+        } else if (!repository.hasPermission()) permissionCard() else {
             if (morningSummary != null) {
                 card(Color.rgb(229, 242, 236)) {
                     addView(text("A little morning overview", 16, Color.rgb(27, 79, 63), true))
@@ -168,8 +207,14 @@ class MainActivity : Activity() {
     private fun eventCard(event: MeetingOccurrence) {
         card(Color.WHITE) {
             val top = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
-            val time = if (event.allDay) "ALL DAY" else "${event.startsAt()} – ${event.endsAt()}"
-            top.addView(text(time, 12, Color.rgb(20, 125, 114), true), LinearLayout.LayoutParams(dp(110), -2))
+            val times = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+            if (event.allDay) {
+                times.addView(text("ALL DAY", 12, Color.rgb(20, 125, 114), true))
+            } else {
+                times.addView(text(event.startsAt(), 12, Color.rgb(20, 125, 114), true))
+                times.addView(text("to ${event.endsAt()}", 11, Color.rgb(108, 121, 114)))
+            }
+            top.addView(times, LinearLayout.LayoutParams(dp(112), -2))
             val heading = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
             heading.addView(text(event.title, 17, Color.rgb(39, 55, 49), true))
             heading.addView(text(event.calendarName + (event.location?.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""),
@@ -179,7 +224,7 @@ class MainActivity : Activity() {
             addView(top)
             val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             if (event.meetingUrl != null) actions.addView(button("Join") { openMeeting(event.meetingUrl) })
-            actions.addView(button("Open") { openCalendarEvent(event) })
+            if (!previewMode) actions.addView(button("Open") { openCalendarEvent(event) })
             actions.addView(button("Project") { chooseProject(event) })
             actions.addView(button(if (store.noteFor(event.eventKey).isBlank()) "Note" else "Edit note") { editNote(event) })
             if (store.noteFor(event.eventKey).isNotBlank()) actions.addView(button("Share") { shareNote(event) })
@@ -210,18 +255,57 @@ class MainActivity : Activity() {
     }
 
     private fun showSettings() {
-        val items = mutableListOf("Choose calendars", "Reminder timing", "Notification permission", "Exact alarm access", "Morning overview: ${if (store.morningSummaryEnabled) "On" else "Off"}")
+        val items = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        if (!previewMode) {
+            items += "Choose calendars"
+            actions += { chooseCalendars() }
+        }
+        items += "Reminder timing"; actions += { chooseReminderTiming() }
+        items += "Notification permission"; actions += { requestNotificationPermission() }
+        items += "Exact alarm access"; actions += { openExactAlarmSettings() }
+        items += "Morning overview: ${if (store.morningSummaryEnabled) "On" else "Off"}"
+        actions += { store.morningSummaryEnabled = !store.morningSummaryEnabled; render() }
+        items += "Send a test notification"; actions += { sendTestNotification() }
         android.app.AlertDialog.Builder(this).setTitle("Hall-e settings")
-            .setItems(items.toTypedArray()) { _, which -> when (which) {
-                0 -> chooseCalendars()
-                1 -> chooseReminderTiming()
-                2 -> requestNotificationPermission()
-                3 -> openExactAlarmSettings()
-                4 -> { store.morningSummaryEnabled = !store.morningSummaryEnabled; render() }
-            } }.setNegativeButton("Done", null).show()
+            .setItems(items.toTypedArray()) { _, which -> actions.getOrNull(which)?.invoke() }
+            .setNegativeButton("Done", null).show()
+    }
+
+    private fun sendTestNotification() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestNotificationPermission()
+            return
+        }
+        val managerCompat = NotificationManagerCompat.from(this)
+        if (!managerCompat.areNotificationsEnabled()) {
+            toast("Notifications are disabled for Hall-e in Android Settings.")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(NotificationChannel(MeetingAlertReceiver.CHANNEL_ID,
+                "Meeting reminders", NotificationManager.IMPORTANCE_HIGH)
+                .apply { description = "Local reminders for selected calendar meetings" })
+            if (manager?.getNotificationChannel(MeetingAlertReceiver.CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) {
+                toast("Meeting reminders are turned off in Android Settings.")
+                return
+            }
+        }
+        runCatching {
+            managerCompat.notify(TEST_NOTIFICATION_ID, NotificationCompat.Builder(this, MeetingAlertReceiver.CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                .setContentTitle("Hall-e test notification")
+                .setContentText("If you can see this, Hall-e can post a notification.")
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build())
+        }.onSuccess { toast("Test notification sent.") }
+            .onFailure { toast("Could not send a notification. Check Hall-e's notification settings.") }
     }
 
     private fun chooseCalendars() {
+        if (previewMode) return
         if (!repository.hasPermission()) { requestCalendarPermission(); return }
         val choices = repository.calendars()
         if (choices.isEmpty()) { toast("No calendars are available on this device."); return }
@@ -239,12 +323,18 @@ class MainActivity : Activity() {
 
     private fun chooseReminderTiming() {
         val options = listOf(0, 1, 5, 10, 15, 30)
-        val labels = options.map { if (it == 0) "At meeting start" else "$it minutes before" }.toMutableList().apply { add("Custom…") }
+        val labels = options.map {
+            when (it) {
+                0 -> "At meeting start"
+                1 -> "1 minute before"
+                else -> "$it minutes before"
+            }
+        }.toMutableList().apply { add("Custom…") }
         android.app.AlertDialog.Builder(this).setTitle("Meeting reminder")
             .setSingleChoiceItems(labels.toTypedArray(), options.indexOf(store.alertMinutes).takeIf { it >= 0 } ?: 6) { dialog, index ->
                 if (index < options.size) {
                     store.alertMinutes = options[index]
-                    dialog.dismiss(); ReminderScheduler.refresh(this); render()
+                    dialog.dismiss(); if (!previewMode) ReminderScheduler.refresh(this); render()
                 } else {
                     dialog.dismiss(); chooseCustomReminder()
                 }
@@ -257,7 +347,7 @@ class MainActivity : Activity() {
             .setPositiveButton("Save") { _, _ ->
                 val value = input.text.toString().toIntOrNull()
                 if (value == null || value !in 1..1440) toast("Choose between 1 and 1440 minutes.")
-                else { store.alertMinutes = value; ReminderScheduler.refresh(this); render() }
+                else { store.alertMinutes = value; if (!previewMode) ReminderScheduler.refresh(this); render() }
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -326,6 +416,7 @@ class MainActivity : Activity() {
     }
 
     private fun requestCalendarPermission() {
+        if (previewMode) return
         ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_CALENDAR), REQUEST_CALENDAR)
     }
     private fun requestNotificationPermission() {
@@ -343,12 +434,26 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         refreshEvents()
-        if (requestCode == REQUEST_CALENDAR && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+        if (!previewMode && requestCode == REQUEST_CALENDAR && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             repository.calendars()
             maybeCreateMorningSummary()
         }
-        ReminderScheduler.refresh(this)
+        if (!previewMode) ReminderScheduler.refresh(this)
         render()
+    }
+
+    private fun previewMeetings(): List<MeetingOccurrence> {
+        val zone = ZoneId.systemDefault()
+        fun at(hour: Int, minute: Int): Long = selectedDate.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+        val dayKey = selectedDate.toEpochDay() * 10
+        return listOf(
+            MeetingOccurrence(-1, -(dayKey + 1), at(9, 30), at(10, 0), "Design review", "Room 3", false,
+                false, false, null, "Preview calendar"),
+            MeetingOccurrence(-1, -(dayKey + 2), at(13, 0), at(13, 45), "Project planning", null, false,
+                false, false, null, "Preview calendar"),
+            MeetingOccurrence(-1, -(dayKey + 3), at(15, 30), at(16, 0), "Weekly check-in", null, false,
+                false, false, null, "Preview calendar"),
+        )
     }
 
     private fun alertDescription(minutes: Int): String = if (minutes == 0) "At start" else "$minutes min before"
@@ -373,8 +478,10 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        const val EXTRA_PREVIEW = "HALLE_PREVIEW"
         private const val REQUEST_CALENDAR = 11
         private const val REQUEST_NOTIFICATIONS = 12
+        private const val TEST_NOTIFICATION_ID = 0x4841
     }
 }
 
