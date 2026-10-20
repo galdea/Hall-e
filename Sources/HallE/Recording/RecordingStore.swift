@@ -103,6 +103,23 @@ enum RecordingStore {
             if job.cloud?.provider == .speechmatics,
                job.cloud?.phase == .submitting,
                job.cloud?.providerJobID == nil {
+                if job.cloud?.speechmaticsSubmissionMayHaveBeenSent == false {
+                    // The coordinator persists `false` before entering the
+                    // provider and flips it only after persisting the exact
+                    // fingerprint immediately before createJob's POST. Thus
+                    // this marker proves the process stopped pre-upload.
+                    job.status = .queued
+                    job.startedAt = nil
+                    job.lastError = nil
+                    for index in job.tracks.indices where job.tracks[index].status == .running {
+                        job.tracks[index].status = .queued
+                    }
+                    session.transcriptionJob = job
+                    session.transcriptStatus = .pending
+                    session.save()
+                    Log.rec.info("queued pre-upload Speechmatics interruption: \(session.slug, privacy: .public)")
+                    continue
+                }
                 job.status = .ambiguousBilling
                 job.lastError = "Speechmatics may have accepted the audio before Hall-e quit, but no job ID was saved. The audio will not be uploaded again automatically."
                 job.cloud?.state = .ambiguousBilling

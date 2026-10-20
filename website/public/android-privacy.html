@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e10">
+  <meta name="description" content="Privacy information for Hall-e for Android: a local calendar companion with no account, network connection, or Mac sync.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Hall-e for Android — Privacy">
+  <meta property="og:description" content="How Hall-e for Android uses calendar access, stores local notes, and schedules reminders.">
+  <meta property="og:url" content="https://hall-e.pages.dev/android-privacy.html">
+  <link rel="canonical" href="https://hall-e.pages.dev/android-privacy.html">
+  <link rel="icon" href="/assets/hall-e-mark.png" type="image/png">
+  <link rel="stylesheet" href="/styles.css?v=6">
+  <link rel="stylesheet" href="/android-privacy.css?v=1">
+  <title>Hall-e for Android — Privacy</title>
+</head>
+<body>
+  <div class="site-shell privacy-shell">
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Hall-e home">
+        <span class="brand-portrait"><img src="/assets/hall-e-mark.png" width="44" height="44" alt=""></span>
+        <span>HALL<span class="brand-dash">—</span>E<span class="brand-period">.</span></span>
+      </a>
+      <span class="masthead-caption">YOUR PERSONAL MEETING COMPANION</span>
+      <nav class="header-actions" aria-label="Main navigation">
+        <a class="source-link" href="https://github.com/galdea/Hall-e" target="_blank" rel="noopener noreferrer">
+          <span>Open source</span><span aria-hidden="true">↗</span>
+        </a>
+      </nav>
+    </header>
+
+    <main class="privacy-main">
+      <a class="privacy-back" href="/">← Hall-e home</a>
+      <p class="privacy-eyebrow">ANDROID COMPANION · PRIVACY</p>
+      <h1>Hall-e for Android</h1>
+      <p class="privacy-lede">A local calendar companion. No account, network connection, or synchronization with Hall-e for Mac.</p>
+
+      <section aria-labelledby="en-title">
+        <h2 id="en-title">English</h2>
+        <h3>Calendar access</h3>
+        <p>With your permission, Hall-e reads the calendars you select through Android’s calendar provider. It uses calendar events on your phone to show your agenda, open supported meeting links, organize meetings into local projects, and schedule reminders. Hall-e does not request calendar write access. It does not send calendar information to Hall-e’s developer or another server.</p>
+
+        <h3>Information stored on your phone</h3>
+        <p>Hall-e stores your selected calendar IDs, project names, meeting-to-project assignments, Markdown notes, reminder settings, and reminder identifiers in the app’s private local storage. Calendar events are read from Android when Hall-e builds or refreshes your agenda. Hall-e does not create a separate server-side calendar copy.</p>
+
+        <h3>No recording or online services</h3>
+        <p>Hall-e for Android does not record meetings or audio, transcribe speech, or use a microphone. The app does not request network access, create an account, synchronize with Hall-e for Mac, or send analytics to the developer.</p>
+
+        <h3>Meeting links and sharing</h3>
+        <p>Supported meeting links open in an app or browser on your device. The receiving app or service may process information under its own privacy practices. If you choose to share a Markdown note, Android opens its system share sheet; Hall-e sends the note only after you choose a destination. Hall-e does not share notes automatically.</p>
+
+        <h3>Notifications and alarms</h3>
+        <p>Hall-e schedules reminders locally through Android. Android controls calendar permission, notification permission, and exact-alarm access. If access is denied, revoked, or restricted by the operating system, a reminder may not appear or may arrive later than requested. The morning overview is prepared when you open Hall-e during its morning window; Hall-e does not promise to launch itself in the background.</p>
+
+        <h3>Retention and deletion</h3>
+        <p>Local preferences, notes, projects, assignments, and calendar selections remain in the app’s private storage until you clear Hall-e’s app data or uninstall the app. Android controls revocation of calendar access. If you shared a note, separately remove any copy kept by the receiving app or service.</p>
+      </section>
+
+      <section lang="es-419" aria-labelledby="es-title">
+        <h2 id="es-title">Español (Latinoamérica)</h2>
+        <h3>Acceso al calendario</h3>
+        <p>Con tu permiso, Hall-e lee los calendarios que seleccionas mediante el proveedor de calendarios de Android. Usa los eventos del teléfono para mostrar tu agenda, abrir enlaces de reunión compatibles, organizar reuniones en proyectos locales y programar recordatorios. Hall-e no solicita permiso para modificar el calendario. No envía información del calendario a quienes desarrollan Hall-e ni a otro servidor.</p>
+
+        <h3>Información guardada en tu teléfono</h3>
+        <p>Hall-e guarda los identificadores de los calendarios seleccionados, los nombres de proyectos, las asignaciones de reuniones a proyectos, las notas Markdown, los ajustes y los identificadores de recordatorios en el almacenamiento privado de la app. Lee los eventos desde Android al crear o actualizar la agenda. No crea una copia del calendario en un servidor.</p>
+
+        <h3>Sin grabación ni servicios en línea</h3>
+        <p>Hall-e para Android no graba reuniones ni audio, no transcribe conversaciones y no usa el micrófono. La app no solicita acceso a internet, no crea una cuenta, no sincroniza con Hall-e para Mac ni envía datos de analítica a quienes la desarrollan.</p>
+
+        <h3>Enlaces de reunión y uso compartido</h3>
+        <p>Los enlaces compatibles se abren en una app o navegador del teléfono. La app o el servicio que los recibe puede procesar información según sus propias prácticas de privacidad. Si eliges compartir una nota Markdown, Android abre su menú para compartir; Hall-e solo envía la nota después de que eliges el destino. Hall-e no comparte notas automáticamente.</p>
+
+        <h3>Notificaciones y alarmas</h3>
+        <p>Hall-e programa recordatorios localmente mediante Android. Android controla el permiso de calendario, el de notificaciones y el acceso a alarmas exactas. Si deniegas o revocas estos permisos, o si el sistema limita su uso, un recordatorio podría no aparecer o llegar más tarde de lo previsto. El resumen de la mañana se prepara cuando abres Hall-e durante ese horario; la app no promete iniciarse por sí sola en segundo plano.</p>
+
+        <h3>Conservación y eliminación</h3>
+        <p>Las preferencias, notas, proyectos, asignaciones y selecciones de calendario permanecen en el almacenamiento privado de la app hasta que borras los datos de Hall-e o la desinstalas. Android controla la revocación del acceso al calendario. Si compartiste una nota, elimina por separado las copias que conserve la app o el servicio que la recibió.</p>
+      </section>
+
+      <p class="privacy-contact">Need help? <a href="https://github.com/galdea/Hall-e/issues/new/choose" target="_blank" rel="noopener noreferrer">Contact Hall-e support ↗</a></p>
+      <p class="privacy-contact" lang="es-419">¿Necesitas ayuda? <a href="https://github.com/galdea/Hall-e/issues/new/choose" target="_blank" rel="noopener noreferrer">Contacta al equipo de Hall-e ↗</a></p>
+    </main>
+
+    <footer class="footer">
+      <span class="footer-note">On your phone. On your terms.</span>
+      <a href="/">Home</a>
+      <a href="https://github.com/galdea/Hall-e/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Mac privacy</a>
+      <span class="product-credit">A product of <img src="/assets/imba-logo.webp" width="78" height="24" alt="Imba"></span>
+    </footer>
+  </div>
+</body>
+</html>

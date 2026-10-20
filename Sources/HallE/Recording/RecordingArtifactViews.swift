@@ -188,6 +188,9 @@ struct TranscriptionRecoveryControls: View {
             if let error = job.lastError, !error.isEmpty {
                 Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
+            if job.status == .ambiguousBilling, job.cloud?.provider == .speechmatics {
+                AmbiguousSpeechmaticsRecovery(session: session)
+            }
             Text(TranscriptionErrorSanitizer.guidance(for: job.lastError))
                 .font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 8) {
@@ -203,6 +206,81 @@ struct TranscriptionRecoveryControls: View {
         }
         .padding(9)
         .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+private struct AmbiguousSpeechmaticsRecovery: View {
+    let session: RecordingSession
+    @State private var jobID = ""
+    @State private var busy = false
+    @State private var message: String?
+    @State private var showNewAttemptConfirmation = false
+
+    private var checkpoint: CloudTranscriptionJob? { session.transcriptionJob?.cloud }
+    private var region: String { checkpoint?.providerRegion?.uppercased() ?? "unknown region" }
+    private var estimatedCost: String {
+        String(format: "$%.2f", checkpoint?.estimatedCostUSD ?? 0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Speechmatics may already have accepted this audio. Hall-e will not upload it again automatically.")
+                .font(.caption).foregroundStyle(.orange)
+            HStack {
+                Text("Original region: \(region)").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Speechmatics jobs") {
+                    NSWorkspace.shared.open(URL(string: "https://portal.speechmatics.com/")!)
+                }.buttonStyle(.link).font(.caption)
+            }
+            HStack(spacing: 7) {
+                TextField("Existing Speechmatics job ID", text: $jobID)
+                    .textFieldStyle(.roundedBorder).disabled(busy)
+                Button("Verify and restore") { verify() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || jobID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Button("I checked; upload a new attempt…") { showNewAttemptConfirmation = true }
+                .buttonStyle(.bordered).disabled(busy)
+            if let message { Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+        }
+        .confirmationDialog("Upload this audio to Speechmatics again?", isPresented: $showNewAttemptConfirmation,
+                            titleVisibility: .visible) {
+            Button("Upload new attempt", role: .destructive) { startNewAttempt() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You confirmed that no matching job exists in the \(region) account. The earlier request may still be charged, and this upload may create a second charge (estimated \(estimatedCost)). Existing transcript files will be kept unless a replacement completes.")
+        }
+    }
+
+    private func verify() {
+        let id = jobID.trimmingCharacters(in: .whitespacesAndNewlines)
+        busy = true; message = "Checking the job in Speechmatics \(region)…"
+        Task { @MainActor in
+            do {
+                let status = try await RecordingCoordinator.recoverSpeechmaticsJob(sessionID: session.id, jobID: id)
+                message = "Verified matching job (\(status)); retrieving its transcript…"
+                await RecordingCoordinator.resumeQueuedJobsWhenIdle()
+            } catch {
+                message = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func startNewAttempt() {
+        busy = true; message = "Starting the separately confirmed attempt…"
+        Task { @MainActor in
+            do {
+                try RecordingCoordinator.authorizeNewSpeechmaticsAttempt(
+                    sessionID: session.id, userConfirmedPossibleDuplicateCharge: true)
+                await RecordingCoordinator.resumeQueuedJobsWhenIdle()
+                message = "Attempt queued. The existing transcript is kept until a replacement completes."
+            } catch {
+                message = error.localizedDescription
+            }
+            busy = false
+        }
     }
 }
 

@@ -18,20 +18,27 @@ enum ProjectImportError: Error, LocalizedError {
     case unsupportedFile(String)
     case malformedExport(String)
     case extractionFailed(String)
+    case unavailableInStoreEdition(String)
 
     var errorDescription: String? {
         switch self {
         case .unsupportedFile(let value): "Unsupported import file: \(value)"
         case .malformedExport(let value): "Could not read export: \(value)"
         case .extractionFailed(let value): "Could not extract export: \(value)"
+        case .unavailableInStoreEdition(let value): "\(value) is unavailable in the Mac App Store edition."
         }
     }
 }
 
 struct CodexSessionImporter: ProjectSourceImporter {
+    #if !MAC_APP_STORE
     var codexHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+    #endif
 
     func load(from projectRoot: URL) throws -> [NormalizedProjectDocument] {
+        #if MAC_APP_STORE
+        throw ProjectImportError.unavailableInStoreEdition("Codex session import")
+        #else
         let roots = [codexHome.appendingPathComponent("sessions"),
                      codexHome.appendingPathComponent("archived_sessions")]
         let rootPath = projectRoot.standardizedFileURL.path
@@ -45,6 +52,7 @@ struct CodexSessionImporter: ProjectSourceImporter {
             }
         }
         return result.sorted { ($0.occurredAt ?? .distantPast) < ($1.occurredAt ?? .distantPast) }
+        #endif
     }
 
     private func parse(file: URL, projectRootPath: String) -> NormalizedProjectDocument? {
@@ -138,6 +146,9 @@ struct ChatGPTExportImporter: ProjectSourceImporter {
         let file: URL
         var temporaryFolder: URL?
         if location.pathExtension.lowercased() == "zip" {
+            #if MAC_APP_STORE
+            throw ProjectImportError.unavailableInStoreEdition("ZIP export extraction")
+            #else
             let folder = FileManager.default.temporaryDirectory
                 .appendingPathComponent("halle-chatgpt-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -150,6 +161,7 @@ struct ChatGPTExportImporter: ProjectSourceImporter {
             }
             temporaryFolder = folder
             file = folder.appendingPathComponent("conversations.json")
+            #endif
         } else {
             file = location
         }

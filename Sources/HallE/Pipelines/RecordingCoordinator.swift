@@ -10,9 +10,10 @@ enum RecordingCoordinator {
     private static var recovering = false
     private static var scheduledCloudRetries: [UUID: Task<Void, Never>] = [:]
     private static var activeSessions = Set<UUID>()
+    private static var manualTranscriptionRequests = MeetingTranscriptionRequestGate()
 
     static func isProcessing(sessionID: UUID) -> Bool {
-        activeSessions.contains(sessionID)
+        activeSessions.contains(sessionID) || manualTranscriptionRequests.contains(sessionID)
     }
 
     static func cancelScheduledRetry(sessionID: UUID) {
@@ -235,15 +236,12 @@ enum RecordingCoordinator {
     }
 
     static func retry(session: RecordingSession) {
-        guard !activeSessions.contains(session.id) else { return }
-        guard RecordingStore.queueRetry(slug: session.slug) != nil else { return }
-        notifyRecordingChanged()
-        Task { await resumeQueuedJobsWhenIdle() }
+        requestTranscription(sessionID: session.id)
     }
 
     static func retryAll() {
         let sessions = RecordingStore.allSessions().filter {
-            !activeSessions.contains($0.id)
+            !isProcessing(sessionID: $0.id)
                 && ($0.transcriptionJob ?? .legacy(status: $0.transcriptStatus)).status == .retryableFailed
         }
         for session in sessions { _ = RecordingStore.queueRetry(slug: session.slug) }
@@ -251,14 +249,125 @@ enum RecordingCoordinator {
         Task { await resumeQueuedJobsWhenIdle() }
     }
 
-    /// Re-runs a completed session from its original audio. This clears the
-    /// completed-job short circuit and transcript file so a new engine/language
-    /// cannot accidentally reuse the old result.
+    /// Re-runs a completed session after the existing confirmation. The active
+    /// transcript remains on disk until a validated replacement is promoted.
     static func retranscribe(session: RecordingSession) {
-        guard !activeSessions.contains(session.id) else { return }
-        guard RecordingStore.queueRetranscription(slug: session.slug) != nil else { return }
+        requestTranscription(sessionID: session.id, confirmedRetranscription: true)
+    }
+
+    /// Associates an already-created Speechmatics job only after its immutable
+    /// tracking reference has been read back from the original region.
+    static func recoverSpeechmaticsJob(sessionID: UUID, jobID: String) async throws -> String {
+        guard let session = RecordingStore.allSessions().first(where: { $0.id == sessionID }),
+              session.isFinished, session.hasPlayableAudio,
+              !activeSessions.contains(sessionID),
+              let job = session.transcriptionJob,
+              let checkpoint = job.cloud,
+              SpeechmaticsRecoveryAuthorization.canAssociateExistingJob(jobStatus: job.status,
+                                                                         checkpoint: checkpoint),
+              let fingerprint = speechmaticsFingerprint(checkpoint.requestFingerprint),
+              let regionName = checkpoint.providerRegion,
+              let region = SpeechmaticsRegion(rawValue: regionName) else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        guard activeSessions.insert(sessionID).inserted else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        defer { activeSessions.remove(sessionID) }
+        let audioURL = session.playbackURL
+        let duration = (try? await AVURLAsset(url: audioURL).load(.duration)).map(CMTimeGetSeconds) ?? 0
+        let provider = SpeechmaticsTranscriptionProvider(configuration: .init(region: region),
+            rawResponseDirectory: session.folderURL, duration: duration,
+            responseCache: AppPaths.speechmaticsResponseCacheDir)
+        let providerStatus = try await provider.verifyExistingJob(jobID: jobID, expectedFingerprint: fingerprint)
+        guard var latest = RecordingStore.allSessions().first(where: { $0.id == sessionID }),
+              var latestJob = latest.transcriptionJob,
+              latestJob.status == .ambiguousBilling,
+              latestJob.cloud?.requestFingerprint == checkpoint.requestFingerprint,
+              latestJob.cloud?.providerJobID == nil else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        latestJob.status = .queued
+        latestJob.lastError = nil
+        latestJob.queuedAt = Date()
+        latestJob.startedAt = nil
+        latestJob.cloud?.state = .awaitingResponse
+        latestJob.cloud?.phase = .polling
+        latestJob.cloud?.provider = .speechmatics
+        latestJob.cloud?.providerJobID = jobID
+        latestJob.cloud?.requestID = jobID
+        latestJob.cloud?.retryAfter = nil
+        latestJob.cloud?.updatedAt = Date()
+        latest.transcriptionJob = latestJob
+        latest.transcriptStatus = .pending
+        try latest.persist()
         notifyRecordingChanged()
-        Task { await resumeQueuedJobsWhenIdle() }
+        return providerStatus
+    }
+
+    /// Starts a new provider submission only after an explicit user decision
+    /// made after checking the provider job list. The prior transcript remains
+    /// untouched until a replacement validates and is promoted.
+    static func authorizeNewSpeechmaticsAttempt(sessionID: UUID, userConfirmedPossibleDuplicateCharge: Bool) throws {
+        guard var session = RecordingStore.allSessions().first(where: { $0.id == sessionID }),
+              var job = session.transcriptionJob,
+              let checkpoint = job.cloud,
+              SpeechmaticsRecoveryAuthorization.canStartNewAttempt(
+                confirmed: userConfirmedPossibleDuplicateCharge, finished: session.isFinished,
+                hasAudio: session.hasPlayableAudio, isProcessing: isProcessing(sessionID: sessionID),
+                jobStatus: job.status, checkpoint: checkpoint) else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        // A distinct fingerprint keeps a second confirmed upload visible as a
+        // separate spend reservation and prevents ledger deduplication.
+        guard let freshFingerprint = SpeechmaticsManualRetryFingerprint.make(
+            previous: checkpoint.requestFingerprint, attemptID: UUID()) else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        job.status = .queued
+        job.lastError = nil
+        job.queuedAt = Date()
+        job.startedAt = nil
+        job.completedAt = nil
+        job.cloud?.state = .queued
+        job.cloud?.phase = .actionRequired
+        job.cloud?.requestFingerprint = freshFingerprint
+        job.cloud?.requestID = nil
+        job.cloud?.providerJobID = nil
+        job.cloud?.retryAfter = nil
+        job.cloud?.updatedAt = Date()
+        session.transcriptionJob = job
+        session.transcriptStatus = .pending
+        try session.persist()
+        notifyRecordingChanged()
+    }
+
+    static func requestTranscription(sessionID: UUID, confirmedRetranscription: Bool = false) {
+        // Reload instead of trusting a row or confirmation dialog's snapshot.
+        guard let session = RecordingStore.allSessions().first(where: { $0.id == sessionID }) else { return }
+        let action = MeetingTranscriptionAction.forSession(session, isProcessing: isProcessing(sessionID: sessionID))
+        guard manualTranscriptionRequests.begin(sessionID, action: action,
+                                                confirmedRetranscription: confirmedRetranscription) else { return }
+        let job = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+        let queued: Bool
+        if action == .retranscribe {
+            queued = RecordingStore.queueRetranscription(slug: session.slug) != nil
+        } else if job.status == .queued {
+            // Wake the existing queue; do not reset accepted jobs or backoff.
+            queued = true
+        } else {
+            queued = RecordingStore.queueRetry(slug: session.slug) != nil
+        }
+        guard queued else { manualTranscriptionRequests.finish(sessionID); return }
+        notifyRecordingChanged()
+        Task {
+            // The existing serial worker/active-session guard owns the request
+            // after this synchronous main-actor handoff. Do not keep this row
+            // locked while unrelated recordings finish in the same queue.
+            manualTranscriptionRequests.finish(sessionID)
+            await resumeQueuedJobsWhenIdle()
+            notifyRecordingChanged()
+        }
     }
 
     static func resumeQueuedJobsWhenIdle() async {
@@ -577,7 +686,8 @@ enum RecordingCoordinator {
                           retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
                           updatedAt: Date(), provider: .speechmatics,
                           phase: existingJobID == nil ? .submitting : .polling,
-                          providerJobID: existingJobID, providerRegion: region.rawValue)
+                          providerJobID: existingJobID, providerRegion: region.rawValue,
+                          submissionFingerprintPersisted: existingJobID != nil)
         session.transcriptionJob = job
 
         do {
@@ -590,6 +700,11 @@ enum RecordingCoordinator {
             var replacement = try await provider.transcribe(
                 fileURL: audioURL, sessionID: session.id, track: "mixed",
                 existingJobID: existingJobID,
+                submissionFingerprint: job.cloud?.provider == .speechmatics
+                    ? speechmaticsFingerprint(job.cloud?.requestFingerprint ?? "") : nil,
+                onFingerprintPrepared: { fingerprint in
+                    try persistSpeechmaticsFingerprint(sessionID: session.id, fingerprint: fingerprint)
+                },
                 onJobCreated: { jobID in try persistSpeechmaticsJobID(sessionID: session.id, jobID: jobID) })
 
             // Pull the job-ID checkpoint written by the callback into the final
@@ -637,7 +752,7 @@ enum RecordingCoordinator {
             case .actionRequired(let http, _):
                 httpStatus = http
             case .missingAPIKey, .regionRequired, .modelTrainingConfirmationRequired,
-                 .spendLimitExceeded, .rejected, .invalidResponse:
+                 .spendLimitExceeded, .rejected, .invalidResponse, .jobIdentityMismatch:
                 break
             }
             if state == .retryableFailure, job.attemptCount < 5 {
@@ -685,6 +800,24 @@ enum RecordingCoordinator {
         session.transcriptionJob = job
         try session.persist()
         notifyRecordingChanged()
+    }
+
+    private static func persistSpeechmaticsFingerprint(sessionID: UUID, fingerprint: String) throws {
+        guard var session = RecordingStore.allSessions().first(where: { $0.id == sessionID }),
+              var job = session.transcriptionJob, let checkpoint = job.cloud,
+              checkpoint.provider == .speechmatics, checkpoint.providerJobID == nil else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        job.cloud?.requestFingerprint = fingerprint
+        job.cloud?.submissionFingerprintPersisted = true
+        job.cloud?.updatedAt = Date()
+        session.transcriptionJob = job
+        try session.persist()
+        notifyRecordingChanged()
+    }
+
+    private static func speechmaticsFingerprint(_ value: String) -> String? {
+        value.hasPrefix("speechmatics|") ? value : nil
     }
 
     private static func scheduleCloudRetry(sessionID: UUID, after delay: TimeInterval) {

@@ -14,27 +14,33 @@ struct BrowserCallsSettingsView: View {
         Form {
             detectionSection
             extensionSection
-            customDomainsSection
+            if DistributionCapabilities.supportsChromeNativeMessaging { customDomainsSection }
             permissionSection
             statusSection
         }
         .formStyle(.grouped)
         .navigationTitle("Browser & Calls")
-        .onAppear { prepareExtension(reveal: false) }
+        .onAppear { if DistributionCapabilities.supportsChromeNativeMessaging { prepareExtension(reveal: false) } }
     }
 
     private var detectionSection: some View {
         Section("Call detection") {
+            if DistributionCapabilities.supportsSystemAudioCapture {
             sourceToggle("Chrome calls", source: "chrome", detail: "Meet, Zoom, Teams, WhatsApp Web, Jitsi, Whereby, and approved custom domains")
             sourceToggle("Zoom desktop calls", source: "zoom", detail: "Best-effort prompt when Zoom uses the microphone")
             sourceToggle("WhatsApp desktop calls", source: "whatsapp", detail: "Best-effort prompt when WhatsApp uses the microphone")
             Text("Every detected call asks before recording. A detection never records automatically, and browser messages never contain page content or audio.")
                 .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Browser and desktop-call detection are unavailable in the Mac App Store edition. Recordings capture microphone input only; direct downloads retain the optional call integrations.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
     }
 
     private var extensionSection: some View {
         Section("Chrome extension") {
+            if DistributionCapabilities.supportsChromeNativeMessaging {
             LabeledContent("Status") {
                 let connected = AppPreferences.chromeExtensionID != nil
                 Text(connected ? "Connected to Chrome extension" : "Not connected")
@@ -55,6 +61,10 @@ struct BrowserCallsSettingsView: View {
             }
             Text("The native host accepts messages only from this exact extension ID and queues them locally for Hall-e. It has no network access and never receives audio.")
                 .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Chrome extension and native messaging setup are unavailable in the Mac App Store edition. The direct-download edition supports this integration.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -80,6 +90,7 @@ struct BrowserCallsSettingsView: View {
         Section("Permission health") {
             permissionRow("Microphone", granted: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
                           detail: "Required for every recording")
+            if DistributionCapabilities.supportsSystemAudioCapture {
             HStack {
                 Image(systemName: "questionmark.circle.fill").foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
@@ -89,6 +100,10 @@ struct BrowserCallsSettingsView: View {
             }
             Text("If app-audio capture is denied or unavailable, Hall-e keeps recording your microphone and marks that limitation on the session.")
                 .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("This edition records microphone audio only. Per-app system audio capture has not been validated for App Sandbox.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -115,6 +130,7 @@ struct BrowserCallsSettingsView: View {
     }
 
     private func prepareExtension(reveal: Bool) {
+        guard DistributionCapabilities.supportsChromeNativeMessaging else { return }
         do {
             let folder = try ChromeNativeHostInstaller.prepareExtension()
             extensionFolder = folder
@@ -124,6 +140,7 @@ struct BrowserCallsSettingsView: View {
     }
 
     private func connectExtension() {
+        guard DistributionCapabilities.supportsChromeNativeMessaging else { return }
         do {
             _ = try ChromeNativeHostInstaller.prepareExtension()
             try ChromeNativeHostInstaller.install(extensionID: extensionID)

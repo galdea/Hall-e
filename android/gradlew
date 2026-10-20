@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+PROPS="$ROOT/gradle/wrapper/gradle-wrapper.properties"
+URL="$(sed -n 's/^distributionUrl=//p' "$PROPS" | sed 's#\\:#:#g')"
+EXPECTED="$(sed -n 's/^distributionSha256Sum=//p' "$PROPS")"
+VERSION="$(basename "$URL" | sed 's/^gradle-//; s/-bin\.zip$//')"
+CACHE="${GRADLE_USER_HOME:-${HOME}/.gradle}/codex-wrapper/dists/$VERSION"
+GRADLE="$CACHE/gradle-$VERSION/bin/gradle"
+if [[ ! -x "$GRADLE" ]]; then
+  mkdir -p "$CACHE"
+  ZIP="$CACHE/gradle.zip"
+  curl --fail --location --retry 2 "$URL" --output "$ZIP"
+  if command -v sha256sum >/dev/null 2>&1; then ACTUAL="$(sha256sum "$ZIP" | cut -d ' ' -f1)"; else ACTUAL="$(shasum -a 256 "$ZIP" | cut -d ' ' -f1)"; fi
+  if [[ "$ACTUAL" != "$EXPECTED" ]]; then rm -f "$ZIP"; echo "Gradle checksum mismatch" >&2; exit 1; fi
+  unzip -q "$ZIP" -d "$CACHE"
+  rm -f "$ZIP"
+fi
+exec "$GRADLE" -p "$ROOT" "$@"

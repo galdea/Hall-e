@@ -21,6 +21,10 @@ struct ObsidianSettingsView: View {
                         Text(reachable ? "Notes folder is reachable and writable" : "Notes folder is missing or read-only")
                             .font(.callout)
                     }
+                    if DistributionCapabilities.usesSecurityScopedVaultAccess && VaultAccess.needsReselection {
+                        Text("This folder was linked outside the App Store sandbox or its access expired. Choose it again to grant Hall-e access.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 } else {
                     Text("Choose any folder for your Markdown notes. Hall-e reads and writes them directly; TextEdit opens them for editing.")
                         .foregroundStyle(.secondary).font(.callout)

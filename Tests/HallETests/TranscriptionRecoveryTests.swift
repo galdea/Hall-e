@@ -127,6 +127,32 @@ struct TranscriptionRecoveryTests {
         }
     }
 
+    @Test func speechmaticsStaleSubmissionOnlyRetriesWhenNewFlowProvesPrePost() throws {
+        let prePost = CloudTranscriptionJob(state: .uploading,
+            requestFingerprint: "pending-audio-hash", estimatedCostUSD: 0.1,
+            requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
+            updatedAt: Date(), provider: .speechmatics, phase: .submitting,
+            submissionFingerprintPersisted: false)
+        #expect(!prePost.speechmaticsSubmissionMayHaveBeenSent)
+
+        let beforePostRoundTrip = try JSONDecoder().decode(CloudTranscriptionJob.self,
+            from: JSONEncoder().encode(prePost))
+        #expect(!beforePostRoundTrip.speechmaticsSubmissionMayHaveBeenSent)
+
+        var afterFingerprint = prePost
+        afterFingerprint.requestFingerprint = "speechmatics|session|digest"
+        afterFingerprint.submissionFingerprintPersisted = true
+        #expect(afterFingerprint.speechmaticsSubmissionMayHaveBeenSent)
+
+        // Checkpoints written before the marker existed may already represent
+        // a provider request, so migration must preserve the conservative path.
+        let legacy = CloudTranscriptionJob(state: .uploading,
+            requestFingerprint: "speechmatics|legacy-request", estimatedCostUSD: 0.1,
+            requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
+            updatedAt: Date(), provider: .speechmatics, phase: .submitting)
+        #expect(legacy.speechmaticsSubmissionMayHaveBeenSent)
+    }
+
     @Test func manualRetryPreservesProviderAndBackoffAfterConfigurationChanges() {
         let now = Date()
         for provider in [CloudTranscriptionProvider.deepgram, .speechmatics] {

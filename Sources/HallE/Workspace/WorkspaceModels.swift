@@ -40,12 +40,6 @@ struct AttentionItem: Identifiable, Hashable {
     let selection: WorkspaceSelection?
 }
 
-enum ActionBucket: String, CaseIterable, Identifiable {
-    case overdue, today, upcoming, unscheduled, completed
-    var id: String { rawValue }
-    var title: String { rawValue.capitalized }
-}
-
 enum ProjectActivityKind: String {
     case meeting, note, codex, chatGPT, whatsApp, snapshot
 
@@ -77,6 +71,7 @@ final class WorkspaceViewModel {
     var route: WorkspaceRoute = .today {
         didSet { if route != oldValue { selection = nil } }
     }
+    var agendaDay: Date?
     var selection: WorkspaceSelection?
     var requestedMeeting: UnifiedEvent?
 
@@ -92,15 +87,65 @@ final class WorkspaceViewModel {
         }
     }
 
+    func openToday(date: Date? = nil) {
+        route = .today
+        agendaDay = date
+        selection = nil
+    }
+
     var searchQuery = "" { didSet { scheduleSearch() } }
     var searchResults: [VaultDocument] = []
     var isSearching = false
     var searchError: String?
     var directoryRevision = 0
     private var searchTask: Task<Void, Never>?
+    private var followUpStore = ProjectFollowUpStore()
+    private(set) var followUpPersistenceError: String?
 
-    init() { self.appState = .shared }
-    init(appState: AppState) { self.appState = appState }
+    init() {
+        self.appState = .shared
+        self.followUpPersistenceError = followUpStore.loadError
+    }
+    init(appState: AppState) {
+        self.appState = appState
+        self.followUpPersistenceError = followUpStore.loadError
+    }
+
+    /// One effective view for project lists, meeting context, attention, and
+    /// exports. The Markdown index remains the source; local completion choices
+    /// overlay its status without editing or deleting note content.
+    var actionItems: [IndexedActionItem] {
+        appState.actionItems.map { item in
+            var effective = item
+            effective.isCompleted = followUpStore.isCompleted(item)
+            return effective
+        }
+    }
+
+    func actionItem(id: String) -> IndexedActionItem? { actionItems.first { $0.id == id } }
+
+    func setFollowUpCompleted(_ completed: Bool, for id: String) throws {
+        do {
+            try followUpStore.setCompleted(completed, for: id)
+            followUpPersistenceError = nil
+        } catch {
+            followUpPersistenceError = error.localizedDescription
+            throw error
+        }
+    }
+
+    func actions(for project: Project) -> [IndexedActionItem] {
+        actionItems.filter { AliasStore.shared.references($0.project, project: project) }
+    }
+
+    func actions(for event: UnifiedEvent) -> [IndexedActionItem] {
+        let meetingProject = AliasStore.shared.project(resolving: event.projectId)
+        return actionItems.filter { action in
+            action.eventId == event.dedupKey || (meetingProject.map {
+                AliasStore.shared.references(action.project, project: $0)
+            } ?? false)
+        }
+    }
 
     var projects: [Project] { _ = directoryRevision; return AliasStore.shared.projects.filter { !$0.isArchived }.sorted { $0.name < $1.name } }
     var people: [Person] { _ = directoryRevision; return PeopleStore.shared.people.filter { !$0.isArchived }.sorted { $0.name < $1.name } }
@@ -165,41 +210,16 @@ final class WorkspaceViewModel {
             result.append(AttentionItem(id: "sync", kind: .sync, severity: .error,
                                         title: "Calendar sync needs attention", detail: error, selection: nil))
         }
-        result += appState.actionItems.filter { !$0.isCompleted && ($0.project == nil || $0.owner == nil || $0.dueDate == nil) }.map {
-            AttentionItem(id: "action-\($0.id)", kind: .action, severity: .info,
-                          title: $0.task, detail: "Add project, owner, or due date in its source note.", selection: .action($0.id))
-        }
         return result.sorted { $0.severity > $1.severity }
     }
 
     func badge(for route: WorkspaceRoute) -> Int {
         switch route {
         case .inbox: attentionItems.count
-        case .actions: appState.actionItems.filter { !$0.isCompleted }.count
+        case .actions: 0
         case .meetings: recordings.filter { $0.transcriptStatus == .failed }.count
         default: 0
         }
-    }
-
-    func actions(in bucket: ActionBucket, now: Date = Date()) -> [IndexedActionItem] {
-        let cal = Calendar.current
-        return appState.actionItems.filter { item in
-            if bucket == .completed { return item.isCompleted }
-            guard !item.isCompleted else { return false }
-            guard let due = Self.dueDate(item.dueDate) else { return bucket == .unscheduled }
-            switch bucket {
-            case .overdue: return due < cal.startOfDay(for: now)
-            case .today: return cal.isDate(due, inSameDayAs: now)
-            case .upcoming: return due > now && !cal.isDate(due, inSameDayAs: now)
-            case .unscheduled, .completed: return false
-            }
-        }.sorted { (Self.dueDate($0.dueDate) ?? .distantFuture) < (Self.dueDate($1.dueDate) ?? .distantFuture) }
-    }
-
-    private static func dueDate(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: String(value.prefix(10)))
     }
 
     private func scheduleSearch() {

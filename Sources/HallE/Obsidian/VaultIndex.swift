@@ -15,7 +15,7 @@ actor VaultIndex {
         let hallRoot = root.appendingPathComponent(ObsidianVaultConfig.load()?.subfolderName ?? "Hall-e",
                                                    isDirectory: true)
         let documents = scan(root: hallRoot)
-        let actions = documents.flatMap(parseActions)
+        let actions = documents.flatMap(Self.parseActionItems)
         do {
             try await AppDatabase.shared.dbQueue.write { db in
                 try VaultDocument.deleteAll(db)
@@ -79,12 +79,13 @@ actor VaultIndex {
         return result.sorted { $0.path < $1.path }
     }
 
-    private func parseActions(from document: VaultDocument) -> [IndexedActionItem] {
+    static func parseActionItems(from document: VaultDocument) -> [IndexedActionItem] {
         let start = "<!-- hall-e:actions:start -->"
         let end = "<!-- hall-e:actions:end -->"
         var inside = false
         var result: [IndexedActionItem] = []
-        for (index, line) in document.body.components(separatedBy: "\n").enumerated() {
+        var duplicateOrdinals: [String: Int] = [:]
+        for line in document.body.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed == start { inside = true; continue }
             if trimmed == end { inside = false; continue }
@@ -108,7 +109,15 @@ actor VaultIndex {
                 due = String(task[range]).replacingOccurrences(of: "— due ", with: "")
                 task.removeSubrange(range)
             }
-            let identity = "\(document.path)|\(index)|\(raw)"
+            let normalizedTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+            let ordinal = duplicateOrdinals[normalizedTask, default: 0]
+            duplicateOrdinals[normalizedTask] = ordinal + 1
+            // Keep local completion overrides through checkbox changes and
+            // unrelated lines, while distinguishing repeated identical tasks.
+            // Editing the task text or moving its note intentionally creates a
+            // new identity instead of risking an override on another action.
+            let identity = "\(document.path)|\(normalizedTask)|\(ordinal)"
             let id = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
             result.append(IndexedActionItem(id: String(id.prefix(32)), notePath: document.path,
                                             eventId: document.eventId, task: task.trimmingCharacters(in: .whitespaces),

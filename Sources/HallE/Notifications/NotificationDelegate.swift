@@ -5,12 +5,12 @@ import AppKit
 /// Handles notification presentation and action taps (Join / Open agenda /
 /// Prepare note / Snooze).
 final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
-    /// Show banners even while Hall-e is frontmost.
+    /// Keep foreground notifications in Notification Center and show banners.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async
     -> UNNotificationPresentationOptions {
         await markDelivered(notification)
-        return [.banner, .sound]
+        return [.banner, .list, .sound]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -43,6 +43,13 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             await MainActor.run { NotificationCenter.default.post(name: .halleShowPopover, object: nil) }
             return
         }
+        if response.notification.request.content.categoryIdentifier == NotificationScheduler.morningAgendaCategoryId {
+            await MainActor.run {
+                NotificationCenter.default.post(name: .halleOpenToday, object: nil,
+                                                userInfo: ["agendaDate": info["agendaDate"] as? Double ?? Date().timeIntervalSince1970])
+            }
+            return
+        }
         switch response.actionIdentifier {
         case "JOIN":
             await MainActor.run {
@@ -64,14 +71,18 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
     private func scheduleSnooze(from notification: UNNotification) async {
         guard AppPreferences.notificationsEnabled else { return }
+        let info = notification.request.content.userInfo
+        guard let key = info["dedupKey"] as? String, let epoch = info["startTs"] as? Double else { return }
+        let start = Date(timeIntervalSince1970: epoch)
+        let event = await MainActor.run { Self.event(forDedupKey: key, startTs: start) }
+        guard let fire = NotificationPlanner.snoozeFireAt(now: Date(), event: event,
+            showDeclined: AppPreferences.showDeclinedEvents, quiet: { AppPreferences.isQuietHour($0) }) else { return }
         let content = notification.request.content.mutableCopy() as! UNMutableNotificationContent
-        let fire = Date().addingTimeInterval(5 * 60)
-        guard !AppPreferences.isQuietHour(fire) else { return }
         content.body = "Snoozed · \(content.body)"
         content.sound = AppPreferences.meetingReminderSound.notificationSound
         content.userInfo["soundChoice"] = AppPreferences.meetingReminderSound.rawValue
         content.userInfo["snoozeFireAt"] = fire.timeIntervalSince1970
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5 * 60, repeats: false)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, fire.timeIntervalSinceNow), repeats: false)
         let request = UNNotificationRequest(identifier: notification.request.identifier.replacingOccurrences(of: "|snooze", with: "") + "|snooze",
                                             content: content, trigger: trigger)
         try? await UNUserNotificationCenter.current().add(request)
@@ -88,8 +99,14 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     private static func event(forDedupKey key: String) -> UnifiedEvent? {
         AppState.shared.agenda.first { $0.dedupKey == key }
     }
+
+    @MainActor
+    private static func event(forDedupKey key: String, startTs: Date) -> UnifiedEvent? {
+        AppState.shared.agenda.first { $0.dedupKey == key && $0.startTs == startTs }
+    }
 }
 
 extension Notification.Name {
     static let halleShowPopover = Notification.Name("cl.gabriel.hall-e.showPopover")
+    static let halleOpenToday = Notification.Name("cl.gabriel.hall-e.openToday")
 }

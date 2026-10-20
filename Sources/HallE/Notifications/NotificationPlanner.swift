@@ -4,6 +4,29 @@ import Foundation
 /// already scheduled/delivered. Deciding what to schedule and cancel is separated
 /// from UNUserNotificationCenter so it can be unit-tested.
 enum NotificationPlanner {
+    enum ReminderState: String, Equatable {
+        case scheduled, delivered, lateCatchUp, quietHours, disabled, permissionUnavailable
+        case alreadyStarted, outsideHorizon, declined, cancelled, allDay, notScheduled, catchUpClaimed
+    }
+
+    struct ReminderDiagnostic: Equatable, Identifiable {
+        let id: String
+        let title: String
+        let startTs: Date
+        let state: ReminderState
+        let detail: String
+    }
+
+    struct ReminderDiagnosticsSnapshot: Equatable {
+        let notificationsEnabled: Bool
+        let authorization: String
+        let alertsEnabled: Bool
+        let soundsEnabled: Bool
+        let pendingCount: Int
+        let nextFireAt: Date?
+        let occurrences: [ReminderDiagnostic]
+    }
+
     struct DesiredNotification: Equatable {
         let identifier: String
         let dedupKey: String
@@ -37,6 +60,22 @@ enum NotificationPlanner {
             || pending.leadMinutes != leadMinutes || pending.sound != sound
     }
 
+    /// A pending one-shot request is current only while its scheduled fire date
+    /// is in the future. macOS may return nil for `nextTriggerDate()` after it
+    /// expires; in that case use the date persisted in the request payload.
+    static func pendingRequestHasNotExpired(scheduledFireAt: Date?, nextTriggerDate: Date?, now: Date) -> Bool {
+        guard let fireAt = scheduledFireAt ?? nextTriggerDate else { return false }
+        return fireAt > now
+    }
+
+    static func diagnosticState(for status: NotificationStatus?) -> ReminderState? {
+        switch status {
+        case .delivered: .delivered
+        case .catchUpClaimed: .catchUpClaimed
+        default: nil
+        }
+    }
+
     static func occurrence(from identifier: String) -> (key: String, start: Date)? {
         guard identifier.hasPrefix("mtg|"), !identifier.hasSuffix("|snooze"),
               let split = identifier.lastIndex(of: "|"),
@@ -60,12 +99,14 @@ enum NotificationPlanner {
 
     /// Build the desired reminder set from unified events.
     static func desired(from events: [UnifiedEvent], now: Date, leadMinutes: Int,
-                        showDeclined: Bool, accountLabel: (UnifiedEvent) -> String?) -> [DesiredNotification] {
+                        showDeclined: Bool, accountLabel: (UnifiedEvent) -> String?,
+                        catchUpMinutes: Int = 10) -> [DesiredNotification] {
         let lead = TimeInterval(leadMinutes * 60)
         return events.compactMap { e in
             guard !e.isAllDay, e.status != "cancelled" else { return nil }
             guard showDeclined || e.effectiveResponse != "declined" else { return nil }
-            guard e.startTs > now else { return nil }
+            guard e.endTs > now else { return nil }
+            guard e.startTs > now || now.timeIntervalSince(e.startTs) <= TimeInterval(catchUpMinutes * 60) else { return nil }
             // Only remind for the near horizon (today + tomorrow).
             guard e.startTs.timeIntervalSince(now) < 48 * 3600 else { return nil }
 
@@ -80,6 +121,47 @@ enum NotificationPlanner {
                 dedupKey: e.dedupKey, startTs: e.startTs, fireAt: fireAt,
                 title: e.title, body: parts.joined(separator: " · "),
                 meetingURL: e.meetingURL, htmlLink: e.htmlLink)
+        }
+    }
+
+    static func snoozeFireAt(now: Date, event: UnifiedEvent?, showDeclined: Bool,
+                             quiet: (Date) -> Bool, minutes: Int = 5) -> Date? {
+        guard let event, !event.isAllDay, event.status != "cancelled",
+              showDeclined || event.effectiveResponse != "declined", event.endTs > now else { return nil }
+        let fireAt = now.addingTimeInterval(TimeInterval(minutes * 60))
+        guard fireAt < event.endTs, !quiet(fireAt) else { return nil }
+        return fireAt
+    }
+
+    static func isMorningActivity(_ date: Date, calendar: Calendar = .current) -> Bool {
+        let hour = calendar.component(.hour, from: date)
+        return (4..<12).contains(hour)
+    }
+
+    static func localDayKey(_ date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    static func shouldSendMorningAgenda(enabled: Bool, lastSentDay: String?, activityAt: Date,
+                                        now: Date, calendar: Calendar = .current) -> Bool {
+        enabled && isMorningActivity(activityAt, calendar: calendar)
+            && isMorningActivity(now, calendar: calendar)
+            && localDayKey(activityAt, calendar: calendar) == localDayKey(now, calendar: calendar)
+            && lastSentDay != localDayKey(activityAt, calendar: calendar)
+    }
+
+    static func morningAgendaEvents(_ events: [UnifiedEvent], on day: Date,
+                                    showDeclined: Bool, calendar: Calendar = .current) -> [UnifiedEvent] {
+        let dayStart = calendar.startOfDay(for: day)
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 60 * 60)
+        return events.filter { event in
+            guard event.status != "cancelled", showDeclined || event.effectiveResponse != "declined" else { return false }
+            if event.isAllDay { return event.startTs < nextDay && event.endTs > dayStart }
+            return calendar.isDate(event.startTs, inSameDayAs: day)
+        }.sorted { lhs, rhs in
+            if lhs.isAllDay != rhs.isAllDay { return lhs.isAllDay }
+            return lhs.startTs < rhs.startTs
         }
     }
 
@@ -112,6 +194,6 @@ enum NotificationPlanner {
     /// (for example across sleep/wake), so a stale pending ledger row must be
     /// eligible for reconciliation to schedule again.
     static func ledgerStatusSuppressesReminder(_ status: NotificationStatus) -> Bool {
-        status == .delivered
+        status == .delivered || status == .catchUpClaimed
     }
 }

@@ -1,8 +1,7 @@
 import Foundation
 
-/// User's Obsidian vault settings. The app is not sandboxed, so a plain (non
-/// security-scoped) bookmark is used — it survives the user moving/renaming the
-/// vault folder, with the stored path as a fallback.
+/// User's notes-folder settings. App Store builds require a selected-folder
+/// security-scoped bookmark; direct builds retain their path fallback.
 struct ObsidianVaultConfig: Codable, Equatable {
     var vaultPath: String
     var bookmarkData: Data?

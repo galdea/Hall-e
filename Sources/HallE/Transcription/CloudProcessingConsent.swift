@@ -69,4 +69,12 @@ struct CloudTranscriptionJob: Codable, Equatable {
     /// Speechmatics job IDs are region-scoped and must be retrieved from the
     /// same endpoint that accepted the upload.
     var providerRegion: String? = nil
+    /// `false` is written before a new Speechmatics submit flow and changes to
+    /// `true` only after its exact fingerprint has been durably saved, before
+    /// the POST. `nil` is legacy data and must be treated conservatively.
+    var submissionFingerprintPersisted: Bool? = nil
+
+    var speechmaticsSubmissionMayHaveBeenSent: Bool {
+        submissionFingerprintPersisted != false
+    }
 }

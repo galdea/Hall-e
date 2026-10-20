@@ -17,6 +17,11 @@ struct AgendaTimeline {
     }
 }
 
+struct TodayAgendaSections: Equatable {
+    let upcoming: [UnifiedEvent]
+    let past: [UnifiedEvent]
+}
+
 enum AgendaScope: String, CaseIterable, Identifiable {
     case week, month
     var id: String { rawValue }
@@ -24,6 +29,14 @@ enum AgendaScope: String, CaseIterable, Identifiable {
 }
 
 enum TimelineBuilder {
+    /// Splits timed same-day events around their end time. An in-progress event
+    /// stays in Upcoming because it still needs the live meeting controls.
+    static func todaySections(_ events: [UnifiedEvent], now: Date = Date()) -> TodayAgendaSections {
+        let timed = events.filter { !$0.isAllDay && $0.status != "cancelled" }.sorted { $0.startTs < $1.startTs }
+        return TodayAgendaSections(upcoming: timed.filter { $0.endTs > now },
+                                   past: Array(timed.filter { $0.endTs <= now }.reversed()))
+    }
+
     /// Build the agenda sections for a specific day (defaults to `now`'s day).
     /// `now` is used only for the in-progress / next highlighting.
     static func build(events: [UnifiedEvent], day: Date? = nil, now: Date = Date(),

@@ -40,7 +40,7 @@ struct RecordingSettingsView: View {
                 Label("Manual recordings show a consent reminder", systemImage: "exclamationmark.bubble")
                 Label("Completed meetings show playback and transcript controls in the calendar", systemImage: "play.circle")
                 Label("Keep recording after the meeting ends unless exact-end stopping is enabled", systemImage: "calendar.badge.clock")
-                Text("Recordings live in ~/Library/Application Support/Hall-e/Recordings and are linked to the meeting note via its recording_path.")
+                Text("Recordings live in \(AppPaths.recordingsDir.path) and are linked to the meeting note via its recording_path.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Only Hall-e’s Join button triggers automatic recording. Calendar events without a meeting link, and meetings opened outside Hall-e, are not recorded automatically. Enable this only when recording is permitted and participants are informed.")
                     .font(.caption).foregroundStyle(.secondary)

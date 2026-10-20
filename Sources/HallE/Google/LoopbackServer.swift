@@ -25,6 +25,8 @@ final class LoopbackServer {
     func start() async throws -> UInt16 {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
+        // OAuth codes must never be accepted on the LAN interface.
+        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: params, on: .any)
         self.listener = listener
 

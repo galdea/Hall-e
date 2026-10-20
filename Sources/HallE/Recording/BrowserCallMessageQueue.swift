@@ -60,6 +60,7 @@ enum BrowserCallMessageQueue {
     @discardableResult
     static func enqueue(rawPayload: Data, directory: URL = AppPaths.callMessageQueueDirectory,
                         customDomains: [String] = AppPreferences.customCallDomains) -> Bool {
+        guard DistributionCapabilities.supportsChromeNativeMessaging else { return false }
         guard let message = try? JSONDecoder().decode(ChromeNativeMessage.self, from: rawPayload),
               ChromeNativeMessageValidator.validate(message, customDomains: customDomains) != nil else { return false }
         do {
@@ -76,6 +77,7 @@ enum BrowserCallMessageQueue {
 
     static func drain(directory: URL = AppPaths.callMessageQueueDirectory,
                       customDomains: [String] = AppPreferences.customCallDomains) -> [CallLaunch] {
+        guard DistributionCapabilities.supportsChromeNativeMessaging else { return [] }
         guard let files = try? FileManager.default.contentsOfDirectory(at: directory,
                                                                          includingPropertiesForKeys: [.creationDateKey]) else { return [] }
         return files.sorted { $0.lastPathComponent < $1.lastPathComponent }.compactMap { file in
@@ -97,6 +99,7 @@ enum ChromeNativeHostInstaller {
     }
 
     static var extensionDirectory: URL? {
+        guard DistributionCapabilities.supportsChromeNativeMessaging else { return nil }
         let directory = AppPaths.browserExtensionDirectory
         if FileManager.default.fileExists(atPath: directory.appendingPathComponent("manifest.json").path) {
             return directory
@@ -109,6 +112,9 @@ enum ChromeNativeHostInstaller {
     /// and contains no user data.
     @discardableResult
     static func prepareExtension(destination: URL = AppPaths.browserExtensionDirectory) throws -> URL {
+        #if MAC_APP_STORE
+        throw InstallError.unavailableInStoreEdition
+        #else
         guard let bundled = AppResources.bundle.url(forResource: "CallCaptureExtension", withExtension: nil) else {
             throw InstallError.extensionNotBundled
         }
@@ -122,9 +128,13 @@ enum ChromeNativeHostInstaller {
             try fm.copyItem(at: source, to: target)
         }
         return destination
+        #endif
     }
 
     static func install(extensionID: String) throws {
+        #if MAC_APP_STORE
+        throw InstallError.unavailableInStoreEdition
+        #else
         let id = extensionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard id.range(of: "^[a-p]{32}$", options: .regularExpression) != nil else {
             throw InstallError.invalidExtensionID
@@ -145,6 +155,7 @@ enum ChromeNativeHostInstaller {
         try data.write(to: chromeManifestURL, options: [.atomic])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: chromeManifestURL.path)
         AppPreferences.chromeExtensionID = id
+        #endif
     }
 
     private static func nativeHostExecutableURL() -> URL? {
@@ -159,12 +170,13 @@ enum ChromeNativeHostInstaller {
     }
 
     enum InstallError: LocalizedError {
-        case invalidExtensionID, hostNotBundled, extensionNotBundled
+        case invalidExtensionID, hostNotBundled, extensionNotBundled, unavailableInStoreEdition
         var errorDescription: String? {
             switch self {
             case .invalidExtensionID: "Enter the 32-character ID Chrome shows for the Hall-e extension."
             case .hostNotBundled: "The native helper is not present in this Hall-e build."
             case .extensionNotBundled: "The Chrome extension is not present in this Hall-e build."
+            case .unavailableInStoreEdition: "Chrome native messaging is unavailable in the Mac App Store edition."
             }
         }
     }

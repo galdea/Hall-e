@@ -152,6 +152,7 @@ final class RecordingService: NSObject {
         switch state { case .idle, .failed: break; default: return nil }
         await start(for: event, notePath: notePath, sourceKind: sourceKind, onFinish: onFinish)
         guard isRecording, let session = currentSession else { return nil }
+        guard DistributionCapabilities.supportsSystemAudioCapture else { return session.id }
         guard let bundleID = targetBundleID ?? Self.targetBundleID(for: sourceKind) else { return session.id }
         currentSession?.capturedAppBundleID = bundleID
         currentSession?.save()
@@ -161,7 +162,8 @@ final class RecordingService: NSObject {
     }
 
     var canRetryMeetingAudio: Bool {
-        isRecording && systemRecorder == nil && currentSession?.capturedAppBundleID != nil
+        DistributionCapabilities.supportsSystemAudioCapture && isRecording && systemRecorder == nil
+            && currentSession?.capturedAppBundleID != nil
     }
 
     func retryMeetingAudio() {
@@ -172,6 +174,7 @@ final class RecordingService: NSObject {
     }
 
     private func startSystemCapture(bundleID: String, session: RecordingSession) {
+        guard DistributionCapabilities.supportsSystemAudioCapture else { return }
         if #available(macOS 14.2, *) {
             let rec = SystemAudioRecorder()
             do {

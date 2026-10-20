@@ -7,7 +7,7 @@ struct NotificationRecord: Codable, Identifiable, Hashable, FetchableRecord, Per
     var dedupKey: String
     var startTs: Date
     var scheduledFor: Date
-    var status: String        // pending | delivered | cancelled | skipped
+    var status: String        // pending | delivered | catchUpClaimed | cancelled | skipped
     var deliveredAt: Date?
     var snoozedUntil: Date?
 
@@ -23,5 +23,5 @@ struct NotificationRecord: Codable, Identifiable, Hashable, FetchableRecord, Per
 }
 
 enum NotificationStatus: String {
-    case pending, delivered, cancelled, skipped
+    case pending, delivered, catchUpClaimed, cancelled, skipped
 }

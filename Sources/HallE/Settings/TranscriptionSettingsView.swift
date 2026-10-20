@@ -232,6 +232,7 @@ struct TranscriptionSettingsView: View {
             if !isOnboarding {
             Section("Optional integrations") {
                 DisclosureGroup("Advanced transcript processing") {
+                if DistributionCapabilities.supportsOpenClawReports {
                 Toggle("Allow transcript text to be processed by OpenClaw + Gemini", isOn: Binding(
                     get: { cloudReportsEnabled },
                     set: { enabled in
@@ -240,6 +241,10 @@ struct TranscriptionSettingsView: View {
                     }))
                 Text("Uses the dedicated tool-less halle-reports agent and a Gemini-only model allowlist. Audio is never included in this step.")
                     .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("OpenClaw transcript reports are unavailable in the Mac App Store edition because they depend on launching a separate local command-line tool. Direct downloads retain this integration.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
                 }

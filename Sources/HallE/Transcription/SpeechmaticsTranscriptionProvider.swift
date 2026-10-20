@@ -68,6 +68,7 @@ enum SpeechmaticsError: Error, LocalizedError, Equatable {
     case retryable(status: Int?, retryAfter: Date?, message: String)
     case actionRequired(status: Int, message: String)
     case ambiguousSubmission(String)
+    case jobIdentityMismatch
     case rejected(String)
     case invalidResponse(String)
 
@@ -86,6 +87,8 @@ enum SpeechmaticsError: Error, LocalizedError, Equatable {
         case .retryable(_, _, let message), .ambiguousSubmission(let message),
              .rejected(let message), .invalidResponse(let message):
             message
+        case .jobIdentityMismatch:
+            "That Speechmatics job could not be verified as the job for this recording. No audio was uploaded and no job was attached."
         case .actionRequired(let status, let message):
             "Speechmatics requires attention (HTTP \(status)): \(message)"
         }
@@ -100,6 +103,7 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
     var responseCache: URL? = nil
 
     typealias JobCreatedHandler = @MainActor (String) async throws -> Void
+    typealias FingerprintPreparedHandler = @MainActor (String) async throws -> Void
 
     func transcribe(fileURL: URL, sessionID: UUID, track: String) async throws -> Transcript {
         try await transcribe(fileURL: fileURL, sessionID: sessionID, track: track,
@@ -107,7 +111,9 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
     }
 
     func transcribe(fileURL: URL, sessionID: UUID, track: String,
-                    existingJobID: String?, onJobCreated: JobCreatedHandler) async throws -> Transcript {
+                    existingJobID: String?, submissionFingerprint: String? = nil,
+                    onFingerprintPrepared: FingerprintPreparedHandler = { _ in },
+                    onJobCreated: JobCreatedHandler) async throws -> Transcript {
         guard configuration.region.isSupported else { throw SpeechmaticsError.regionRequired }
         guard AppPreferences.speechmaticsRegion == configuration.region else {
             throw SpeechmaticsError.consentRequired
@@ -128,7 +134,7 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
 
         let bytes = ((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)) ?? 0
         let estimate = SpeechmaticsConfiguration.estimatedCostUSD(duration: duration)
-        let fingerprint = requestFingerprint(sessionID: sessionID, digest: digest, bytes: bytes)
+        let fingerprint = submissionFingerprint ?? requestFingerprint(sessionID: sessionID, digest: digest, bytes: bytes)
         do {
             try CloudTranscriptionSpendLedger.authorize(
                 provider: .speechmatics, estimateUSD: estimate, fingerprint: fingerprint,
@@ -137,6 +143,8 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
         } catch CloudTranscriptionSpendError.limitExceeded(let projected, let limit) {
             throw SpeechmaticsError.spendLimitExceeded(projected: projected, limit: limit)
         }
+
+        if existingJobID == nil { try await onFingerprintPrepared(fingerprint) }
 
         let jobID: String
         if let existingJobID, !existingJobID.isEmpty {
@@ -164,6 +172,37 @@ struct SpeechmaticsTranscriptionProvider: TranscriptionProvider {
         CloudTranscriptionSpendLedger.complete(provider: .speechmatics, estimateUSD: estimate,
                                                 fingerprint: fingerprint, requestID: jobID)
         return transcript
+    }
+
+    /// Read-only recovery check. A job ID is accepted only when Speechmatics
+    /// returns Hall-e's exact per-recording tracking reference in the same
+    /// region that originally received the upload.
+    func verifyExistingJob(jobID: String, expectedFingerprint: String) async throws -> String {
+        guard configuration.region.isSupported else { throw SpeechmaticsError.regionRequired }
+        guard (1...128).contains(jobID.utf8.count),
+              jobID.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).contains($0) }) else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        guard AppPreferences.speechmaticsRegion == configuration.region,
+              AppPreferences.speechmaticsModelTrainingConfirmedOff,
+              AppPreferences.allowSpeechmaticsAudioTranscription else {
+            throw SpeechmaticsError.consentRequired
+        }
+        guard let key = KeychainStore.get(account: KeychainStore.speechmaticsTranscriptionAccount),
+              !key.isEmpty else { throw SpeechmaticsError.missingAPIKey }
+        let (data, http) = try await get(url: jobURL(jobID), key: key)
+        guard (200..<300).contains(http.statusCode) else { throw classify(http: http, data: data) }
+        guard let response = try? JSONDecoder().decode(SpeechmaticsJobStatusResponse.self, from: data),
+              SpeechmaticsJobIdentity.matches(jobID: jobID, returnedJobID: response.job.id,
+                  reference: response.job.tracking?.reference ?? response.job.config?.tracking?.reference,
+                  expectedFingerprint: expectedFingerprint) else {
+            throw SpeechmaticsError.jobIdentityMismatch
+        }
+        guard response.job.status != "rejected", response.job.status != "deleted",
+              response.job.status != "expired" else {
+            throw SpeechmaticsError.rejected("Speechmatics reports that this job is \(response.job.status).")
+        }
+        return response.job.status
     }
 
     func cachedResponseURL(digest: String) -> URL? {
@@ -439,13 +478,49 @@ struct SpeechmaticsTranscriptResponse: Codable {
 }
 
 private struct SpeechmaticsCreateJobResponse: Codable { var id: String; var status: String? }
-private struct SpeechmaticsJobStatusResponse: Codable {
+struct SpeechmaticsJobStatusResponse: Codable {
     var job: Job
     struct Job: Codable {
         var id: String
         var status: String
         var errors: [JobError]?
+        var tracking: Tracking?
+        var config: Config?
     }
+    struct Tracking: Codable { var reference: String? }
+    struct Config: Codable { var tracking: Tracking? }
     struct JobError: Codable { var message: String }
+}
+enum SpeechmaticsJobIdentity {
+    static func matches(jobID: String, returnedJobID: String, reference: String?,
+                        expectedFingerprint: String) -> Bool {
+        jobID == returnedJobID && !expectedFingerprint.isEmpty && reference == expectedFingerprint
+    }
+}
+
+enum SpeechmaticsManualRetryFingerprint {
+    static func make(previous: String, attemptID: UUID) -> String? {
+        guard previous.hasPrefix("speechmatics|") else { return nil }
+        return "\(previous)|confirmed-new-attempt|\(attemptID.uuidString.lowercased())"
+    }
+}
+
+enum SpeechmaticsRecoveryAuthorization {
+    static func canStartNewAttempt(confirmed: Bool, finished: Bool, hasAudio: Bool,
+                                   isProcessing: Bool, jobStatus: TranscriptionJobStatus,
+                                   checkpoint: CloudTranscriptionJob?) -> Bool {
+        confirmed && finished && hasAudio && !isProcessing && jobStatus == .ambiguousBilling
+            && checkpoint?.provider == .speechmatics && checkpoint?.providerJobID == nil
+            && checkpoint?.providerRegion.flatMap(SpeechmaticsRegion.init(rawValue:)) != nil
+            && checkpoint?.requestFingerprint.hasPrefix("speechmatics|") == true
+    }
+
+    static func canAssociateExistingJob(jobStatus: TranscriptionJobStatus,
+                                        checkpoint: CloudTranscriptionJob?) -> Bool {
+        jobStatus == .ambiguousBilling && checkpoint?.provider == .speechmatics
+            && checkpoint?.providerJobID == nil
+            && checkpoint?.providerRegion.flatMap(SpeechmaticsRegion.init(rawValue:)) != nil
+            && checkpoint?.requestFingerprint.hasPrefix("speechmatics|") == true
+    }
 }
 private struct SpeechmaticsErrorEnvelope: Codable { var message: String?; var error: String? }

@@ -14,7 +14,7 @@ struct ProjectOverviewDashboard: View {
         model.appState.agenda.filter { $0.projectId == project.name || $0.projectId == project.id }
     }
     private var actions: [IndexedActionItem] {
-        model.appState.actionItems.filter { $0.project == project.name && !$0.isCompleted }
+        model.actions(for: project).filter { !$0.isCompleted }
     }
     private var notes: [VaultDocument] { model.appState.vaultDocuments.filter { $0.project == project.name } }
     private var nextMeeting: UnifiedEvent? {
@@ -269,11 +269,17 @@ struct ProjectSourcesView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
+                    if DistributionCapabilities.supportsCodexHomeImport {
                     Button("Link Codex project folder…", action: chooseCodexFolder)
+                    }
                     Button("Import ChatGPT export…", action: chooseChatGPTExport)
                     Button("Import WhatsApp group export…", action: chooseWhatsAppExport)
                 } label: { Label("Add Source", systemImage: "plus") }
             }.padding(12)
+            if !DistributionCapabilities.supportsCodexHomeImport {
+                Text("Codex session import is unavailable in the Mac App Store edition because it would read ~/.codex outside a user-selected folder. Import ChatGPT JSON or WhatsApp exports instead.")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.bottom, 8)
+            }
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange).padding(.horizontal, 12).padding(.bottom, 8)
@@ -321,6 +327,7 @@ struct ProjectSourcesView: View {
     }
 
     private func chooseCodexFolder() {
+        guard DistributionCapabilities.supportsCodexHomeImport else { return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.allowsMultipleSelection = false; panel.prompt = "Link Project Folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -328,7 +335,9 @@ struct ProjectSourcesView: View {
                catch { errorMessage = error.localizedDescription } }
     }
     private func chooseChatGPTExport() {
-        let panel = NSOpenPanel(); panel.allowedContentTypes = [.json, .zip, .plainText]
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = DistributionCapabilities.supportsExternalArchiveProcess
+            ? [.json, .zip, .plainText] : [.json, .plainText]
         panel.allowsMultipleSelection = false; panel.prompt = "Preview Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {

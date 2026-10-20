@@ -22,6 +22,10 @@ struct WorkspaceRootView: View {
         .safeAreaInset(edge: .top, spacing: 0) { RecordingPromptBanner() }
         .environment(\.locale, language.locale)
         .id(language.language)
+        .onReceive(NotificationCenter.default.publisher(for: .halleOpenToday)) { notification in
+            let epoch = notification.userInfo?["agendaDate"] as? Double
+            model.openToday(date: epoch.map(Date.init(timeIntervalSince1970:)))
+        }
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
                 if recorder.isRecording {
@@ -49,7 +53,7 @@ struct WorkspaceRootView: View {
                 routeRow(.today); routeRow(.meetings); routeRow(.inbox)
             }
             Section(L10n.text("sidebar.organize")) {
-                routeRow(.projects); routeRow(.actions)
+                routeRow(.projects)
             }
             Section(PublicUICopy.text("Find", "Buscar")) { routeRow(.people); routeRow(.search) }
         }
@@ -76,7 +80,7 @@ struct WorkspaceRootView: View {
         case .inbox: InboxWorkspaceView(model: model)
         case .projects: ProjectsWorkspaceView(model: model)
         case .meetings: MeetingsWorkspaceView(model: model)
-        case .actions: ActionsWorkspaceView(model: model)
+        case .actions: ProjectsWorkspaceView(model: model)
         case .people: PeopleWorkspaceView(model: model)
         case .search: SearchWorkspaceView(model: model)
         }
@@ -97,7 +101,7 @@ struct WorkspaceRootView: View {
             }
             else { missingSelection }
         case .action(let id):
-            if let action = model.appState.actionItems.first(where: { $0.id == id }) { ActionDetailView(action: action) }
+            if let action = model.actionItem(id: id) { ActionDetailView(action: action) }
             else { missingSelection }
         case .person(let id):
             if let person = model.people.first(where: { $0.id == id }) { PersonDetailView(person: person, projects: model.projects) }
@@ -107,8 +111,25 @@ struct WorkspaceRootView: View {
                 VaultDocumentDetailView(document: document)
             } else { missingSelection }
         case nil:
-            HalleEmptyState(symbol: model.route.symbol, title: model.route.title,
-                            detail: detailPrompt)
+            if model.route == .today { todayMeetingContext }
+            else {
+                HalleEmptyState(symbol: model.route.symbol, title: model.route.title,
+                                detail: detailPrompt)
+            }
+        }
+    }
+
+    @ViewBuilder private var todayMeetingContext: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let timeline = TimelineBuilder.build(events: model.appState.agenda,
+                                                 day: model.agendaDay,
+                                                 now: context.date)
+            if let event = timeline.inProgress.first ?? timeline.next {
+                MeetingInspectorView(event: event, model: model)
+            } else {
+                HalleEmptyState(symbol: "calendar", title: PublicUICopy.text("No current or upcoming meeting", "No hay reuniones en curso ni próximas"),
+                                detail: PublicUICopy.text("When a timed meeting is in progress or coming up, its details will appear here.", "Los detalles de una reunión en curso o próxima aparecerán aquí."))
+            }
         }
     }
 
@@ -120,7 +141,7 @@ struct WorkspaceRootView: View {
         switch model.route {
         case .today, .meetings: L10n.text("meeting.noSelection.detail")
         case .projects: "Select a project to see its brief and ChatGPT context."
-        case .actions: "Select an action to see its source and metadata."
+        case .actions: "Select a project to see its grounded follow-ups and notes."
         case .people: "Select a person to see their projects and meeting signals."
         case .search: "Select a result to preview its indexed content."
         case .inbox: "Select an item to resolve it."
@@ -130,19 +151,8 @@ struct WorkspaceRootView: View {
 
 struct TodayWorkspaceView: View {
     let model: WorkspaceViewModel
-    private var today: AgendaTimeline { TimelineBuilder.build(events: model.appState.agenda) }
-    private var conflicts: Int {
-        let events = today.hourGroups.flatMap(\.events).sorted { $0.startTs < $1.startTs }
-        return zip(events, events.dropFirst()).filter { $0.endTs > $1.startTs }.count
-    }
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                MetricPill(value: "\(today.hourGroups.flatMap(\.events).count)", label: "meetings")
-                MetricPill(value: "\(model.appState.actionItems.filter { !$0.isCompleted }.count)", label: "open actions")
-                MetricPill(value: "\(conflicts)", label: "conflicts")
-                Spacer()
-            }.padding([.horizontal, .top], 12)
+        Group {
             if model.appState.accounts.isEmpty && model.appState.agenda.isEmpty {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(PublicUICopy.text("Ready when you are", "Listo cuando tú quieras")).font(.title2.bold())
@@ -163,7 +173,8 @@ struct TodayWorkspaceView: View {
                     Spacer()
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                AgendaView(events: model.appState.agenda, hasAccounts: !model.appState.accounts.isEmpty) {
+                AgendaView(events: model.appState.agenda, hasAccounts: !model.appState.accounts.isEmpty,
+                           day: model.agendaDay, showsHero: true) {
                     model.selection = .meeting($0.dedupKey)
                 }
             }
@@ -210,7 +221,7 @@ struct ProjectsWorkspaceView: View {
     @State private var creatingProject = false
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("Keep related meetings, notes, and actions together.").font(.caption).foregroundStyle(.secondary); Spacer(); Button { creatingProject = true } label: { Label("New Project", systemImage: "plus") } }.padding(12)
+            HStack { Text(PublicUICopy.text("Projects bring meetings, source notes, and follow-ups into one place.", "Los proyectos reúnen reuniones, notas de origen y seguimientos.")).font(.caption).foregroundStyle(.secondary); Spacer(); Button { creatingProject = true } label: { Label(PublicUICopy.text("New Project", "Nuevo proyecto"), systemImage: "plus") } }.padding(12)
             Divider()
             if model.projects.isEmpty { HalleEmptyState(symbol: "folder.badge.plus", title: "No projects", detail: "Create a project to organize meetings and notes.") }
             else {
@@ -234,7 +245,7 @@ struct ProjectsWorkspaceView: View {
                                 Text("No generated brief yet").font(.caption).foregroundStyle(.secondary)
                             }
                             HStack(spacing: 8) {
-                                Label("\(model.appState.actionItems.filter { project.matchesReference($0.project) && !$0.isCompleted }.count)", systemImage: "checklist")
+                                Label(PublicUICopy.text("Follow-ups", "Seguimientos"), systemImage: "checklist")
                                 Label("\(model.appState.agenda.filter { project.matchesReference($0.projectId) }.count)", systemImage: "calendar")
                                 Label("\(model.sources(for: project).count)", systemImage: "externaldrive")
                                 if let latest = model.activity(for: project).first {
@@ -308,33 +319,6 @@ struct MeetingsWorkspaceView: View {
                     Spacer(); HalleStatusBadge(text: session.transcriptStatus.rawValue, tone: session.transcriptStatus == .failed ? .error : session.transcriptStatus == .completed ? .success : .warning)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain)
-        }
-    }
-}
-
-struct ActionsWorkspaceView: View {
-    let model: WorkspaceViewModel
-    var body: some View {
-        List {
-            ForEach(ActionBucket.allCases) { bucket in
-                let items = model.actions(in: bucket)
-                if !items.isEmpty {
-                    Section(bucket.title) {
-                        ForEach(items) { item in
-                            Button { model.selection = .action(item.id) } label: {
-                                HStack(alignment: .top) {
-                                    Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle").foregroundStyle(item.isCompleted ? .green : .secondary)
-                                    VStack(alignment: .leading) {
-                                        Text(item.task).strikethrough(item.isCompleted).foregroundStyle(.primary)
-                                        HStack { if let project = item.project { Text(project) }; if let due = item.dueDate { Text("· \(due)") } }
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
         }
     }
 }

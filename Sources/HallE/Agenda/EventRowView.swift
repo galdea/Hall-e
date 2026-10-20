@@ -21,6 +21,9 @@ struct EventRowView: View {
     @State private var appState = AppState.shared
     @State private var playback = RecordingPlaybackService.shared
     @State private var artifactMode: MeetingArtifactMode?
+    @State private var showRetranscriptionConfirmation = false
+    @State private var retranscriptionSessionID: UUID?
+    @State private var showProjectChooser = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -63,6 +66,21 @@ struct EventRowView: View {
         .onHover { hovering = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(event.title), \(event.startTs.formatted(date: .omitted, time: .shortened))")
+        .confirmationDialog(PublicUICopy.text("Re-transcribe this recording?", "¿Volver a transcribir esta grabación?"),
+                            isPresented: $showRetranscriptionConfirmation, titleVisibility: .visible) {
+            Button(PublicUICopy.text("Re-transcribe", "Volver a transcribir"), role: .destructive) {
+                if let id = retranscriptionSessionID {
+                    RecordingCoordinator.requestTranscription(sessionID: id, confirmedRetranscription: true)
+                }
+            }
+            Button(L10n.text("common.cancel"), role: .cancel) {}
+        } message: {
+            Text(PublicUICopy.text("The existing transcript will be replaced using the current engine and language settings.",
+                                   "La transcripción existente se reemplazará usando el motor y el idioma actuales."))
+        }
+        .sheet(isPresented: $showProjectChooser) {
+            MeetingProjectChooser(event: event) {}
+        }
     }
 
     private var timeColumn: some View {
@@ -73,7 +91,7 @@ struct EventRowView: View {
                 Text(event.startTs, format: .dateTime.hour().minute()).font(.callout.monospacedDigit())
                 Text(event.endTs, format: .dateTime.hour().minute()).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
             }
-        }.frame(width: 48, alignment: .trailing)
+        }.frame(width: 68, alignment: .trailing)
     }
 
     private func titleRow(active: Bool) -> some View {
@@ -123,23 +141,55 @@ struct EventRowView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(transcriptTone(session.transcriptStatus).color)
                 .help(transcriptHelp(session.transcriptStatus))
+                .accessibilityLabel(PublicUICopy.text("Transcript", "Transcripción"))
             }
             if showJoin, let link = event.meetingURL, URL(string: link) != nil {
                 Button { MeetingLauncher.join(event) } label: { Image(systemName: "video.fill") }
                     .buttonStyle(.borderless).help(L10n.text("meeting.join"))
             }
             Menu {
+                Button {
+                    artifactMode = artifactMode == .transcript ? nil : .transcript
+                } label: {
+                    Label(PublicUICopy.text("Transcript", "Transcripción"), systemImage: "text.quote")
+                }.disabled(session == nil)
+                transcriptionButton(session: session)
+                Divider()
                 if let link = event.htmlLink, let url = URL(string: link) {
                     Button(L10n.text("meeting.openCalendar")) { NSWorkspace.shared.open(url) }
                 }
                 Button(L10n.text("meeting.prepareNote")) { Features.current.prepareNote(for: event) }
+                Button(PublicUICopy.text("Assign project…", "Asignar proyecto…")) { showProjectChooser = true }
                 if Features.current.canOpenObsidian {
                     Button(L10n.text("meeting.openProjectNote")) { Features.current.openInObsidian(event) }
                 }
                 Button(L10n.text("meeting.startRecording")) { Features.current.startRecording(for: event) }
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize().opacity(hovering ? 1 : 0.55)
+                .accessibilityLabel(PublicUICopy.text("Meeting actions", "Acciones de la reunión"))
         }
+    }
+
+    private func transcriptionButton(session: RecordingSession?) -> some View {
+        let action = MeetingTranscriptionAction.forSession(session,
+            isProcessing: session.map { RecordingCoordinator.isProcessing(sessionID: $0.id) } ?? false)
+        return Button {
+            guard let session else { return }
+            artifactMode = .transcript
+            if action == .retranscribe {
+                retranscriptionSessionID = session.id
+                showRetranscriptionConfirmation = true
+            } else {
+                RecordingCoordinator.requestTranscription(sessionID: session.id)
+            }
+        } label: {
+            Label(action.title, systemImage: "waveform")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!action.isEnabled)
+        .help(action.help)
+        .accessibilityLabel(action.title)
+        .accessibilityHint(action.help)
     }
 
     private func transcriptTone(_ status: TranscriptStatus) -> HalleStatusTone {

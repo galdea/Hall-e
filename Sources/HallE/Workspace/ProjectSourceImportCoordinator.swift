@@ -6,6 +6,9 @@ actor ProjectSourceImportCoordinator {
     static let shared = ProjectSourceImportCoordinator()
 
     func linkCodex(projectId: String, projectName: String, folder: URL) async throws -> ProjectSourceRecord {
+        guard DistributionCapabilities.supportsCodexHomeImport else {
+            throw ProjectImportError.unavailableInStoreEdition("Codex session import")
+        }
         let standardized = folder.standardizedFileURL.path
         let sourceId = Self.digest("codex|\(projectId)|\(standardized)")
         let existing = try await AppDatabase.shared.dbQueue.read { db in
@@ -72,6 +75,9 @@ actor ProjectSourceImportCoordinator {
     func refresh(_ source: ProjectSourceRecord) async throws {
         guard let location = source.location else { return }
         if source.kind == .codex {
+            guard DistributionCapabilities.supportsCodexHomeImport else {
+                throw ProjectImportError.unavailableInStoreEdition("Codex session refresh")
+            }
             _ = try await linkCodex(projectId: source.projectId, projectName: source.displayName,
                                     folder: URL(fileURLWithPath: location))
         } else if source.kind == .chatGPT || source.kind == .whatsApp {
@@ -86,6 +92,7 @@ actor ProjectSourceImportCoordinator {
     }
 
     func refreshLinkedCodexSources() async {
+        guard DistributionCapabilities.supportsCodexHomeImport else { return }
         let sources = (try? await AppDatabase.shared.dbQueue.read { db in
             try ProjectSourceRecord.filter(ProjectSourceRecord.Columns.kind == ProjectSourceKind.codex.rawValue).fetchAll(db)
         }) ?? []

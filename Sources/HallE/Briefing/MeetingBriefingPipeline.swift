@@ -5,6 +5,16 @@ import Foundation
                     service: MeetingNoteService, notePath: String,
                     client: OpenClawReportClient = .init(configuration: .init())) async -> RecordingSession {
         var session = initial
+        guard DistributionCapabilities.supportsOpenClawReports else {
+            session.briefingJob = .init(status: .actionRequired,
+                                        attemptCount: session.briefingJob?.attemptCount ?? 0,
+                                        transcriptHash: transcript.contentHash,
+                                        promptVersion: OpenClawReportConfiguration.promptVersion,
+                                        model: client.configuration.model,
+                                        lastError: "OpenClaw reports are unavailable in the Mac App Store edition.")
+            session.save()
+            return session
+        }
         guard AppPreferences.allowCloudTranscriptReports else {
             session.briefingJob = .init(status: .consentBlocked, attemptCount: session.briefingJob?.attemptCount ?? 0,
                                         transcriptHash: transcript.contentHash,
@@ -70,6 +80,7 @@ import Foundation
     }
 
     static func resumeQueuedWhenIdle() async {
+        guard DistributionCapabilities.supportsOpenClawReports else { return }
         guard !RecordingService.shared.isRecording, let service = MeetingNoteService.make() else { return }
         for session in RecordingStore.allSessions().filter({ [.queued, .running].contains($0.briefingJob?.status) }) {
             guard !RecordingService.shared.isRecording,

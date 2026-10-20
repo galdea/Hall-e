@@ -18,6 +18,11 @@ final class WorkspaceWindowController {
         show()
     }
 
+    func showToday(date: Date? = nil) {
+        model.openToday(date: date)
+        show()
+    }
+
     func show() {
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         let controller = NSHostingController(rootView: WorkspaceRootView(model: model))

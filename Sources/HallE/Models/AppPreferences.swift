@@ -28,6 +28,8 @@ struct AppPreferences {
         static let notificationsEnabled = "notificationsEnabled"
         static let quietHoursStart = "quietHoursStart"
         static let quietHoursEnd = "quietHoursEnd"
+        static let morningAgendaEnabled = "morningAgendaEnabled"
+        static let morningAgendaLastBriefDay = "morningAgendaLastBriefDay"
         static let transcriptionEngine = "transcriptionEngine"
         static let transcriptionLanguage = "transcriptionLanguage"
         static let cloudAudioConsent = "cloudAudioConsent"
@@ -146,6 +148,16 @@ struct AppPreferences {
     static var quietHoursEnd: Int {
         get { d.object(forKey: Key.quietHoursEnd) as? Int ?? 8 }
         set { d.set(newValue, forKey: Key.quietHoursEnd) }
+    }
+
+    static var morningAgendaEnabled: Bool {
+        get { d.object(forKey: Key.morningAgendaEnabled) as? Bool ?? false }
+        set { d.set(newValue, forKey: Key.morningAgendaEnabled) }
+    }
+
+    static var morningAgendaLastBriefDay: String? {
+        get { d.string(forKey: Key.morningAgendaLastBriefDay) }
+        set { d.set(newValue, forKey: Key.morningAgendaLastBriefDay) }
     }
 
     static func isQuietHour(_ date: Date, calendar: Calendar = .current) -> Bool {

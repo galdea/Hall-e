@@ -4,7 +4,7 @@ import Foundation
 enum AppPaths {
     static let bundleID = "cl.gabriel.hall-e"
 
-    /// ~/Library/Application Support/Hall-e
+    /// User Application Support/Hall-e (container-resolved by App Sandbox).
     static var appSupport: URL {
         #if DEBUG
         if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] == "1" {

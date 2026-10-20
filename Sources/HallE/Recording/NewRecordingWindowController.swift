@@ -70,6 +70,7 @@ private struct NewRecordingView: View {
             }
             VStack(alignment: .leading, spacing: 9) {
                 Text(copy("Audio source", "Fuente de audio")).font(.headline)
+                if DistributionCapabilities.supportsSystemAudioCapture {
                 Picker(copy("Record", "Grabar"), selection: $selectedApp) {
                     Text(copy("Microphone only · in person", "Solo micrófono · presencial")).tag("")
                     ForEach(apps) { app in
@@ -82,6 +83,10 @@ private struct NewRecordingView: View {
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button(copy("Refresh open apps", "Actualizar apps abiertas")) { refreshApps() }
                     .buttonStyle(.link)
+                } else {
+                    Text(copy("Microphone only. Per-app system audio capture is not available in the Mac App Store edition.", "Solo micrófono. La captura del audio de apps no está disponible en la edición de Mac App Store."))
+                        .font(.callout).foregroundStyle(.secondary)
+                }
             }
             Label(copy("Tell everyone before recording.", "Avisa a todos antes de grabar."), systemImage: "person.2")
                 .font(.callout)
@@ -95,6 +100,7 @@ private struct NewRecordingView: View {
     }
 
     private func refreshApps() {
+        guard DistributionCapabilities.supportsSystemAudioCapture else { apps = []; selectedApp = ""; return }
         var seen = Set<String>()
         apps = NSWorkspace.shared.runningApplications.compactMap { app in
             guard app.activationPolicy == .regular, let id = app.bundleIdentifier,

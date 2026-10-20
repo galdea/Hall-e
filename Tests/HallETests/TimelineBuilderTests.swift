@@ -54,6 +54,17 @@ struct TimelineBuilderTests {
         #expect(t.next?.title == "Soon")
     }
 
+    @Test func todaySectionsPutFinishedMeetingsBeforeLiveAndUpcomingOnes() {
+        let events = [
+            makeUnified(title: "Earlier", start: at(8, 0), end: at(8, 30)),
+            makeUnified(title: "Live", start: at(10, 0), end: at(11, 0)),
+            makeUnified(title: "Later", start: at(14, 0), end: at(15, 0)),
+        ]
+        let sections = TimelineBuilder.todaySections(events, now: now)
+        #expect(sections.upcoming.map(\.title) == ["Live", "Later"])
+        #expect(sections.past.map(\.title) == ["Earlier"])
+    }
+
     @Test func excludesCancelledByDefault() {
         let events = [makeUnified(title: "Cancelled", start: at(12, 0), end: at(13, 0), status: "cancelled")]
         let t = TimelineBuilder.build(events: events, now: now)

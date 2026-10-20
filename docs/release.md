@@ -72,16 +72,18 @@ fallback.
 
 ## CI and release tags
 
-The workflow tests and packages native Apple silicon and Intel builds on PRs,
-main pushes, manual dispatches, and `vX.Y.Z` tags. Each job uploads versioned DMGs,
-ZIPs, and checksums as downloadable Actions artifacts. Both jobs run on
-macOS 15 with a macOS 14 deployment target. These are
-separate architecture builds, not universal binaries.
+Routine pull requests and pushes to `main` do not start hosted validation. The
+macOS workflow runs for a `vX.Y.Z` tag or an explicit `workflow_dispatch`; the
+Windows workflow runs for a `win-vX.Y.Z` tag or an explicit manual dispatch. Local
+checks remain part of routine development. A macOS manual run accepts a version
+and a notarization choice; it uploads versioned DMGs, ZIPs, and checksums as
+downloadable Actions artifacts but does not publish a GitHub Release. Both
+macOS architecture jobs run on macOS 15 with a macOS 14 deployment target. They
+are separate architecture builds, not universal binaries.
 
-Runs for the same commit share a concurrency group. If a tag is pushed while the
-same main-branch validation is still running, the tag run supersedes it instead of
-spending a second full pair of runners. Completed main validation is retained;
-required PR/main coverage is not skipped. Staging Actions artifacts expire after
+Runs for the same commit share a concurrency group. A version-tag run can
+supersede an in-progress same-commit manual macOS packaging run; it does not
+cancel a release for another commit. Staging Actions artifacts expire after
 seven days; tagged GitHub Release assets do not depend on that retention period.
 
 By default all jobs use ad-hoc signing without secrets. To opt into notarized tag
@@ -138,10 +140,14 @@ and [Speechmatics' regional job-list authentication](https://docs.speechmatics.c
 They send no audio and do not create paid transcription jobs. The selected region
 is part of Speechmatics verification and audio consent.
 
-Pushing `main` produces CI staging artifacts; a version tag publishes installers
-only after both architecture jobs pass. Redeploy the landing page with the new
-versioned links only after both public downloads are available. Existing release
-assets are preserved; v0.3.0 installers do not contain the connection-check flow.
+Pushing `main` does not start a hosted release workflow. A `vX.Y.Z` tag starts
+the macOS release workflow, and a matching `win-vX.Y.Z` tag starts the Windows
+release workflow. The macOS tag publishes installers only after both
+architecture jobs pass; the Windows tag publishes its installer after its
+verification job passes. Manual dispatches provide staging artifacts without
+publishing a release. Redeploy the landing page with new versioned links
+only after the public downloads are available. Existing release assets are
+preserved; v0.3.0 installers do not contain the connection-check flow.
 
 ### Installing an update
 
@@ -163,7 +169,7 @@ or automatic AI meeting summaries; those are optional integrations.
 
 The separate Windows preview is published under `win-v0.1.1`, preserving the macOS `v*` release series and latest-release links. Download the [Windows installer and portable ZIP](https://github.com/galdea/Hall-e/releases/tag/win-v0.1.1). It supports Windows 11 Intel/AMD x64 and bundles its runtime. See [Windows setup, limitations, packaging, and verification](../windows/README.md). The installer is currently unsigned; Windows security policy can still block installation.
 
-The Windows version comes from `windows/Directory.Build.props`. A matching `win-vX.Y.Z` tag runs Core/service tests, packages a fresh payload, checks both downloadable checksums, installs/updates/uninstalls the app, and launches the extracted portable ZIP. Only a passing tag run publishes the Windows preview, without changing the macOS latest release. Main/tag validation of the same commit shares a concurrency group to avoid duplicate packaging.
+The Windows version comes from `windows/Directory.Build.props`. A matching `win-vX.Y.Z` tag runs Core/service tests, packages a fresh payload, checks both downloadable checksums, installs/updates/uninstalls the app, and launches the extracted portable ZIP. Only a passing tag run publishes the Windows preview, without changing the macOS latest release. Tag and manual validation of the same commit share a concurrency group to avoid duplicate packaging.
 
 ### Landing-page download updates
 

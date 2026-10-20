@@ -23,6 +23,8 @@ final class StatusItemController: NSObject {
         statusItem.isVisible = true
         NotificationCenter.default.addObserver(self, selector: #selector(openMeetingNotification(_:)),
                                                name: .halleOpenMeeting, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(openTodayNotification(_:)),
+                                               name: .halleOpenToday, object: nil)
 
         popover.contentSize = NSSize(width: 460, height: 620)
         // Debug runs keep the popover pinned (and floated, below) so it can be
@@ -129,6 +131,14 @@ final class StatusItemController: NSObject {
         Task { @MainActor in
             popover.performClose(nil)
             WorkspaceWindowController.shared.showMeeting(dedupKey: key)
+        }
+    }
+
+    @objc private func openTodayNotification(_ notification: Notification) {
+        let epoch = notification.userInfo?["agendaDate"] as? Double
+        Task { @MainActor in
+            popover.performClose(nil)
+            WorkspaceWindowController.shared.showToday(date: epoch.map(Date.init(timeIntervalSince1970:)))
         }
     }
 

@@ -21,6 +21,7 @@ struct OnboardingView: View {
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var startupError: String?
     @State private var reminderEnabled = false
+    @State private var reminderLead = AppPreferences.notificationLeadMinutes
     let onClose: (Bool) -> Void
 
     private func copy(_ en: String, _ es: String) -> String { PublicUICopy.text(en, es) }
@@ -165,13 +166,48 @@ struct OnboardingView: View {
                     catch { startupError = error.localizedDescription; launchAtLogin = LaunchAtLogin.isEnabled }
                 }
             if let startupError { Text(startupError).font(.caption).foregroundStyle(.orange) }
-            Button(reminderEnabled ? copy("Notifications enabled", "Notificaciones activadas") : copy("Enable meeting reminders (optional)", "Activar recordatorios de reuniones (opcional)")) {
+            Picker(copy("Meeting reminder", "Recordatorio de reuniones"), selection: $reminderLead) {
+                ForEach([0, 1, 5, 10, 15, 30], id: \.self) { value in
+                    Text(value == 0 ? copy("At start", "Al comenzar") : copy("\(value) minutes before", "\(value) minutos antes")).tag(value)
+                }
+                if ![0, 1, 5, 10, 15, 30].contains(reminderLead) {
+                    Text(copy("Custom · \(reminderLead) minutes", "Personalizado · \(reminderLead) minutos")).tag(reminderLead)
+                }
+            }.frame(maxWidth: 340)
+                .onChange(of: reminderLead) { _, value in
+                    AppPreferences.notificationLeadMinutes = value
+                    Task { await NotificationScheduler.shared.refreshReminders() }
+                }
+            Stepper(copy("Custom reminder: \(reminderLead) minutes", "Recordatorio personalizado: \(reminderLead) minutos"),
+                    value: $reminderLead, in: 0...60, step: 1)
+                .onChange(of: reminderLead) { _, value in
+                    AppPreferences.notificationLeadMinutes = value
+                    Task { await NotificationScheduler.shared.refreshReminders() }
+                }
+            Toggle(copy("Enable meeting reminders", "Activar recordatorios de reuniones"), isOn: Binding(
+                get: { AppPreferences.notificationsEnabled },
+                set: { value in
+                    AppPreferences.notificationsEnabled = value
+                    if value {
+                        Task {
+                            await NotificationScheduler.shared.requestAuthorizationIfNeeded()
+                            let settings = await UNUserNotificationCenter.current().notificationSettings()
+                            reminderEnabled = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+                            await NotificationScheduler.shared.refreshReminders()
+                        }
+                    } else {
+                        Task { await NotificationScheduler.shared.refreshReminders() }
+                    }
+                }))
+            if !reminderEnabled {
+                Button(copy("Allow notifications in macOS…", "Permitir notificaciones en macOS…")) {
                 Task {
                     await NotificationScheduler.shared.requestAuthorizationIfNeeded()
                     let settings = await UNUserNotificationCenter.current().notificationSettings()
                     reminderEnabled = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
                 }
-            }.disabled(reminderEnabled)
+                }
+            }
             Text(copy("Connect calendars later in Settings → Accounts. Your projects, recordings, and provider settings are kept when updating Hall-e.", "Conecta calendarios después en Ajustes → Cuentas. Al actualizar Hall-e se conservan tus proyectos, grabaciones y proveedores.")).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -239,5 +275,9 @@ struct OnboardingView: View {
         speechmaticsVerified = AppPreferences.speechmaticsRegion.map {
             CloudCredentialValidation.savedKeyIsVerified(target: .speechmatics($0))
         } ?? false
+        Task {
+            let status = await NotificationScheduler.shared.authorizationStatus()
+            reminderEnabled = status == .authorized || status == .provisional
+        }
     }
 }

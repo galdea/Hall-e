@@ -61,12 +61,7 @@ struct MeetingInspectorView: View {
                     }
                 }
 
-                let meetingProject = AliasStore.shared.project(resolving: event.projectId)
-                let related = model.appState.actionItems.filter { action in
-                    action.eventId == event.dedupKey || (meetingProject.map {
-                        AliasStore.shared.references(action.project, project: $0)
-                    } ?? false)
-                }
+                let related = model.actions(for: event).filter { !$0.isCompleted }
                 inspectorSection("Open commitments", symbol: "checklist") {
                     if related.isEmpty { Text("No indexed commitments").foregroundStyle(.secondary) }
                     ForEach(related.prefix(8)) { Text($0.task).font(.callout) }
@@ -92,7 +87,17 @@ struct MeetingInspectorView: View {
     }
     private func stateLabel(now: Date) -> String { event.startTs <= now && now < event.endTs ? L10n.text("agenda.now") : event.startTs > now ? L10n.text("agenda.next") : "Ended" }
     private func stateTone(now: Date) -> HalleStatusTone { event.startTs <= now && now < event.endTs ? .recording : event.startTs > now ? .info : .neutral }
-    private func relativeText(now: Date) -> String { (event.startTs > now ? event.startTs : event.endTs).formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)) }
+    private func relativeText(now: Date) -> String {
+        let active = event.startTs <= now && now < event.endTs
+        let target = active ? event.endTs : event.startTs
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLanguageStore.shared.locale
+        formatter.unitsStyle = .abbreviated
+        let relative = formatter.localizedString(for: target, relativeTo: now)
+        return active
+            ? PublicUICopy.text("Ends \(relative)", "Termina \(relative)")
+            : PublicUICopy.text("Starts \(relative)", "Comienza \(relative)")
+    }
     private func transcriptTone(_ status: TranscriptStatus) -> HalleStatusTone { switch status { case .completed: .success; case .failed: .error; case .inProgress, .pending: .warning } }
 }
 
@@ -107,7 +112,7 @@ struct ProjectDetailView: View {
     @State private var tab: Tab = .overview
     @State private var showPreview = false
     private var documents: [VaultDocument] { model.appState.vaultDocuments.filter { AliasStore.shared.references($0.project, project: project) } }
-    private var actions: [IndexedActionItem] { model.appState.actionItems.filter { AliasStore.shared.references($0.project, project: project) } }
+    private var actions: [IndexedActionItem] { model.actions(for: project) }
     private var meetings: [UnifiedEvent] { model.appState.agenda.filter { AliasStore.shared.references($0.projectId, project: project) }.sorted { $0.startTs > $1.startTs } }
     var body: some View {
         VStack(spacing: 0) {
@@ -131,7 +136,9 @@ struct ProjectDetailView: View {
                 }
                 HStack {
                     Picker("Project section", selection: $tab) {
-                        ForEach([Tab.overview, .meetings, .notes, .actions], id: \.self) { Text($0.rawValue).tag($0) }
+                        ForEach([Tab.overview, .meetings, .notes, .actions], id: \.self) {
+                            Text($0 == .actions ? PublicUICopy.text("Follow-ups", "Seguimientos") : $0.rawValue).tag($0)
+                        }
                         if [.assistant, .activity, .sources, .rules].contains(tab) { Text(tab.rawValue).tag(tab) }
                     }.pickerStyle(.segmented)
                     Menu("More") {
@@ -143,7 +150,7 @@ struct ProjectDetailView: View {
             }.padding(20)
             Divider(); projectContent
         }
-        .sheet(isPresented: $showPreview) { ChatGPTPrivacyPreview(project: project, documents: model.appState.vaultDocuments, actions: model.appState.actionItems) }
+        .sheet(isPresented: $showPreview) { ChatGPTPrivacyPreview(project: project, documents: model.appState.vaultDocuments, actions: model.actionItems) }
     }
     @ViewBuilder private var projectContent: some View {
         switch tab {
@@ -156,11 +163,7 @@ struct ProjectDetailView: View {
         case .meetings:
             List(meetings) { event in EventRowView(event: event) { model.selection = .meeting($0.dedupKey) } }
         case .actions:
-            List(actions) { item in
-                Button { model.selection = .action(item.id) } label: {
-                    Label(item.task, systemImage: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                }.buttonStyle(.plain)
-            }
+            followUpsView
         case .notes:
             List(documents) { document in
                 Button { model.selection = .document(document.path) } label: {
@@ -173,6 +176,66 @@ struct ProjectDetailView: View {
             ProjectSourcesView(project: project, model: model)
         case .rules: List(project.aliases, id: \.self) { alias in HStack { VStack(alignment: .leading) { Text(alias.text); Text(alias.kind.displayLabel).font(.caption).foregroundStyle(.secondary) }; Spacer(); HalleStatusBadge(text: alias.strength.rawValue.capitalized) } }
         }
+    }
+
+    private var followUpsView: some View {
+        let open = actions.filter { !$0.isCompleted }
+        let completed = actions.filter(\.isCompleted)
+        return List {
+            if let error = model.followUpPersistenceError {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(PublicUICopy.text("Follow-up status needs attention", "El estado de los seguimientos requiere atención"))
+                            .font(.callout.weight(.semibold))
+                        Text(error).font(.caption)
+                        Text(PublicUICopy.text("The saved file was left untouched. Review it before trying again.", "El archivo guardado no se modificó. Revísalo antes de volver a intentarlo."))
+                            .font(.caption2)
+                    }
+                } icon: { Image(systemName: "exclamationmark.triangle.fill") }
+                    .foregroundStyle(.orange)
+                    .listRowBackground(Color.orange.opacity(0.08))
+            }
+            if actions.isEmpty {
+                ContentUnavailableView(PublicUICopy.text("No note commitments yet", "Aún no hay compromisos en notas"), systemImage: "checklist",
+                                       description: Text(PublicUICopy.text("Follow-ups appear here when a project note contains a Hall-e action block.", "Los seguimientos aparecerán aquí cuando una nota del proyecto incluya acciones de Hall-e.")))
+            }
+            if !open.isEmpty {
+                Section(PublicUICopy.text("Open", "Pendientes")) { ForEach(open) { followUpRow($0) } }
+            }
+            if !completed.isEmpty {
+                Section(PublicUICopy.text("Completed", "Completados")) { ForEach(completed) { followUpRow($0) } }
+            }
+        }
+    }
+
+    private func followUpRow(_ item: IndexedActionItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button { setCompleted(!item.isCompleted, for: item.id) } label: {
+                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.isCompleted ? Color.green : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(PublicUICopy.text(item.isCompleted ? "Reopen follow-up" : "Complete follow-up",
+                                                   item.isCompleted ? "Reabrir seguimiento" : "Completar seguimiento"))
+            VStack(alignment: .leading, spacing: 5) {
+                Button { model.selection = .action(item.id) } label: {
+                    Text(item.task).strikethrough(item.isCompleted).foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.plain)
+                HStack(spacing: 8) {
+                    if let owner = item.owner { Label(owner, systemImage: "person") }
+                    if let due = item.dueDate { Label(due, systemImage: "calendar") }
+                    Button { model.selection = .document(item.notePath) } label: { Label(PublicUICopy.text("Source note", "Nota de origen"), systemImage: "doc.text") }
+                        .buttonStyle(.link)
+                }.font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }.padding(.vertical, 3)
+    }
+
+    private func setCompleted(_ value: Bool, for id: String) {
+        do { try model.setFollowUpCompleted(value, for: id) }
+        catch { /* The model exposes the persistence error in this view. */ }
     }
 }
 

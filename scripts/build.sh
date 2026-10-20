@@ -7,7 +7,7 @@ if [[ "${TOOLCHAIN_WORKAROUND:-0}" == 1 ]]; then
   ./scripts/fix-toolchain.sh
   export SWIFTPM_CUSTOM_LIBS_DIR="$PWD/.toolchain-fix"
 fi
-VERSION="${VERSION:-0.3.2}"
+VERSION="${VERSION:-0.4.0}"
 if [[ -z "${BUILD_NUM:-}" ]]; then
   # A commit timestamp is numeric, monotonic in normal release history, and
   # stable across architectures and reruns of the same source revision.
@@ -30,15 +30,29 @@ BUILD_DIR="${BUILD_DIR:-$PWD/.build}"
 mkdir -p "$BUILD_DIR"
 BUILD_DIR="$(cd "$BUILD_DIR" && pwd -P)"
 args=(--disable-build-manifest-caching --scratch-path "$BUILD_DIR" --arch "$ARCH" -c "$CONFIG" -j "${JOBS:-4}")
+[[ -z "${SWIFTPM_CACHE_PATH:-}" ]] || args+=(--cache-path "$SWIFTPM_CACHE_PATH")
+[[ -z "${SWIFTPM_CONFIG_PATH:-}" ]] || args+=(--config-path "$SWIFTPM_CONFIG_PATH")
+[[ -z "${SWIFTPM_SECURITY_PATH:-}" ]] || args+=(--security-path "$SWIFTPM_SECURITY_PATH")
+[[ "${SWIFTPM_DISABLE_SANDBOX:-0}" != 1 ]] || args+=(--disable-sandbox)
+EDITION="${EDITION:-direct}"
+case "$EDITION" in
+  direct) ;;
+  mac-app-store) args+=(-Xswiftc -D -Xswiftc MAC_APP_STORE) ;;
+  *) echo 'EDITION must be direct or mac-app-store' >&2; exit 1 ;;
+esac
 swift build "${args[@]}" --product HallE
-swift build "${args[@]}" --product CallCaptureNativeHost
+if [[ "$EDITION" == direct ]]; then
+  swift build "${args[@]}" --product CallCaptureNativeHost
+fi
 BIN_DIR="$(swift build "${args[@]}" --show-bin-path)"
 
 APP="dist/Hall-e.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/HallE" "$APP/Contents/MacOS/Hall-e"
-cp "$BIN_DIR/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
+if [[ "$EDITION" == direct ]]; then
+  cp "$BIN_DIR/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
+fi
 # Include all SwiftPM bundles, including dependency privacy/resources bundles.
 shopt -s nullglob
 for bundle in "$BIN_DIR/"*.bundle; do
@@ -62,10 +76,14 @@ sign_args=(--force --sign "$SIGN_ID")
 if [[ "$SIGNING_MODE" == developer-id ]]; then
   sign_args+=(--options runtime --timestamp)
 fi
-codesign "${sign_args[@]}" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"
+if [[ "$EDITION" == direct ]]; then
+  codesign "${sign_args[@]}" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"
+fi
 codesign "${sign_args[@]}" --entitlements BundleResources/Release.entitlements --identifier cl.gabriel.hall-e "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
-for binary in Hall-e CallCaptureNativeHost; do
+binaries=(Hall-e)
+[[ "$EDITION" != direct ]] || binaries+=(CallCaptureNativeHost)
+for binary in "${binaries[@]}"; do
   [[ "$(lipo -archs "$APP/Contents/MacOS/$binary")" == "$ARCH" ]] || { echo 'Unexpected binary architecture' >&2; exit 1; }
 done
 echo "Built $APP ($VERSION build $BUILD_NUM, $ARCH, $SIGNING_MODE; not notarized)"

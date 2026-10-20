@@ -20,6 +20,70 @@ struct SpeechmaticsTranscriptionTests {
         #expect(config.endpoint.host == "us1.asr.api.speechmatics.com")
     }
 
+    @Test func recoveryAcceptsOnlyTheExactJobAndRecordingReference() throws {
+        let direct = try JSONDecoder().decode(SpeechmaticsJobStatusResponse.self, from: Data(#"""
+        {"job":{"id":"job-123","status":"done","tracking":{"reference":"speechmatics|session|digest"}}}
+        """#.utf8))
+        #expect(SpeechmaticsJobIdentity.matches(jobID: "job-123", returnedJobID: direct.job.id,
+            reference: direct.job.tracking?.reference, expectedFingerprint: "speechmatics|session|digest"))
+        #expect(!SpeechmaticsJobIdentity.matches(jobID: "job-123", returnedJobID: direct.job.id,
+            reference: direct.job.tracking?.reference, expectedFingerprint: "speechmatics|other-session|digest"))
+        #expect(!SpeechmaticsJobIdentity.matches(jobID: "job-other", returnedJobID: direct.job.id,
+            reference: direct.job.tracking?.reference, expectedFingerprint: "speechmatics|session|digest"))
+
+        let nested = try JSONDecoder().decode(SpeechmaticsJobStatusResponse.self, from: Data(#"""
+        {"job":{"id":"job-123","status":"running","config":{"tracking":{"reference":"speechmatics|session|digest"}}}}
+        """#.utf8))
+        #expect(SpeechmaticsJobIdentity.matches(jobID: "job-123", returnedJobID: nested.job.id,
+            reference: nested.job.config?.tracking?.reference, expectedFingerprint: "speechmatics|session|digest"))
+    }
+
+    @Test func confirmedSecondSubmissionGetsItsOwnSpendFingerprint() throws {
+        let previous = "speechmatics|session|digest|bytes|duration|options"
+        let first = try #require(SpeechmaticsManualRetryFingerprint.make(previous: previous,
+            attemptID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
+        let second = try #require(SpeechmaticsManualRetryFingerprint.make(previous: previous,
+            attemptID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!))
+        #expect(first != previous)
+        #expect(second != first)
+        #expect(SpeechmaticsManualRetryFingerprint.make(previous: "deepgram|request", attemptID: UUID()) == nil)
+    }
+
+    @Test func recoveryRequiresExactOwnershipAndExplicitDuplicateChargeChoice() {
+        let checkpoint = CloudTranscriptionJob(state: .ambiguousBilling,
+            requestFingerprint: "speechmatics|session|digest", estimatedCostUSD: 0.1,
+            requestID: nil, retryAfter: nil, lastHTTPStatus: nil, lastErrorCode: nil,
+            updatedAt: Date(), provider: .speechmatics, phase: .ambiguousSubmission,
+            providerJobID: nil, providerRegion: "us1")
+        #expect(SpeechmaticsRecoveryAuthorization.canAssociateExistingJob(
+            jobStatus: .ambiguousBilling, checkpoint: checkpoint))
+        #expect(SpeechmaticsRecoveryAuthorization.canStartNewAttempt(confirmed: true,
+            finished: true, hasAudio: true, isProcessing: false,
+            jobStatus: .ambiguousBilling, checkpoint: checkpoint))
+        #expect(!SpeechmaticsRecoveryAuthorization.canStartNewAttempt(confirmed: false,
+            finished: true, hasAudio: true, isProcessing: false,
+            jobStatus: .ambiguousBilling, checkpoint: checkpoint))
+        #expect(!SpeechmaticsRecoveryAuthorization.canStartNewAttempt(confirmed: true,
+            finished: false, hasAudio: true, isProcessing: false,
+            jobStatus: .ambiguousBilling, checkpoint: checkpoint))
+        #expect(!SpeechmaticsRecoveryAuthorization.canStartNewAttempt(confirmed: true,
+            finished: true, hasAudio: false, isProcessing: false,
+            jobStatus: .ambiguousBilling, checkpoint: checkpoint))
+        #expect(!SpeechmaticsRecoveryAuthorization.canStartNewAttempt(confirmed: true,
+            finished: true, hasAudio: true, isProcessing: true,
+            jobStatus: .ambiguousBilling, checkpoint: checkpoint))
+
+        var alreadyAssociated = checkpoint
+        alreadyAssociated.providerJobID = "job-123"
+        #expect(!SpeechmaticsRecoveryAuthorization.canAssociateExistingJob(
+            jobStatus: .ambiguousBilling, checkpoint: alreadyAssociated))
+        #expect(!SpeechmaticsRecoveryAuthorization.canStartNewAttempt(confirmed: true,
+            finished: true, hasAudio: true, isProcessing: false,
+            jobStatus: .ambiguousBilling, checkpoint: alreadyAssociated))
+        #expect(!SpeechmaticsRecoveryAuthorization.canAssociateExistingJob(
+            jobStatus: .completed, checkpoint: checkpoint))
+    }
+
     @Test func normalizedTranscriptMapsAnonymousSpeakersAndPunctuation() throws {
         let json = #"""
         {

@@ -8,10 +8,12 @@ struct PrivacySettingsView: View {
     var body: some View {
         Form {
             Section("Where your data lives") {
-                dataRow("Calendar cache & metadata", "~/Library/Application Support/Hall-e/halle.sqlite")
-                dataRow("Recordings", "~/Library/Application Support/Hall-e/Recordings")
-                dataRow("Browser call signals", "~/Library/Application Support/Hall-e/CallCapture/Incoming")
-                dataRow("Imported project conversations & generated briefs", "~/Library/Application Support/Hall-e/halle.sqlite")
+                dataRow("Calendar cache & metadata", AppPaths.databaseFile.path)
+                dataRow("Recordings", AppPaths.recordingsDir.path)
+                if DistributionCapabilities.supportsChromeNativeMessaging {
+                    dataRow("Browser call signals", AppPaths.callMessageQueueDirectory.path)
+                }
+                dataRow("Imported project conversations & generated briefs", AppPaths.databaseFile.path)
                 dataRow("Meeting notes", ObsidianVaultConfig.load()?.rootURL.path ?? "notes folder not set")
                 dataRow("Secrets (tokens, API keys)", "macOS Keychain only")
             }
@@ -20,9 +22,18 @@ struct PrivacySettingsView: View {
                 Label("Read-only calendar access", systemImage: "calendar")
                 Label("Recordings & transcripts stay local until you grant each cloud-processing consent", systemImage: "lock.fill")
                 Label("Deepgram, Speechmatics, and AI processing have separate permissions", systemImage: "checkmark.shield")
-                Label("Browser call signals stay local and contain no audio", systemImage: "network.badge.shield.half.filled")
+                if DistributionCapabilities.supportsChromeNativeMessaging {
+                    Label("Browser call signals stay local and contain no audio", systemImage: "network.badge.shield.half.filled")
+                }
                 Label("Transcript text leaves the Mac only if you enable cloud AI processing", systemImage: "cloud")
-                Label("Codex indexing reads only linked project folders and visible user/assistant messages", systemImage: "terminal")
+                if DistributionCapabilities.supportsCodexHomeImport {
+                    Label("Codex indexing reads only linked project folders and visible user/assistant messages", systemImage: "terminal")
+                } else {
+                    Label("Codex session indexing is unavailable in the Mac App Store edition", systemImage: "terminal")
+                }
+                if !DistributionCapabilities.supportsOpenClawReports {
+                    Label("OpenClaw transcript reports are unavailable in this edition", systemImage: "checkmark.shield")
+                }
                 Label("ChatGPT and WhatsApp data enters Hall-e only through files you select", systemImage: "square.and.arrow.down")
                 Label("API keys and refresh tokens are stored in macOS Keychain", systemImage: "key.fill")
             }

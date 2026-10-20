@@ -26,9 +26,9 @@ enum DebugFixtures {
         func at(_ h: Int, _ m: Int) -> Date { cal.date(byAdding: DateComponents(hour: h, minute: m), to: today)! }
 
         let accounts = [
-            ConnectedAccount(email: "maximiliano@yom.ai", displayName: "Max", colorHex: "#3B82F6",
+            ConnectedAccount(email: "mara@example.test", displayName: "Mara", colorHex: "#3B82F6",
                              addedAt: Date(), needsReauth: false, lastSyncAt: Date(), lastSyncError: nil),
-            ConnectedAccount(email: "gabriel@getaccurate.cl", displayName: "Gabriel", colorHex: "#10B981",
+            ConnectedAccount(email: "alex@example.test", displayName: "Alex", colorHex: "#10B981",
                              addedAt: Date(), needsReauth: false, lastSyncAt: Date(), lastSyncError: nil),
         ]
 
@@ -39,45 +39,56 @@ enum DebugFixtures {
 
         let now = Date()
         let events: [UnifiedEvent] = [
-            UnifiedEvent(dedupKey: "fx-allday", title: "Q3 Planning Offsite", startTs: today, endTs: at(23, 59),
+            UnifiedEvent(dedupKey: "fx-allday", title: "Product planning day", startTs: today, endTs: at(23, 59),
                          isAllDay: true, status: "confirmed", effectiveResponse: "accepted", meetingURL: nil,
                          location: nil, descriptionText: nil, htmlLink: "https://calendar.google.com/x",
                          organizerEmail: nil, attendeesJSON: nil, iCalUID: nil, winnerAccountEmail: accounts[0].email,
-                         projectId: "Accurate", projectConfidence: 0.9,
+                         projectId: "Atlas", projectConfidence: 0.9,
                          sourcesJSON: encode([source(accounts[0].email, "c", "1", "#3B82F6")])),
-            UnifiedEvent(dedupKey: "fx-now", title: "Director Dashboard Review",
+            UnifiedEvent(dedupKey: "fx-now", title: "Atlas · Product review",
                          startTs: now.addingTimeInterval(-600), endTs: now.addingTimeInterval(1800),
                          isAllDay: false, status: "confirmed", effectiveResponse: "accepted",
                          meetingURL: "https://meet.google.com/abc-defg-hij", location: nil, descriptionText: nil,
-                         htmlLink: "https://calendar.google.com/y", organizerEmail: "ana@getaccurate.cl",
+                         htmlLink: "https://calendar.google.com/y", organizerEmail: "sam@example.test",
                          attendeesJSON: nil, iCalUID: nil, winnerAccountEmail: accounts[1].email,
-                         projectId: "Accurate", projectConfidence: 0.95,
+                         projectId: "Atlas", projectConfidence: 0.95,
                          sourcesJSON: encode([source(accounts[0].email, "c", "2", "#3B82F6"),
                                               source(accounts[1].email, "c", "3", "#10B981")])),
-            UnifiedEvent(dedupKey: "fx-next", title: "Cazadescuentos — ingesta bancos",
-                         startTs: at(15, 0), endTs: at(15, 45), isAllDay: false, status: "confirmed",
+            UnifiedEvent(dedupKey: "fx-next", title: "Studio · Design handoff",
+                         startTs: now.addingTimeInterval(2700), endTs: now.addingTimeInterval(5400), isAllDay: false, status: "confirmed",
                          effectiveResponse: "tentative", meetingURL: "https://zoom.us/j/123", location: nil,
                          descriptionText: nil, htmlLink: "https://calendar.google.com/z", organizerEmail: nil,
                          attendeesJSON: nil, iCalUID: nil, winnerAccountEmail: accounts[0].email,
-                         projectId: "Cazadescuentos", projectConfidence: 0.82,
+                         projectId: "Studio", projectConfidence: 0.82,
                          sourcesJSON: encode([source(accounts[0].email, "c", "4", "#3B82F6")])),
-            UnifiedEvent(dedupKey: "fx-later", title: "Viña Cousiño — landing review",
-                         startTs: at(17, 30), endTs: at(18, 0), isAllDay: false, status: "confirmed",
-                         effectiveResponse: "accepted", meetingURL: nil, location: "Oficina",
+            UnifiedEvent(dedupKey: "fx-later", title: "Atlas · Launch planning",
+                         startTs: now.addingTimeInterval(7200), endTs: now.addingTimeInterval(9000), isAllDay: false, status: "confirmed",
+                         effectiveResponse: "accepted", meetingURL: nil, location: "Studio",
                          descriptionText: nil, htmlLink: nil, organizerEmail: nil, attendeesJSON: nil,
-                         iCalUID: nil, winnerAccountEmail: accounts[0].email, projectId: "Viña Cousiño Macul",
+                         iCalUID: nil, winnerAccountEmail: accounts[0].email, projectId: "Atlas",
                          projectConfidence: 0.88,
                          sourcesJSON: encode([source(accounts[0].email, "c", "5", "#3B82F6")])),
         ]
 
         try db.write { db in
-            for var a in accounts { try a.save(db) }
-            for var e in events { try e.save(db) }
+            for a in accounts { try a.save(db) }
+            for e in events { try e.save(db) }
+            let path = AppPaths.appSupport.appendingPathComponent("Atlas product review.md").path
+            let body = "# Atlas product review\n\nDecision: test the new onboarding next sprint.\n\n- [ ] Share the revised onboarding design — Alex\n- [x] Gather feedback from the pilot — Mara\n"
+            try body.write(toFile: path, atomically: true, encoding: .utf8)
+            try VaultDocument(path: path, title: "Atlas product review", type: "meeting",
+                project: "Atlas", eventId: "fx-now", contentHash: "preview", modifiedAt: now, body: body).save(db)
+            try IndexedActionItem(id: "preview-open", notePath: path, eventId: "fx-now",
+                task: "Share the revised onboarding design", owner: "Alex", dueDate: nil,
+                project: "Atlas", isCompleted: false, confidence: 1, updatedAt: now).save(db)
+            try IndexedActionItem(id: "preview-completed", notePath: path, eventId: "fx-now",
+                task: "Gather feedback from the pilot", owner: "Mara", dueDate: nil,
+                project: "Atlas", isCompleted: true, confidence: 1, updatedAt: now).save(db)
         }
 
         // Debug recordings so the per-meeting transcript button (+ its colors) show.
         writeRecording(for: events[1], status: .completed,
-                       text: "Reviewed the director dashboard. Decision: ship the funcionarios panel next sprint. Action item: Gabriel to send the revised prompt to Codex.")
+                       text: "Reviewed the product plan. Decision: test the new onboarding next sprint. Action item: Alex to share the revised design with the team.")
         writeRecording(for: events[2], status: .inProgress, text: nil)
         writeRecording(for: events[3], status: .failed, text: nil)
     }

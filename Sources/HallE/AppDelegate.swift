@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        #if !MAC_APP_STORE
         // Diagnostic: print WhatsApp/active audio process objects and exit. Reads
         // public properties only (no capture, no permission). Run during a live
         // call: `HALLE_DEBUG_AUDIO_PROCESSES=1 /Applications/Hall-e.app/Contents/MacOS/Hall-e`
@@ -61,10 +62,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
 
+        #endif
+
         Log.app.info("Hall-e launching, bundle \(Bundle.main.bundleIdentifier ?? "nil", privacy: .public)")
         installMainMenu()
         DebugFixtures.loadIfRequested()
         AppState.shared.startObserving()
+        if DebugFixtures.isActive {
+            // Preview data must never start sync, capture, paid recovery, or
+            // notification delivery. Use a distinct bundle ID for preview QA.
+            statusItemController = StatusItemController()
+            WorkspaceWindowController.shared.show()
+            return
+        }
         NotificationScheduler.shared.configure()
         if AppPreferences.notificationsEnabled && AppPreferences.onboardingCompleted {
             Task { await NotificationScheduler.shared.requestAuthorizationIfNeeded() }
@@ -88,7 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Features.current = ObsidianFeatureHooks()
             Task { await VaultIndex.shared.reindex() }
         }
+        #if !MAC_APP_STORE
         Task { await ProjectSourceImportCoordinator.shared.refreshLinkedCodexSources() }
+        #endif
         statusItemController = StatusItemController()
 
         if !AppPreferences.onboardingCompleted,
@@ -122,7 +134,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // fixtures so directly-inserted sample data isn't rebuilt away.
         if ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
             RefreshScheduler.shared.start()
+            #if !MAC_APP_STORE
             CallDetectionCoordinator.shared.start()
+            #endif
             DeepgramCreditWatchdog.shared.start()
         }
 
@@ -141,6 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        VaultAccess.stopAccessingVault()
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let recorder = RecordingService.shared

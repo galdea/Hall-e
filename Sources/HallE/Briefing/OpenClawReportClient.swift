@@ -9,9 +9,13 @@ struct OpenClawReportConfiguration: Equatable {
     /// OpenClaw is installed per-user under `~/.openclaw/bin` on this Mac, which
     /// the Homebrew-only list missed — every briefing failed with "unavailable"
     /// while the binary was present the whole time.
-    var executableURL: URL? = OpenClawReportConfiguration.locateExecutable()
+    var executableURL: URL? = DistributionCapabilities.supportsOpenClawReports
+        ? OpenClawReportConfiguration.locateExecutable() : nil
 
     static func locateExecutable() -> URL? {
+        #if MAC_APP_STORE
+        return nil
+        #else
         let home = FileManager.default.homeDirectoryForCurrentUser
         let candidates = [
             home.appendingPathComponent(".openclaw/bin/openclaw"),
@@ -20,11 +24,12 @@ struct OpenClawReportConfiguration: Equatable {
             home.appendingPathComponent(".local/bin/openclaw"),
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        #endif
     }
 }
 
 enum OpenClawReportError: Error, LocalizedError {
-    case consentRequired, executableMissing, modelNotAllowed, invocationFailed(String), invalidOutput
+    case consentRequired, executableMissing, modelNotAllowed, invocationFailed(String), invalidOutput, unavailableInStoreEdition
     var errorDescription: String? {
         switch self {
         case .consentRequired: "Cloud transcript processing consent is required."
@@ -32,6 +37,7 @@ enum OpenClawReportError: Error, LocalizedError {
         case .modelNotAllowed: "The report model is not on Hall-e's Gemini-only allowlist."
         case .invocationFailed(let value): "The halle-reports agent failed: \(value)"
         case .invalidOutput: "The halle-reports agent returned invalid briefing JSON."
+        case .unavailableInStoreEdition: "OpenClaw reports are unavailable in the Mac App Store edition."
         }
     }
 }
@@ -40,6 +46,9 @@ protocol OpenClawProcessRunning { func run(executable: URL, arguments: [String])
 
 struct OpenClawProcessRunner: OpenClawProcessRunning {
     func run(executable: URL, arguments: [String]) async throws -> (Int32, String, String) {
+        #if MAC_APP_STORE
+        throw OpenClawReportError.unavailableInStoreEdition
+        #else
         try await withCheckedThrowingContinuation { continuation in
             let process = Process(); let output = Pipe(); let error = Pipe()
             process.executableURL = executable; process.arguments = arguments
@@ -52,6 +61,7 @@ struct OpenClawProcessRunner: OpenClawProcessRunning {
             }
             do { try process.run() } catch { continuation.resume(throwing: error) }
         }
+        #endif
     }
 }
 
@@ -60,6 +70,7 @@ struct OpenClawReportClient {
     var runner: OpenClawProcessRunning = OpenClawProcessRunner()
 
     func generate(transcript: Transcript, context: MeetingContext, sessionID: UUID) async throws -> MeetingBriefing {
+        guard DistributionCapabilities.supportsOpenClawReports else { throw OpenClawReportError.unavailableInStoreEdition }
         guard AppPreferences.allowCloudTranscriptReports else { throw OpenClawReportError.consentRequired }
         guard OpenClawReportConfiguration.allowedModels.contains(configuration.model) else { throw OpenClawReportError.modelNotAllowed }
         guard let executable = configuration.executableURL else { throw OpenClawReportError.executableMissing }

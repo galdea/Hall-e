@@ -1,6 +1,8 @@
 import Foundation
 import UserNotifications
 import GRDB
+import CoreGraphics
+import AppKit
 
 /// Applies `NotificationPlanner` decisions to UNUserNotificationCenter and keeps
 /// the `notification_record` ledger so meetings never re-notify on every resync.
@@ -9,6 +11,7 @@ final class NotificationScheduler {
     static let shared = NotificationScheduler()
 
     static let categoryId = "HALLE_MEETING"
+    static let morningAgendaCategoryId = "HALLE_MORNING_AGENDA"
     static let recordingSilenceCategoryId = "HALLE_RECORDING_SILENCE"
     static let recordingEndCategoryId = "HALLE_RECORDING_END"
     private let center = UNUserNotificationCenter.current()
@@ -18,11 +21,18 @@ final class NotificationScheduler {
     private var reconciling = false
     private var queuedReconcile: ([UnifiedEvent], (UnifiedEvent) -> String?)?
     private var recordingPromptIdentifiers: Set<String> = []
+    private var morningActivityTimer: Timer?
+    private var morningWakeObserver: NSObjectProtocol?
+    private var lastMouseActivityAt: Date?
+    private var pendingMorningActivityAt: Date?
+    private var morningAgendaDaysInFlight: Set<String> = []
+    private var schedulingErrors: [String: String] = [:]
 
     private init() {}
 
     func configure() {
         center.delegate = delegate
+        startMorningActivityMonitoring()
         let join = UNNotificationAction(identifier: "JOIN", title: "Join", options: [.foreground])
         let agenda = UNNotificationAction(identifier: "OPEN_AGENDA", title: "Open meeting / Project", options: [.foreground])
         let note = UNNotificationAction(identifier: "PREPARE_NOTE", title: "Prepare note", options: [.foreground])
@@ -30,6 +40,9 @@ final class NotificationScheduler {
         let category = UNNotificationCategory(identifier: Self.categoryId,
                                               actions: [join, agenda, note, snooze],
                                               intentIdentifiers: [], options: [])
+        let openToday = UNNotificationAction(identifier: "OPEN_TODAY", title: "Open Today", options: [.foreground])
+        let morningCategory = UNNotificationCategory(identifier: Self.morningAgendaCategoryId,
+                                                     actions: [openToday], intentIdentifiers: [], options: [])
         let stop = UNNotificationAction(identifier: "RECORDING_STOP", title: "Stop recording",
                                         options: [.foreground, .destructive])
         let keep = UNNotificationAction(identifier: "RECORDING_KEEP", title: "Keep recording", options: [])
@@ -38,7 +51,7 @@ final class NotificationScheduler {
                                                      actions: [stop, keep], intentIdentifiers: [], options: [])
         let endCategory = UNNotificationCategory(identifier: Self.recordingEndCategoryId,
                                                  actions: [stop, extend], intentIdentifiers: [], options: [])
-        center.setNotificationCategories([category, silenceCategory, endCategory])
+        center.setNotificationCategories([category, morningCategory, silenceCategory, endCategory])
     }
 
     enum RecordingPromptKind { case silence, scheduledEnd }
@@ -175,6 +188,10 @@ final class NotificationScheduler {
         let unchanged = ordinary.filter { request in
             guard let target = desiredByID[request.identifier] else { return true }
             let info = request.content.userInfo
+            let storedFireAt = (info["fireAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+            let nextTriggerDate = (request.trigger as? UNTimeIntervalNotificationTrigger)?.nextTriggerDate()
+            guard NotificationPlanner.pendingRequestHasNotExpired(scheduledFireAt: storedFireAt,
+                nextTriggerDate: nextTriggerDate, now: now) else { return false }
             return !NotificationPlanner.needsReplacement(
                 .init(title: request.content.title, body: request.content.body,
                       meetingURL: info["meetingURL"] as? String, htmlLink: info["htmlLink"] as? String,
@@ -226,6 +243,7 @@ final class NotificationScheduler {
             content.categoryIdentifier = Self.categoryId
             content.sound = sound.notificationSound
             content.userInfo = ["startTs": d.startTs.timeIntervalSince1970,
+                                "fireAt": d.fireAt.timeIntervalSince1970,
                                 "leadMinutes": leadMinutes,
                                 "soundChoice": sound.rawValue,
                                 "dedupKey": d.dedupKey,
@@ -241,10 +259,183 @@ final class NotificationScheduler {
                     center.removePendingNotificationRequests(withIdentifiers: [d.identifier])
                     return
                 }
-                await upsertLedger(dedupKey: d.dedupKey, startTs: d.startTs, scheduledFor: d.fireAt)
+            await upsertLedger(dedupKey: d.dedupKey, startTs: d.startTs, scheduledFor: d.fireAt,
+                               catchUpClaimed: d.startTs <= Date())
+                schedulingErrors.removeValue(forKey: d.identifier)
             } catch {
+                schedulingErrors[d.identifier] = error.localizedDescription
                 Log.app.error("Could not schedule meeting reminder: \(error, privacy: .private)")
             }
+        }
+    }
+
+    func reminderDiagnostics(events: [UnifiedEvent], now: Date = Date()) async -> NotificationPlanner.ReminderDiagnosticsSnapshot {
+        let settings = await center.notificationSettings()
+        let pending = await center.pendingNotificationRequests().filter { $0.content.categoryIdentifier == Self.categoryId }
+        let pendingByID = Dictionary(uniqueKeysWithValues: pending.map { ($0.identifier, $0) })
+        let ledgerStatuses = await notificationLedgerStatuses()
+        let auth = settings.authorizationStatus
+        let authName: String = switch auth {
+        case .authorized: "Allowed"
+        case .provisional: "Provisional"
+        case .denied: "Denied"
+        case .notDetermined: "Not requested"
+        case .ephemeral: "Temporary"
+        @unknown default: "Restricted"
+        }
+        let alertEnabled = settings.alertSetting == .enabled
+        let soundEnabled = settings.soundSetting == .enabled
+        let quietStart = AppPreferences.quietHoursStart, quietEnd = AppPreferences.quietHoursEnd
+        let isQuiet: (Date) -> Bool = { date in
+            let hour = Calendar.current.component(.hour, from: date)
+            return quietStart <= quietEnd ? (quietStart..<quietEnd).contains(hour) : hour >= quietStart || hour < quietEnd
+        }
+        let rows = events.map { event -> NotificationPlanner.ReminderDiagnostic in
+            let id = NotificationPlanner.identifier(dedupKey: event.dedupKey, startTs: event.startTs)
+            let occurrenceKey = NotificationPlanner.ledgerKey(dedupKey: event.dedupKey, startTs: event.startTs)
+            let (state, detail): (NotificationPlanner.ReminderState, String)
+            if event.isAllDay { (state, detail) = (.allDay, "All-day events do not get meeting alerts.") }
+            else if event.status == "cancelled" { (state, detail) = (.cancelled, "This event is cancelled.") }
+            else if !AppPreferences.showDeclinedEvents && event.effectiveResponse == "declined" { (state, detail) = (.declined, "Declined events are hidden from reminders.") }
+            else if !AppPreferences.notificationsEnabled { (state, detail) = (.disabled, "Meeting notifications are turned off in Hall-e.") }
+            else if auth != .authorized && auth != .provisional { (state, detail) = (.permissionUnavailable, "macOS notification access is \(authName.lowercased()).") }
+            else if !alertEnabled { (state, detail) = (.permissionUnavailable, "macOS banners and alerts are disabled for Hall-e. Enable them in System Settings.") }
+            else if event.endTs <= now { (state, detail) = (.alreadyStarted, "The meeting has ended.") }
+            else if event.startTs <= now && now.timeIntervalSince(event.startTs) > 10 * 60 { (state, detail) = (.alreadyStarted, "The meeting started more than 10 minutes ago; the wake catch-up window has passed.") }
+            else if let request = pendingByID[id] {
+                let storedFireAt = (request.content.userInfo["fireAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+                let nextFireAt = (request.trigger as? UNTimeIntervalNotificationTrigger)?.nextTriggerDate()
+                if NotificationPlanner.pendingRequestHasNotExpired(scheduledFireAt: storedFireAt,
+                    nextTriggerDate: nextFireAt, now: now) {
+                    let fire = storedFireAt ?? nextFireAt!
+                    (state, detail) = (event.startTs <= now ? .lateCatchUp : .scheduled,
+                                       "Scheduled for \(fire.formatted(date: .omitted, time: .shortened)).")
+                } else {
+                    (state, detail) = (.notScheduled, "The pending one-shot expired; refresh the agenda to re-arm the wake catch-up.")
+                }
+            } else if NotificationPlanner.diagnosticState(for: ledgerStatuses[occurrenceKey]) == .delivered { (state, detail) = (.delivered, "macOS confirmed delivery for this meeting time.") }
+            else if NotificationPlanner.diagnosticState(for: ledgerStatuses[occurrenceKey]) == .catchUpClaimed { (state, detail) = (.catchUpClaimed, "A wake catch-up request was accepted once; delivery has not been confirmed.") }
+            else {
+                let fire = max(event.startTs.addingTimeInterval(-TimeInterval(AppPreferences.notificationLeadMinutes * 60)), now.addingTimeInterval(1))
+                if isQuiet(fire) { (state, detail) = (.quietHours, "The reminder time falls within quiet hours.") }
+                else if event.startTs.timeIntervalSince(now) >= 48 * 3600 { (state, detail) = (.outsideHorizon, "Reminders are scheduled within 48 hours.") }
+                else {
+                    (state, detail) = (.notScheduled,
+                        schedulingErrors[id].map { "macOS rejected this request: \($0)" }
+                            ?? "No pending request is registered yet; refresh the agenda to reconcile reminders.")
+                }
+            }
+            return .init(id: id, title: event.title, startTs: event.startTs, state: state, detail: detail)
+        }.sorted { $0.startTs < $1.startTs }
+        let next = pending.compactMap { ($0.trigger as? UNTimeIntervalNotificationTrigger)?.nextTriggerDate() }.min()
+        return .init(notificationsEnabled: AppPreferences.notificationsEnabled,
+                     authorization: authName, alertsEnabled: alertEnabled, soundsEnabled: soundEnabled,
+                     pendingCount: pending.count, nextFireAt: next, occurrences: rows)
+    }
+
+    private func startMorningActivityMonitoring() {
+        guard AppPreferences.morningAgendaEnabled, morningActivityTimer == nil else { return }
+        morningActivityTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkMorningMouseActivity() }
+        }
+        checkMorningMouseActivity()
+        if morningWakeObserver == nil {
+            morningWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    self?.checkMorningMouseActivity()
+                }
+            }
+        }
+    }
+
+    private func checkMorningMouseActivity(now: Date = Date()) {
+        guard AppPreferences.morningAgendaEnabled else { return }
+        if let pendingMorningActivityAt,
+           NotificationPlanner.shouldSendMorningAgenda(enabled: true,
+               lastSentDay: AppPreferences.morningAgendaLastBriefDay,
+               activityAt: pendingMorningActivityAt, now: now),
+           !AppState.shared.isSyncing {
+            self.pendingMorningActivityAt = nil
+            Task { await postMorningAgenda(for: pendingMorningActivityAt) }
+            return
+        }
+        let state = CGEventSourceStateID.combinedSessionState
+        let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        let idle = types.map { CGEventSource.secondsSinceLastEventType(state, eventType: $0) }.min() ?? .infinity
+        guard idle.isFinite, idle >= 0, idle <= 15 else { return }
+        let activityAt = now.addingTimeInterval(-idle)
+        if let lastMouseActivityAt, activityAt.timeIntervalSince(lastMouseActivityAt) < 1 { return }
+        lastMouseActivityAt = activityAt
+        guard NotificationPlanner.shouldSendMorningAgenda(enabled: true,
+            lastSentDay: AppPreferences.morningAgendaLastBriefDay,
+            activityAt: activityAt, now: now) else { return }
+        pendingMorningActivityAt = activityAt
+        guard !AppState.shared.isSyncing else { return }
+        let key = NotificationPlanner.localDayKey(activityAt)
+        guard AppPreferences.morningAgendaLastBriefDay != key else { pendingMorningActivityAt = nil; return }
+        pendingMorningActivityAt = nil
+        Task { await postMorningAgenda(for: activityAt) }
+    }
+
+    private func postMorningAgenda(for activityAt: Date) async {
+        let calendar = Calendar.current
+        let key = NotificationPlanner.localDayKey(activityAt, calendar: calendar)
+        guard NotificationPlanner.shouldSendMorningAgenda(enabled: AppPreferences.morningAgendaEnabled,
+            lastSentDay: AppPreferences.morningAgendaLastBriefDay, activityAt: activityAt, now: Date(), calendar: calendar),
+              !morningAgendaDaysInFlight.contains(key) else { return }
+        morningAgendaDaysInFlight.insert(key)
+        defer { morningAgendaDaysInFlight.remove(key) }
+        let status = await center.notificationSettings()
+        guard AppPreferences.morningAgendaEnabled,
+              NotificationPlanner.shouldSendMorningAgenda(enabled: AppPreferences.morningAgendaEnabled,
+                lastSentDay: AppPreferences.morningAgendaLastBriefDay, activityAt: activityAt, now: Date(), calendar: calendar) else { return }
+        guard status.authorizationStatus == .authorized || status.authorizationStatus == .provisional,
+              status.alertSetting == .enabled else { return }
+        guard AppPreferences.morningAgendaLastBriefDay != key else { return }
+        let identifier = "halle-morning-agenda|\(key)"
+        let pendingIDs = await center.pendingNotificationRequests().map(\.identifier)
+        let deliveredIDs = await center.deliveredNotifications().map { $0.request.identifier }
+        if pendingIDs.contains(identifier) || deliveredIDs.contains(identifier) {
+            AppPreferences.morningAgendaLastBriefDay = key
+            return
+        }
+        let cached = try? await AppDatabase.shared.dbQueue.read { db in
+            (try UnifiedEvent.fetchAll(db), try CalendarSource.filter(CalendarSource.Columns.isSelected == true).fetchCount(db) > 0)
+        }
+        guard let (events, hasSelectedCalendar) = cached, hasSelectedCalendar else { return }
+        let dayEvents = NotificationPlanner.morningAgendaEvents(events, on: activityAt,
+            showDeclined: AppPreferences.showDeclinedEvents, calendar: calendar)
+        let summary = dayEvents.prefix(3).map { event in
+            event.isAllDay ? "All day: \(event.title)" : "\(event.startTs.formatted(date: .omitted, time: .shortened)) \(event.title)"
+        }.joined(separator: " · ")
+        let remaining = dayEvents.count - min(3, dayEvents.count)
+        let content = UNMutableNotificationContent()
+        content.title = dayEvents.isEmpty ? "No meetings today" : "Today’s agenda · \(dayEvents.count) meeting\(dayEvents.count == 1 ? "" : "s")"
+        content.body = dayEvents.isEmpty ? "You have no calendar meetings today. Open Today to review your agenda." : summary + (remaining > 0 ? " · +\(remaining) more in Today" : " · Open Today for the full agenda")
+        content.categoryIdentifier = Self.morningAgendaCategoryId
+        content.sound = AppPreferences.meetingReminderSound.notificationSound
+        content.userInfo = ["agendaDate": calendar.startOfDay(for: activityAt).timeIntervalSince1970]
+        guard AppPreferences.morningAgendaEnabled,
+              NotificationPlanner.shouldSendMorningAgenda(enabled: AppPreferences.morningAgendaEnabled,
+                lastSentDay: AppPreferences.morningAgendaLastBriefDay, activityAt: activityAt, now: Date(), calendar: calendar),
+              AppPreferences.morningAgendaLastBriefDay != key else { return }
+        do {
+            try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+            AppPreferences.morningAgendaLastBriefDay = key
+        } catch {
+            Log.app.error("Could not schedule morning agenda notification: \(error, privacy: .private)")
+        }
+    }
+
+    func morningAgendaPreferenceChanged() {
+        if AppPreferences.morningAgendaEnabled {
+            startMorningActivityMonitoring()
+        } else {
+            morningActivityTimer?.invalidate()
+            morningActivityTimer = nil
+            pendingMorningActivityAt = nil
         }
     }
 
@@ -253,23 +444,29 @@ final class NotificationScheduler {
     // Ledger access is async so SQLite I/O runs on GRDB's queue, not the main
     // actor (reconcile runs after every sync).
     private func deliveredLedgerKeys() async -> Set<String> {
-        (try? await AppDatabase.shared.dbQueue.read { db -> Set<String> in
-            let rows = try NotificationRecord.fetchAll(db).filter {
-                guard let status = NotificationStatus(rawValue: $0.status) else { return false }
-                return NotificationPlanner.ledgerStatusSuppressesReminder(status)
-            }
-            return Set(rows.map { NotificationPlanner.ledgerKey(dedupKey: $0.dedupKey, startTs: $0.startTs) })
-        }) ?? []
+        Set((await notificationLedgerStatuses()).compactMap { key, status in
+            NotificationPlanner.ledgerStatusSuppressesReminder(status) ? key : nil
+        })
     }
 
-    private func upsertLedger(dedupKey: String, startTs: Date, scheduledFor: Date) async {
+    private func notificationLedgerStatuses() async -> [String: NotificationStatus] {
+        (try? await AppDatabase.shared.dbQueue.read { db -> [String: NotificationStatus] in
+            let rows = try NotificationRecord.fetchAll(db)
+            return Dictionary(rows.compactMap { row in
+                guard let status = NotificationStatus(rawValue: row.status) else { return nil }
+                return (NotificationPlanner.ledgerKey(dedupKey: row.dedupKey, startTs: row.startTs), status)
+            }, uniquingKeysWith: { _, latest in latest })
+        }) ?? [:]
+    }
+
+    private func upsertLedger(dedupKey: String, startTs: Date, scheduledFor: Date, catchUpClaimed: Bool = false) async {
         try? await AppDatabase.shared.dbQueue.write { db in
             var rec = try NotificationRecord.fetchOne(db, key: ["dedupKey": dedupKey, "startTs": startTs])
                 ?? NotificationRecord(dedupKey: dedupKey, startTs: startTs, scheduledFor: scheduledFor,
                                       status: NotificationStatus.pending.rawValue, deliveredAt: nil, snoozedUntil: nil)
             rec.scheduledFor = scheduledFor
             if rec.status != NotificationStatus.delivered.rawValue {
-                rec.status = NotificationStatus.pending.rawValue
+                rec.status = catchUpClaimed ? NotificationStatus.catchUpClaimed.rawValue : NotificationStatus.pending.rawValue
             }
             try rec.save(db)
         }
