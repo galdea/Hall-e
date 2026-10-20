@@ -33,4 +33,62 @@ struct TranscriptionDedupTests {
                                                         words: words, keptIndices: [1, 2])
         #expect(text == "stop now")
     }
+
+    @Test func meaningfulSpeechAcrossTracksIgnoresBlankTrackButRejectsAllBlank() {
+        let blankSystem = TranscriptSegment(start: 0, duration: 0, text: " \n ", track: "system")
+        let spokenMic = TranscriptSegment(start: 0, duration: 1.2, text: "Hello there.", track: "mic")
+        #expect(!LocalTranscriptionProvider.hasMeaningfulText(in: [blankSystem]))
+        #expect(LocalTranscriptionProvider.hasMeaningfulText(in: [blankSystem, spokenMic]))
+    }
+
+    private func snapshot(_ text: String, word: String? = nil) -> LocalTranscriptionProvider.ChunkResult {
+        let words = word.map { [self.word($0, at: 0.1, dur: 0.3)] } ?? []
+        return LocalTranscriptionProvider.ChunkResult(words: words, formatted: text)
+    }
+
+    @Test func meaningfulFinalWinsOverEarlierPartial() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        #expect(policy.consume(.partial(snapshot("first thought", word: "first"))) == .awaiting)
+        let final = snapshot("Correct final sentence.", word: "Correct")
+        #expect(policy.consume(.final(final)) == .recognized(final))
+    }
+
+    @Test func emptyFinalUsesLatestMeaningfulPartialWithoutConcatenating() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        #expect(policy.consume(.partial(snapshot("first version", word: "first"))) == .awaiting)
+        let latest = snapshot("This is the complete sentence.", word: "This")
+        #expect(policy.consume(.partial(latest)) == .awaiting)
+        #expect(policy.consume(.partial(snapshot("  ", word: "  "))) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", word: ""))) == .recognized(latest))
+        #expect(policy.consume(.final(snapshot("late final", word: "late"))) == .ignored)
+    }
+
+    @Test func emptyFinalWithoutMeaningfulPartialIsAnEmptySuccess() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        #expect(policy.consume(.partial(snapshot(" \n ", word: " "))) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", word: ""))) == .empty)
+    }
+
+    @Test(arguments: [
+        LocalTranscriptionProvider.RecognitionCallbackPolicy.Event.failed("service error"),
+        .cancelled,
+        .deadline
+    ])
+    func failuresNeverPromoteCachedPartial(event: LocalTranscriptionProvider.RecognitionCallbackPolicy.Event) {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        #expect(policy.consume(.partial(snapshot("unfinished hypothesis", word: "unfinished"))) == .awaiting)
+        if case .failed(let message) = event {
+            #expect(policy.consume(event) == .failed(message))
+        } else {
+            #expect(policy.consume(event).isFailure)
+        }
+        #expect(policy.consume(.final(snapshot("", word: ""))) == .ignored)
+    }
+}
+
+private extension LocalTranscriptionProvider.RecognitionCallbackPolicy.Decision {
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
 }

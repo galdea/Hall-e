@@ -68,6 +68,28 @@ struct PhoneAudioTransferCryptoTests {
         #expect(PhoneAudioTransferCrypto.isMeaningfulTranscript("spoken words"))
     }
 
+    @Test func completedEmptyTransferRetryIsOneShotAndRequiresAudioWithoutReceipt() {
+        let empty = Transcript(sessionID: UUID(), localeUsed: "en-US", segments: [],
+                               status: .completed, source: "sfspeech-on-device")
+        func shouldRetry(job: TranscriptionJobStatus = .completed, session: TranscriptStatus = .completed,
+                         transcript: Transcript? = nil, audio: Bool = true, receipt: Bool = false) -> Bool {
+            PhoneAudioTransferRetryPolicy.shouldRetryCompletedEmptyTranscript(
+                jobStatus: job, sessionStatus: session, transcript: transcript,
+                hasBothAudioCopies: audio, receiptExists: receipt)
+        }
+
+        #expect(shouldRetry(transcript: empty))
+        #expect(!shouldRetry(job: .queued)) // The retry has been consumed.
+        #expect(!shouldRetry(job: .retryableFailed)) // A blank retry is never polled again.
+        #expect(!shouldRetry(audio: false))
+        #expect(!shouldRetry(receipt: true))
+        let meaningful = Transcript(sessionID: UUID(), localeUsed: "en-US",
+            segments: [TranscriptSegment(start: 0, duration: 1, text: "Hello", track: "system")],
+            status: .completed, source: "sfspeech-on-device")
+        #expect(!shouldRetry(transcript: meaningful))
+        #expect(!shouldRetry(session: .failed))
+    }
+
     @Test func storedReceiptMustBindCurrentTranscriptAndManifest() throws {
         let key = Data(repeating: 1, count: 32)
         let fields = ["1", "1", "40000000-0000-4000-8000-000000000001",

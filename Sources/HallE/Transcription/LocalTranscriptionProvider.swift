@@ -118,9 +118,78 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
         return nil
     }
 
-    struct ChunkResult {
+    struct ChunkResult: Equatable {
         let words: [TranscriptSegment]  // word-level, offset-shifted timestamps
         let formatted: String           // punctuated full text of the chunk
+    }
+
+    /// Speech can emit useful cumulative partials and then a successful but
+    /// empty final callback (observed with the phone's AAC recordings). Keep
+    /// only the latest meaningful snapshot, and consult it only when a final
+    /// callback arrives. Failures never turn an unfinished hypothesis into a
+    /// transcript.
+    struct RecognitionCallbackPolicy: Equatable {
+        enum Event: Equatable {
+            case partial(ChunkResult)
+            case final(ChunkResult)
+            case failed(String)
+            case cancelled
+            case deadline
+        }
+
+        enum Decision: Equatable {
+            case awaiting
+            case recognized(ChunkResult)
+            case empty
+            case failed(String)
+            case ignored
+        }
+
+        private(set) var latestMeaningfulPartial: ChunkResult?
+        private(set) var isTerminal = false
+
+        mutating func consume(_ event: Event) -> Decision {
+            guard !isTerminal else { return .ignored }
+            switch event {
+            case .partial(let snapshot):
+                if Self.isMeaningful(snapshot) { latestMeaningfulPartial = snapshot }
+                return .awaiting
+            case .final(let snapshot):
+                isTerminal = true
+                if Self.isMeaningful(snapshot) { return .recognized(snapshot) }
+                if let latestMeaningfulPartial { return .recognized(latestMeaningfulPartial) }
+                return .empty
+            case .failed(let message):
+                isTerminal = true
+                return .failed(message)
+            case .cancelled:
+                isTerminal = true
+                return .failed("Recognition was cancelled.")
+            case .deadline:
+                isTerminal = true
+                return .failed("Recognition timed out. Your recording is saved; try transcription again.")
+            }
+        }
+
+        private static func isMeaningful(_ result: ChunkResult) -> Bool {
+            !result.formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                result.words.contains {
+                    !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                        $0.start.isFinite && $0.duration.isFinite && $0.duration > 0
+                }
+        }
+    }
+
+    static func hasMeaningfulText(in segments: [TranscriptSegment]) -> Bool {
+        segments.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    /// A completed checkpoint is reusable only when the durable transcript
+    /// actually contains words for that track. Empty successful Speech finals
+    /// can leave a completed track marker behind after the overall job fails.
+    static func shouldReuseCompletedTrack(status: TranscriptionTrackStatus?,
+                                          savedSegments: [TranscriptSegment]) -> Bool {
+        status == .completed && hasMeaningfulText(in: savedSegments)
     }
 
     /// Ceiling on a single chunk's recognition (chunks are ≤ 4 min of audio).
@@ -134,7 +203,7 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
         let request = SFSpeechURLRecognitionRequest(url: url)
         guard recognizer.supportsOnDeviceRecognition else { throw TranscriptionError.noLocaleAvailable }
         request.requiresOnDeviceRecognition = true
-        request.shouldReportPartialResults = false
+        request.shouldReportPartialResults = true
 
         let operation = RecognitionOperation()
         return try await withTaskCancellationHandler {
@@ -143,27 +212,27 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
                 guard operation.begin(cont) else { return }
                 let task = recognizer.recognitionTask(with: request) { result, error in
                     if let error {
-                        operation.finish(.failure(TranscriptionError.failed(error.localizedDescription)))
+                        operation.receive(.failed(error.localizedDescription))
                         return
                     }
-                    guard let result, result.isFinal else { return }
+                    guard let result else { return }
                     let words = result.bestTranscription.segments.map {
                         TranscriptSegment(start: offset + $0.timestamp, duration: $0.duration,
                                           text: $0.substring, track: track)
                     }
-                    operation.finish(.success(ChunkResult(words: words,
-                        formatted: result.bestTranscription.formattedString)))
+                    let snapshot = ChunkResult(words: words,
+                        formatted: result.bestTranscription.formattedString)
+                    operation.receive(result.isFinal ? .final(snapshot) : .partial(snapshot))
                 }
                 operation.attach(task)
                 let deadline = DispatchWorkItem { [weak operation] in
-                    operation?.finish(.failure(TranscriptionError.failed(
-                        "Recognition timed out. Your recording is saved; try transcription again.")))
+                    operation?.receive(.deadline)
                 }
                 operation.attach(deadline)
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + recognitionTimeout, execute: deadline)
             }
         } onCancel: {
-            operation.finish(.failure(CancellationError()))
+            operation.receive(.cancelled)
         }
     }
 
@@ -175,6 +244,7 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
         private var outcome: Result<ChunkResult, Error>?
         private var task: SFSpeechRecognitionTask?
         private var deadline: DispatchWorkItem?
+        private var callbackPolicy = RecognitionCallbackPolicy()
 
         func begin(_ continuation: CheckedContinuation<ChunkResult, Error>) -> Bool {
             lock.lock()
@@ -207,6 +277,23 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
             deadline?.cancel()
             task?.cancel()
             continuation?.resume(with: result)
+        }
+
+        func receive(_ event: RecognitionCallbackPolicy.Event) {
+            lock.lock()
+            let decision = callbackPolicy.consume(event)
+            lock.unlock()
+            switch decision {
+            case .awaiting, .ignored:
+                return
+            case .recognized(let result):
+                finish(.success(result))
+            case .empty:
+                finish(.success(ChunkResult(words: [], formatted: "")))
+            case .failed(let message):
+                if case .cancelled = event { finish(.failure(CancellationError())) }
+                else { finish(.failure(TranscriptionError.failed(message))) }
+            }
         }
     }
 

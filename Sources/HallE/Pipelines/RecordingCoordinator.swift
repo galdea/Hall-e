@@ -484,9 +484,16 @@ enum RecordingCoordinator {
 
         for input in tracks {
             let current = await persistence.track(named: input.track)
-            if current?.status == .completed, savedTranscript != nil {
+            let savedTrackSegments = savedTranscript?.segments.filter { $0.track == input.track } ?? []
+            if LocalTranscriptionProvider.shouldReuseCompletedTrack(status: current?.status,
+                                                                     savedSegments: savedTrackSegments) {
                 successfulTrack = true
                 continue
+            }
+            // A completed Speech checkpoint with no saved words is not useful:
+            // clear its chunk flags so the queued retry actually invokes Speech.
+            if current?.status == .completed {
+                await persistence.resetTrackForRetry(input.track, fileName: input.url.lastPathComponent)
             }
             await persistence.beginTrack(input.track, fileName: input.url.lastPathComponent)
             let existing = await persistence.segments(for: input.track)
@@ -515,7 +522,7 @@ enum RecordingCoordinator {
                         })
                 }
                 locale = result.localeUsed
-                successfulTrack = true
+                successfulTrack = successfulTrack || LocalTranscriptionProvider.hasMeaningfulText(in: result.segments)
                 await persistence.complete(track: input.track, locale: locale, source: result.source)
             } catch {
                 failedTrack = true
@@ -527,7 +534,8 @@ enum RecordingCoordinator {
         // released before the next queued recording starts.
 
         var snapshot = await persistence.snapshot()
-        if successfulTrack && !failedTrack {
+        if successfulTrack && !failedTrack,
+           LocalTranscriptionProvider.hasMeaningfulText(in: snapshot.transcript.segments) {
             snapshot.session.transcriptionJob?.status = .completed
             snapshot.session.transcriptionJob?.completedAt = Date()
             snapshot.session.transcriptionJob?.lastError = nil
@@ -540,8 +548,10 @@ enum RecordingCoordinator {
             snapshot.session.save(); notifyRecordingChanged()
             return (snapshot.session, snapshot.transcript)
         }
-        let message = snapshot.session.transcriptionJob?.tracks.compactMap(\.lastError).first
-            ?? "Hall-e could not transcribe the available audio."
+        let message = !successfulTrack && !failedTrack
+            ? "No speech was recognized. The recording is saved; retry transcription to try again."
+            : snapshot.session.transcriptionJob?.tracks.compactMap(\.lastError).first
+                ?? "Hall-e could not transcribe the available audio."
         return markJobFailed(session: snapshot.session, message: message)
     }
 
@@ -912,6 +922,17 @@ private actor TranscriptionCheckpointPersistence {
             value.status = .running
             value.lastError = nil
         }
+        persist()
+    }
+
+    func resetTrackForRetry(_ track: String, fileName: String) {
+        mutateTrack(track, fileName: fileName) { value in
+            value.status = .queued
+            value.chunks = []
+            value.lastError = nil
+        }
+        transcript.segments.removeAll { $0.track == track }
+        TranscriptStore.save(transcript, to: session)
         persist()
     }
 

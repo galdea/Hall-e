@@ -25,6 +25,28 @@ struct TranscriptionRecoveryTests {
         #expect(job.tracks[1].lastError == nil)
     }
 
+    @Test func queuedRetryAdmitsCompletedTrackAgainWhenItsSavedTranscriptIsBlank() {
+        var job = TranscriptionJob(status: .retryableFailed, attemptCount: 1, tracks: [
+            TranscriptionTrackProgress(track: "mic", fileName: "mic.m4a", status: .completed,
+                                       chunks: [TranscriptionChunkProgress(index: 0, offset: 0, completed: true)],
+                                       lastError: nil),
+        ])
+        let blankSavedTrack = [TranscriptSegment(start: 0, duration: 0, text: " \n ", track: "mic")]
+
+        job.queueForRetry()
+
+        #expect(job.status == .queued)
+        #expect(job.tracks[0].status == .completed)
+        #expect(job.tracks[0].completedChunkIndexes == [0])
+        // This is the same admission predicate used by transcribeTracks: a
+        // blank completed result cannot take the skip path, so Speech reruns.
+        #expect(!LocalTranscriptionProvider.shouldReuseCompletedTrack(
+            status: job.tracks[0].status, savedSegments: blankSavedTrack))
+        #expect(LocalTranscriptionProvider.shouldReuseCompletedTrack(
+            status: job.tracks[0].status,
+            savedSegments: [TranscriptSegment(start: 0, duration: 0.4, text: "Recovered words", track: "mic")]))
+    }
+
     @Test func sanitizerProvidesSpecificRecoveryGuidance() {
         #expect(TranscriptionErrorSanitizer.guidance(for: "Speech Recognition permission denied")
                 .contains("Speech Recognition"))

@@ -84,6 +84,21 @@ enum PhoneAudioTransferCrypto {
     enum TransferCryptoError: Error { case invalidChunk }
 }
 
+enum PhoneAudioTransferRetryPolicy {
+    /// This admits exactly the legacy completed-empty state. Once a retry is
+    /// queued, its job status changes, so a later poll cannot queue it again.
+    static func shouldRetryCompletedEmptyTranscript(jobStatus: TranscriptionJobStatus,
+                                                    sessionStatus: TranscriptStatus,
+                                                    transcript: Transcript?,
+                                                    hasBothAudioCopies: Bool,
+                                                    receiptExists: Bool) -> Bool {
+        jobStatus == .completed && sessionStatus == .completed &&
+            transcript?.status == .completed &&
+            transcript.map { !PhoneAudioTransferCrypto.isMeaningfulTranscript($0.plainText) } == true &&
+            hasBothAudioCopies && !receiptExists
+    }
+}
+
 /// Receives explicitly queued phone audio, transcribes it on this Mac, and
 /// publishes a deletion receipt only after transcript.json survives readback.
 @MainActor
@@ -180,7 +195,22 @@ final class PhoneAudioTransferService {
         }
 
         let sessionRecord = try await importedSession(transfer: m, audioFile: partial, config: c, audioId: audioID)
-        if TranscriptStore.load(sessionRecord)?.status != .completed {
+        let receiptFile = partialRoot.appendingPathComponent(m.transferId + ".receipt.json")
+        let libraryAudio = sessionRecord.folderURL.appendingPathComponent("phone.m4a")
+        let existingTranscript = TranscriptStore.load(sessionRecord)
+        let jobStatus = (sessionRecord.transcriptionJob ?? .legacy(status: sessionRecord.transcriptStatus)).status
+        let hasBothAudioCopies = hasAudioBytes(at: partial) && hasAudioBytes(at: libraryAudio)
+        if PhoneAudioTransferRetryPolicy.shouldRetryCompletedEmptyTranscript(
+            jobStatus: jobStatus, sessionStatus: sessionRecord.transcriptStatus,
+            transcript: existingTranscript, hasBothAudioCopies: hasBothAudioCopies,
+            receiptExists: FileManager.default.fileExists(atPath: receiptFile.path)) {
+            guard !RecordingCoordinator.isProcessing(sessionID: sessionRecord.id) else { return }
+            // The coordinator preserves transcript.json until a replacement
+            // succeeds. The queued job status prevents another retry on poll.
+            RecordingCoordinator.retranscribe(session: sessionRecord)
+            return
+        }
+        if jobStatus == .queued || existingTranscript?.status != .completed {
             await RecordingCoordinator.resumeQueuedJobsWhenIdle()
         }
         guard let librarySession = RecordingStore.allSessions().first(where: { $0.eventDedupKey == "phone-transfer:\(m.transferId)" }),
@@ -193,7 +223,6 @@ final class PhoneAudioTransferService {
         guard PhoneAudioTransferCrypto.isMeaningfulTranscript(libraryTranscript.plainText) else {
             throw TransferError.emptyTranscript
         }
-        let receiptFile = partialRoot.appendingPathComponent(m.transferId + ".receipt.json")
         let receiptFields: [(String, Any)] = [("v", 1), ("protocolVersion", 1), ("transferId", m.transferId),
             ("workspaceId", c.workspaceId), ("deviceId", m.deviceId), ("macDeviceId", c.deviceId),
             ("recordingId", m.recordingId), ("audioSHA256", m.audioSHA256), ("plaintextLength", m.plaintextLength),
@@ -210,7 +239,6 @@ final class PhoneAudioTransferService {
         }
         // The phone only deletes after receipt, so the Mac can now clean its
         // imported audio copies. The library session and transcript are durable.
-        let libraryAudio = librarySession.folderURL.appendingPathComponent("phone.m4a")
         if FileManager.default.fileExists(atPath: libraryAudio.path) { try FileManager.default.removeItem(at: libraryAudio) }
         if FileManager.default.fileExists(atPath: partial.path) { try FileManager.default.removeItem(at: partial) }
         guard !FileManager.default.fileExists(atPath: libraryAudio.path),
@@ -298,6 +326,11 @@ final class PhoneAudioTransferService {
         return components.url
     }
     private func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    private func hasAudioBytes(at url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return false }
+        return size.intValue > 0
+    }
     private func manifestCanonicalFields(_ m: Manifest) -> [String] {
         [String(m.v), String(m.protocolVersion), m.workspaceId, m.deviceId, m.macDeviceId, m.transferId, m.recordingId,
             m.audioSHA256, String(m.plaintextLength), String(m.chunkSize), String(m.chunkCount)]
