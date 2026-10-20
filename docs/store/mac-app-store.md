@@ -2,11 +2,16 @@
 
 Current source candidate: Hall-e **0.5.0**, commit `f5dde2f`. Build
 **2026102010** includes the asynchronous Keychain fixes and retirement of the
-OpenClaw integration. The direct build was installed and its startup, reminder and
-Transcription settings verified. The development-signed sandbox QA build also
-compiled and passed signature/profile validation; its installed UI QA is pending. See [candidate validation](../validation/2026-10-20-hall-e-0.5.0.md).
-App Store Connect has a saved 0.5.0 listing draft; no build or screenshots have
-been uploaded. Physical Mac/phone pairing and recording-handoff QA is incomplete.
+OpenClaw integration. The final Store QA app was installed at
+`/Applications/Hall-e Store QA.app`, launched, restored its Keychain access to
+the live workspace, and passed bidirectional paired-Pixel recording-handoff QA.
+The distribution-signed package was signature- and payload-validated, but has
+not been uploaded. See [candidate validation](../validation/2026-10-20-hall-e-0.5.0.md).
+App Store Connect has saved English and Mexican Spanish listing copy, review
+notes, and contact details. App Privacy is published with six data types,
+purpose App Functionality, linked to user/device set to Yes, and tracking set to
+No (UI confirmation: “Published ... Gabriel”). No build or screenshots have
+been uploaded.
 
 This is a separate distribution path from `scripts/release.sh`. Direct releases
 remain ad-hoc or Developer ID signed and are not changed by
@@ -16,7 +21,7 @@ local packaging script.
 
 ## Current readiness
 
-Core signed sandbox QA is passing for build 2004: it launched from
+Historical core signed sandbox QA passed for build 2004: it launched from
 `/Applications`, resolved the app container, received Calendar permission and
 enumerated calendars, completed a six-second microphone recording with
 playback, failed closed on a legacy vault configuration, and reopened a moved
@@ -29,20 +34,35 @@ folder-permission cases remain untested. Signed build 2005's notification
 feedback check confirmed the UI reports “Delivered to Notification Center.”
 
 The earlier core sandbox and notification checks above are historical evidence
-from builds 2004–2005. They do not verify the new shared-session flow. Direct
-build 2026102009 confirmed a responsive Today/shared-meetings UI after replacing
-synchronous shared-credential and credit-check Keychain reads. The final source
-also retires OpenClaw without deleting historical artifacts. **264 Swift Testing
-tests and 5 XCTest tests passed** on `f5dde2f`.
+from builds 2004–2005. Build 2010 now has installed Store QA: Hall-e launched,
+restored Keychain access to the live workspace, and was confirmed paired with
+the Pixel. Bidirectional handoff passed: the Pixel's 41-second interrupted
+segment remained preserved when Mac claimed recording; Mac stopped when the
+Pixel requested handoff; after an explicit Pixel start, its 13-second segment
+was recorded. Mac then captured a six-second segment; its first playback showed
+“No Speech Detected” for local Speech recognition, and a later Mac segment
+completed on-device speech processing. No audio was exported. QA began with AI
+off and Apple Speech selected; Speechmatics and AI were restored afterward with
+the user's confirmation. No cloud QA upload was performed.
 
-Build 2026102010 direct and development-signed sandbox QA packaging passed.
-The installed direct app verified the retired setting is absent and preserved
-Speechmatics selection. A development-signed QA app is not an App Store upload package. The current sandbox startup, shared-meetings UI and
-Keychain paths need installed QA before signing off that gate. Public submission
-also requires exact-SHA hosted release validation, exact-candidate App Privacy
-answers, review metadata and real screenshots of the installed Store app.
-Transporter installation was blocked by automatic approval review; no upload
-has taken place. `apple-0.5-draft.png` is local proof of the listing only, not an
+The direct build verified that the retired setting is absent and preserved
+Speechmatics selection. Final Store QA build 2010 passed installed startup,
+Keychain, live-workspace and paired-device checks. The distribution-signed
+0.5.0 package was validated and has SHA-256
+`fa76bd23706c5aed48f064a2735f7e59c8a761d947cc156d264d6b9ff9585c5f`; it has
+not been uploaded. English and Mexican Spanish listing copy, review notes and
+contacts are saved. App Privacy is published for six data types, with purpose
+App Functionality, linked to user/device Yes, and tracking No. No screenshots
+or build have been uploaded. The repository has no separate hosted
+workflow for Mac App Store packaging or validation. The existing macOS GitHub
+workflow is for direct-download packages and runs only on a `vX.Y.Z` tag or an
+explicit manual dispatch; no hosted run has been made for this candidate.
+Installation of Apple's Transporter app is currently blocked at an Apple
+account authentication sheet that offers only account selection and Cancel,
+with no authentication controls. The user cannot complete installation now;
+no upload was attempted. This is an Apple account UI block, not an
+automatic-review rejection. The validated package remains local.
+`apple-0.5-draft.png` is local proof of the earlier listing draft, not an
 uploaded screenshot.
 
 The source audit found these distribution-specific behaviors and remaining
@@ -142,10 +162,14 @@ The command creates a signed `.pkg` in `dist/`, validates its signatures,
 payload, `/Applications` install destination, app identifier and version, and
 writes a SHA-256 checksum. It **does not upload**. The distribution-signed app
 may not launch directly before App Review, so do not use it as the local QA
-artifact. Public submission still requires the hosted exact-SHA release gate,
-completed App Privacy answers based on real provider settings, real screenshots,
-App Store Connect authorization/metadata, and an authorized upload through
-Transporter or App Store Connect.
+artifact. Installed Store QA passed for build 2010 as described above. Public
+submission still requires App Privacy answers based on real provider settings,
+real screenshots, App Store Connect authorization/metadata, and an authorized
+upload through Transporter or App Store Connect. The direct-download GitHub workflow remains
+available on its existing tag/manual triggers, but it does not validate or
+package this Store build. Hosted Actions are to remain undispatched until the
+included allowance renews. When the separate direct-download release is ready,
+its existing release workflow still applies to that distribution path.
 
 ## Store listing material
 

@@ -28,6 +28,10 @@ class SharedSessionActivity : Activity() {
     private val poll = object : Runnable {
         override fun run() {
             if (closed || !client.paired()) return
+            if (busy) {
+                mainHandler.postDelayed(this, 500L)
+                return
+            }
             runNetwork(
                 operation = { client.state() },
                 onSuccess = { state ->

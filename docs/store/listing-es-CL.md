@@ -20,7 +20,10 @@ Borrador. Antes de publicar este texto, confirma las funciones y el comportamien
   **Reúne notas y tareas pendientes**
   Escribe notas junto a cada reunión, organiza reuniones por proyecto y encuentra tareas pendientes basadas en tus notas. Exporta notas y transcripciones en formato Markdown.
 
-  Hall-e no incluye créditos compartidos de transcripción ni requiere una cuenta de Hall-e. El procesamiento opcional en la nube requiere tu propia cuenta del proveedor, conexión a internet y tu autorización. El acceso al calendario, al micrófono y a las notificaciones se solicita solo para las funciones que elijas. Avisa a las personas participantes cuando grabes y respeta las normas de consentimiento aplicables.
+  **Coordina reuniones compartidas**
+  Vincula dispositivos compatibles de Hall-e para compartir datos seleccionados de una reunión, como el título, el proyecto, un enlace compatible y el horario. Esos datos se cifran en los dispositivos vinculados antes de llegar al coordinador de Hall-e. Las sesiones compartidas no transfieren grabaciones ni inician una grabación en otro dispositivo.
+
+  Hall-e no incluye créditos compartidos de transcripción ni requiere una cuenta de Hall-e. La transcripción opcional en la nube requiere una cuenta de proveedor configurada, conexión a internet y permiso para procesar audio. Otras funciones opcionales de IA usan el proveedor y los ajustes que configures y pueden procesar transcripciones o contexto seleccionado de proyectos. El acceso al calendario, al micrófono y a las notificaciones se solicita solo para las funciones que elijas. Avisa a las personas participantes cuando grabes y respeta las normas de consentimiento aplicables.
 
   Requiere macOS 14 o posterior. La transcripción en el dispositivo depende de la disponibilidad del idioma y del modelo en macOS. La disponibilidad del calendario depende de las cuentas configuradas en macOS.
 

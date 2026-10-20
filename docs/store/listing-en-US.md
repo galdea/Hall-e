@@ -20,7 +20,10 @@ Draft only. Confirm the final feature set and sandbox behavior on an installed A
   **Keep notes and follow-ups together**
   Write notes alongside a meeting, organize meetings into projects, and find project follow-ups grounded in your notes. Export notes and transcripts as Markdown.
 
-  Hall-e does not include shared transcription credits or require a Hall-e account. Optional cloud processing requires your own provider account, internet access, and consent. Calendar access, microphone access, and notifications are requested only for the features you choose. Tell meeting participants when you record, and follow the consent rules that apply to you.
+  **Coordinate shared meetings**
+  Pair supported Hall-e devices to share selected meeting details, such as a title, project, supported link, and scheduled time. Those details are encrypted on paired devices before they reach Hall-e’s coordinator. Shared sessions do not transfer recordings or start recording on another device.
+
+  Hall-e does not include shared transcription credits or require a Hall-e account. Optional cloud transcription requires your configured provider account, internet access, and permission for audio processing. Other optional AI features use the provider and settings you configure and may process selected transcript or project context. Calendar access, microphone access, and notifications are requested only for the features you choose. Tell meeting participants when you record, and follow the consent rules that apply to you.
 
   Requires macOS 14 or later. On-device transcription depends on macOS language and model availability. Calendar availability depends on accounts configured in macOS.
 

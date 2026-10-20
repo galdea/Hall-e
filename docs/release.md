@@ -86,6 +86,12 @@ downloadable Actions artifacts but does not publish a GitHub Release. Both
 macOS architecture jobs run on macOS 15 with a macOS 14 deployment target. They
 are separate architecture builds, not universal binaries.
 
+The macOS workflow covers direct-download packages only; it does not build or
+validate the separate Mac App Store package or Android candidate. The owner has
+instructed that no hosted Actions be dispatched until the included allowance
+renews. Preserve the existing tag/manual workflow triggers and release checks;
+the current candidate validation record states which hosted checks have not run.
+
 Runs for the same commit share a concurrency group. A version-tag run can
 supersede an in-progress same-commit manual macOS packaging run; it does not
 cancel a release for another commit. Staging Actions artifacts expire after

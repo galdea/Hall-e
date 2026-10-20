@@ -108,9 +108,9 @@ class SharedSessionClient(context: Context) {
             SharedSession(
                 id = session.getString("id"), revision = session.optInt("revision", 1),
                 createdAtMs = session.optLong("createdAtMs"), updatedAtMs = session.optLong("updatedAtMs"),
-                title = plain?.optString("title")?.takeIf(String::isNotBlank),
-                projectName = plain?.optString("projectName")?.takeIf(String::isNotBlank),
-                meetingUrl = plain?.optString("meetingUrl")?.takeIf(String::isNotBlank),
+                title = plain?.optNullableString("title"),
+                projectName = plain?.optNullableString("projectName"),
+                meetingUrl = plain?.optNullableString("meetingUrl"),
                 startAtMs = plain?.optNullableLong("startAtMs"), endAtMs = plain?.optNullableLong("endAtMs"),
                 decryptionFailed = plain == null,
             )
@@ -121,8 +121,8 @@ class SharedSessionClient(context: Context) {
         val leaseJson = body.optJSONObject("activeLease")
         val lease = if (leaseJson == null || leaseJson == JSONObject.NULL) null else SharedLease(
             leaseJson.getString("sessionId"), leaseJson.getString("deviceId"), leaseJson.getString("leaseId"),
-            leaseJson.getLong("generation"), leaseJson.optString("generationToken").takeIf(String::isNotBlank),
-            leaseJson.getLong("expiresAtMs"), leaseJson.optString("handoffRequestedDeviceId").takeIf(String::isNotBlank),
+            leaseJson.getLong("generation"), leaseJson.optNullableString("generationToken"),
+            leaseJson.getLong("expiresAtMs"), leaseJson.optNullableString("handoffRequestedDeviceId"),
         )
         val segments = body.optJSONArray("segments").asSequenceOfObjects().map { segment ->
             SharedSegment(segment.getString("id"), segment.getString("sessionId"), segment.getString("deviceId"),
@@ -296,8 +296,8 @@ class SharedSessionClient(context: Context) {
             JSONObject(SharedSessionCrypto.decrypt(response.getString("encryptedPayload"), credentials.workspaceKey, id).toString(StandardCharsets.UTF_8))
         }.getOrNull()
         return SharedSession(id, response.optInt("revision", 1), response.optLong("createdAtMs"), response.optLong("updatedAtMs"),
-            plain?.optString("title")?.takeIf(String::isNotBlank), plain?.optString("projectName")?.takeIf(String::isNotBlank),
-            plain?.optString("meetingUrl")?.takeIf(String::isNotBlank), plain?.optNullableLong("startAtMs"),
+            plain?.optNullableString("title"), plain?.optNullableString("projectName"),
+            plain?.optNullableString("meetingUrl"), plain?.optNullableLong("startAtMs"),
             plain?.optNullableLong("endAtMs"), plain == null)
     }
 
@@ -560,3 +560,5 @@ private fun JSONArray?.asSequenceOfObjects(): List<JSONObject> = buildList {
     for (index in 0 until array.length()) array.optJSONObject(index)?.let(::add)
 }
 private fun JSONObject.optNullableLong(name: String): Long? = if (!has(name) || isNull(name)) null else optLong(name)
+internal fun JSONObject.optNullableString(name: String): String? =
+    if (!has(name) || isNull(name)) null else optString(name).takeIf(String::isNotBlank)
