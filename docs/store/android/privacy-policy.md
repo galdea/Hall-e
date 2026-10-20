@@ -17,4 +17,3 @@ Hall-e schedules reminders locally through Android. Android controls calendar pe
 Local preferences, notes, projects, assignments, and calendar selections remain in the app’s private storage until you clear Hall-e’s app data or uninstall the app. If you shared a note, separately remove any copy kept by the receiving app or service.
 
 For support, use the [Hall-e issue form](https://github.com/galdea/Hall-e/issues/new/choose).
-

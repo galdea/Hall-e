@@ -10,16 +10,16 @@ This is the calendar companion for Hall-e. It works on its own and does not conn
 
   Make room for a calmer, more organized day with Hall-e.
 
-  **See today at a glance**  
+  **See today at a glance**
   Choose which calendars on your phone appear in Hall-e. Browse a day at a time, check meeting details, and open supported meeting links in the app or browser you already use.
 
-  **Keep project context close**  
+  **Keep project context close**
   Group meetings into local projects. Write or update a Markdown note for a meeting, then share it yourself using Android’s share sheet.
 
-  **Set meeting reminders**  
+  **Set meeting reminders**
   Choose a reminder at the meeting start, 1, 5, 10, 15, or 30 minutes beforehand, or set a custom lead time. If enabled, the morning overview appears the first time you open Hall-e from 4:00 a.m. until noon.
 
-  **Your calendar stays on your phone**  
+  **Your calendar stays on your phone**
   Hall-e reads only the calendars you select. Calendar entries, projects, notes, and reminder settings are stored locally. There is no Hall-e account, network connection, Mac sync, or background service. Sharing a note is always an action you start.
 
   Hall-e does not record meetings or audio, and it does not transcribe conversations. It does not request microphone, contacts, or location access.
@@ -37,4 +37,3 @@ This is the calendar companion for Hall-e. It works on its own and does not conn
 - **Feature graphic:** [`feature-graphic-1024x500.png`](feature-graphic-1024x500.png), composed from the existing icon and Hall-e brand colors. It contains no simulated app screen or fabricated screenshot.
 - **Editable source and regeneration instructions:** [`generate-assets.py`](generate-assets.py) (Python 3 and Pillow).
 - **Screenshots:** Capture genuine screens from a running Android build before store submission. No screenshot mockups are included in this package.
-

@@ -11,13 +11,13 @@ Borrador. Antes de publicar este texto, confirma las funciones y el comportamien
 
   Hall-e te ayuda a preparar tus reuniones y encontrar fácilmente el trabajo que viene después.
 
-  **Mira qué viene**  
+  **Mira qué viene**
   Conecta un calendario disponible en tu Mac, elige cuáles mostrar y revisa tus próximas reuniones y recordatorios.
 
-  **Graba audio del micrófono**  
+  **Graba audio del micrófono**
   Inicia y detén una grabación con la entrada de micrófono que elijas. Esta edición de Mac App Store captura solo audio del micrófono; no captura el audio de otras apps. Usa la transcripción en el dispositivo de Apple Speech cuando esté disponible, o conecta tu propia cuenta opcional de transcripción en la nube y autoriza el procesamiento de audio. Lee, busca y exporta transcripciones; la transcripción en la nube puede agregar etiquetas de hablantes anónimas.
 
-  **Reúne notas y tareas pendientes**  
+  **Reúne notas y tareas pendientes**
   Escribe notas junto a cada reunión, organiza reuniones por proyecto y encuentra tareas pendientes basadas en tus notas. Exporta notas y transcripciones en formato Markdown.
 
   Hall-e no incluye créditos compartidos de transcripción ni requiere una cuenta de Hall-e. El procesamiento opcional en la nube requiere tu propia cuenta del proveedor, conexión a internet y tu autorización. El acceso al calendario, al micrófono y a las notificaciones se solicita solo para las funciones que elijas. Avisa a las personas participantes cuando grabes y respeta las normas de consentimiento aplicables.
@@ -34,4 +34,3 @@ Borrador. Antes de publicar este texto, confirma las funciones y el comportamien
 - Ícono de la app exportado en el formato y las dimensiones vigentes de App Store Connect.
 - Capturas tomadas desde la versión final con App Sandbox, en los tamaños de pantalla de Mac compatibles. No uses pantallas simuladas ni imágenes de la versión de descarga directa.
 - Confirma que el formulario de incidencias sea un canal de soporte duradero. Actualiza la política de privacidad para explicar correctamente el contenedor de App Store, la migración de datos y las diferencias entre versiones antes del envío.
-
