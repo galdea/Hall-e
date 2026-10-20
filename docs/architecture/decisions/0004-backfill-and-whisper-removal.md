@@ -3,6 +3,17 @@
 Status: Executed 2026-08-18 — backfill reconciled 28/28 (USD 9.51) and Whisper fully removed. See `docs/operations/MEETING_PIPELINE.md` for the removal record, the rollback artifact, and one deviation: `brew uninstall` also took the dependencies isl, libmpc, mpfr, ggml, and libomp, which this ADR did not sanction; no installed formula depends on them and gcloud/ffmpeg were verified working.
 Date: 2026-08-09
 
+> **Historical integration notice — 2026-10-20:** This ADR records the completed
+> Whisper migration and preserves the decision history. The OpenClaw/Gemini
+> structured-report integration referenced in its migration gates and artifact
+> inventory was later retired from Hall-e because it was unavailable and
+> unreliable. Current releases have no automatic report/retry or activation
+> path. Existing reports and schema definitions remain preserved; generic
+> configured AI-provider features retain their separate consent.
+
+The migration gates below record the procedure completed in 2026; they are not
+instructions to start a new transcription/report backfill.
+
 ## Context
 
 The migration must replace 27 active transcripts and ultimately remove application and machine-level Whisper components without destroying the only usable rollback state in a heavily modified working tree.
@@ -11,7 +22,7 @@ The migration must replace 27 active transcripts and ultimately remove applicati
 
 Treat migration as staged and reversible until reconciliation is accepted, then fully remove Whisper as Gabriel requested.
 
-## Migration gates
+## Migration gates (historical, completed)
 
 1. Rotate/store the replacement Deepgram key; record explicit historical cloud-audio consent.
 2. Generate a zero-network manifest for the 27 inputs with hashes, bytes, durations, project, current transcript hash/source, output IDs, and estimated cost.

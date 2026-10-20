@@ -12,7 +12,19 @@ Speechmatics requires its own Keychain key, US/EU region selection, Model Traini
 
 ## Optional integrations
 
-Google Calendar uses a user-imported Desktop OAuth client and read-only access. Notes can use a normal folder or an Obsidian vault. AI providers and the separate OpenClaw structured-report pipeline are optional and have their own processing controls. No integration is required to record audio locally.
+Google Calendar uses a user-imported Desktop OAuth client and read-only access.
+Notes can use a normal folder or an Obsidian vault. Generic configured AI
+providers remain optional and retain their provider settings and consent.
+`TranscriptPostProcessor` may send transcript text automatically after a fresh
+transcription when AI Providers are enabled and cloud transcript consent is
+active; this does not require a new invocation for each transcript. Other AI
+features may be explicitly user-initiated.
+The separate OpenClaw/Gemini structured-report integration was retired from
+Hall-e on 2026-10-20 because it was unavailable and unreliable. Current builds
+must not enqueue or retry those report jobs or expose OpenClaw activation
+settings. Existing report artifacts and historical schemas are preserved; this
+does not alter generic AI-provider consent. No integration is required to
+record audio locally.
 
 ## Distribution
 

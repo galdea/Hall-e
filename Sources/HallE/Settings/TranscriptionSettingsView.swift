@@ -16,7 +16,6 @@ struct TranscriptionSettingsView: View {
     @State private var speechmaticsTrainingOff = AppPreferences.speechmaticsModelTrainingConfirmedOff
     @State private var speechmaticsAudioEnabled = AppPreferences.allowSpeechmaticsAudioTranscription
     @State private var cloudAudioEnabled = AppPreferences.allowCloudAudioTranscription
-    @State private var cloudReportsEnabled = AppPreferences.allowCloudTranscriptReports
     @State private var monthlyLimit = AppPreferences.deepgramMonthlyLimitUSD
     @State private var cloudConfirmation: CloudConfirmation?
     @State private var keyError: String?
@@ -29,7 +28,7 @@ struct TranscriptionSettingsView: View {
     @State private var credentialCheckID: UUID?
 
     private enum CloudConfirmation: String, Identifiable {
-        case deepgramAudio, speechmaticsAudio, reports
+        case deepgramAudio, speechmaticsAudio
         var id: String { rawValue }
     }
 
@@ -230,28 +229,10 @@ struct TranscriptionSettingsView: View {
             }
 
             if !isOnboarding {
-            Section("Optional integrations") {
-                DisclosureGroup("Advanced transcript processing") {
-                if DistributionCapabilities.supportsOpenClawReports {
-                Toggle("Allow transcript text to be processed by OpenClaw + Gemini", isOn: Binding(
-                    get: { cloudReportsEnabled },
-                    set: { enabled in
-                        if enabled { cloudConfirmation = .reports }
-                        else { revokeReportConsent() }
-                    }))
-                Text("Uses the dedicated tool-less halle-reports agent and a Gemini-only model allowlist. Audio is never included in this step.")
-                    .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("OpenClaw transcript reports are unavailable in the Mac App Store edition because they depend on launching a separate local command-line tool. Direct downloads retain this integration.")
+                Section("Transcript enrichment") {
+                    Text("Raw transcripts stay local. Summary, decisions, action items, and follow-ups are generated only when AI and cloud transcript processing are enabled in AI Providers.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-            }
-
-                }
-            Section {
-                Text("Raw transcripts stay local. Summary, decisions, action items, and follow-ups are generated only when AI and cloud transcript processing are enabled in AI Orchestrator.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             }
         }
         .formStyle(.grouped)
@@ -271,14 +252,13 @@ struct TranscriptionSettingsView: View {
             checkingTarget = nil
         }
         .onChange(of: scenePhase) { _, phase in if phase == .active { refreshSpeechReadiness() } }
-        .confirmationDialog(cloudConfirmation == .reports ? "Allow cloud transcript processing?" : "Allow cloud audio processing?",
+        .confirmationDialog("Allow cloud audio processing?",
                             isPresented: Binding(get: { cloudConfirmation != nil }, set: { if !$0 { cloudConfirmation = nil } }),
                             titleVisibility: .visible) {
             Button("I understand and allow this processing") {
                 switch cloudConfirmation {
                 case .deepgramAudio: grantAudioConsent()
                 case .speechmaticsAudio: grantSpeechmaticsConsent()
-                case .reports: grantReportConsent()
                 case nil: break
                 }
                 cloudConfirmation = nil
@@ -436,25 +416,12 @@ struct TranscriptionSettingsView: View {
         speechmaticsAudioEnabled = false
     }
 
-    private func grantReportConsent() {
-        AppPreferences.cloudTranscriptConsent = .grant(processor: "OpenClaw + GitHub Copilot/Gemini",
-                                                       purpose: "structured meeting briefing generation")
-        cloudReportsEnabled = true
-    }
-
-    private func revokeReportConsent() {
-        if var consent = AppPreferences.cloudTranscriptConsent { consent.revoke(); AppPreferences.cloudTranscriptConsent = consent }
-        cloudReportsEnabled = false
-    }
-
     private var confirmationMessage: String {
         switch cloudConfirmation {
         case .deepgramAudio:
             "Meeting audio will be sent to Deepgram. Confirm participant notice/consent as required."
         case .speechmaticsAudio:
             "Meeting audio will be sent to Speechmatics in the selected region and may remain there for up to 7 days. Confirm participant notice/consent, region, and that Model Training is off."
-        case .reports:
-            "Transcript text will be sent through local OpenClaw to GitHub Copilot/Gemini under the currently presented provider terms."
         case nil:
             ""
         }

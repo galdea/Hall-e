@@ -9,7 +9,6 @@ enum DistributionCapabilities {
     #endif
 
     static var usesSecurityScopedVaultAccess: Bool { isMacAppStore }
-    static var supportsOpenClawReports: Bool { !isMacAppStore }
     static var supportsChromeNativeMessaging: Bool { !isMacAppStore }
     static var supportsCodexHomeImport: Bool { !isMacAppStore }
     static var supportsExternalArchiveProcess: Bool { !isMacAppStore }

@@ -55,7 +55,6 @@ import Foundation
         emit("fallback key            : \(fallback.map { "present, \($0.count) chars, ends \($0.suffix(4))" } ?? "none")")
         emit("credential order        : \(DeepgramTranscriptionProvider.credentials().map(\.label).joined(separator: " → "))")
         emit("cloud audio consent     : \(AppPreferences.allowCloudAudioTranscription)")
-        emit("cloud transcript consent: \(AppPreferences.allowCloudTranscriptReports)")
         emit("monthly spend guard USD : \(AppPreferences.deepgramMonthlyLimitUSD)")
         let resolved = TranscriptionEngineResolver.resolve(
             preference: AppPreferences.transcriptionEngine,
@@ -102,17 +101,13 @@ import Foundation
              : "read-back MISMATCH — stored value differs")
     }
 
-    /// Records the two consents. ADR 0001 keeps them independent: audio leaving
-    /// the Mac is a different decision from transcript text being processed.
+    /// Records consent for the audio upload. Transcript enrichment remains
+    /// governed by the separate AI Providers settings.
     static func grantConsent() {
         AppPreferences.cloudAudioConsent = .grant(
             processor: "Deepgram",
             purpose: "prerecorded meeting transcription and diarization")
-        AppPreferences.cloudTranscriptConsent = .grant(
-            processor: "OpenClaw + GitHub Copilot/Gemini",
-            purpose: "structured meeting briefing generation")
         emit("cloud audio consent     : \(AppPreferences.allowCloudAudioTranscription)")
-        emit("cloud transcript consent: \(AppPreferences.allowCloudTranscriptReports)")
         if let consent = AppPreferences.cloudAudioConsent {
             emit("granted at \(ISO8601DateFormatter().string(from: consent.grantedAt)), version \(consent.version), MIP opt-out \(consent.modelImprovementOptOut)")
         }
@@ -200,9 +195,9 @@ import Foundation
         let report = try decoder.decode(DeepgramABSampleReport.self, from: data)
         try HistoricalBackfillController.recordABApproval(manifestURL: manifestURL,
                                                           sessionIDs: report.acceptedSessionIDs,
-                                                          reportsApproved: true)
+                                                          sampleReviewAccepted: true)
         let value = try HistoricalBackfillController.loadManifest(manifestURL)
-        emit("accepted \(value.acceptedABSessionIDs.count) A/B sessions; reports approved at \(value.sampleReportsApprovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "—")")
+        emit("accepted \(value.acceptedABSessionIDs.count) A/B sessions; sample review accepted at \(value.sampleReportsApprovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "—")")
         emit("manifest hash is now \(value.manifestHash) — the authorization binds to this value")
     }
 
@@ -226,7 +221,6 @@ import Foundation
         let reloaded = try HistoricalBackfillController.loadManifest(manifestURL)
         let reconciliation = HistoricalBackfillController.reconcile(reloaded)
         emit("completed \(reconciliation.completed)/\(reconciliation.expected) · failed \(reconciliation.failed) · ambiguous \(reconciliation.ambiguous) · skipped \(reconciliation.skipped)")
-        emit("reports incomplete: \(reconciliation.briefingsIncomplete)")
         for item in reloaded.items where item.state != .completed {
             emit("  \(item.state.rawValue): \(item.slug) — \(item.lastError ?? "no detail")")
         }

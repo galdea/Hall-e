@@ -139,10 +139,7 @@ enum RecordingCoordinator {
             let context = MeetingContext(title: event.title, project: event.projectId,
                                          date: HalleDate.day(event.startTs),
                                          attendees: event.attendees.compactMap { $0.email })
-            if AppPreferences.allowCloudTranscriptReports {
-                session = await MeetingBriefingPipeline.run(session: session, transcript: transcript,
-                                                            context: context, service: service, notePath: notePath)
-            } else {
+            if session.transcriptionJob?.shouldProcessTranscriptTextWithAI != false {
                 await TranscriptPostProcessor(service: service, notePath: notePath, context: context)
                     .enrich(transcript: transcript.plainText)
             }
@@ -184,10 +181,15 @@ enum RecordingCoordinator {
         classified.descriptionText = transcript.plainText
         let classifier = MeetingClassifier()
         var classification = classifier.classifyTranscript(text: transcript.plainText)
-        let provider = LLMProviderFactory.make()
-        if !(provider is DisabledLLMProvider), !classifier.isConfident(classification),
-           let ai = await classifier.aiClassify(classified, provider: provider) {
-            classification = ai
+        let aiConfig = LLMProviderConfig.load()
+        let transcriptAIConsent = aiConfig.useAI &&
+            (aiConfig.kind == .ollama || aiConfig.kind == .lmStudio || aiConfig.allowCloudTranscriptProcessing)
+        if session.transcriptionJob?.shouldProcessTranscriptTextWithAI != false && transcriptAIConsent {
+            let provider = LLMProviderFactory.make(config: aiConfig)
+            if !(provider is DisabledLLMProvider), !classifier.isConfident(classification),
+               let ai = await classifier.aiClassify(classified, provider: provider) {
+                classification = ai
+            }
         }
         let projectName = classification.requires_user_confirmation ? nil : classification.project
         classified.projectId = projectName
@@ -223,11 +225,7 @@ enum RecordingCoordinator {
             }
             let context = MeetingContext(title: classified.title, project: projectName,
                                          date: HalleDate.day(classified.startTs), attendees: [])
-            if AppPreferences.allowCloudTranscriptReports {
-                session = await MeetingBriefingPipeline.run(session: session, transcript: transcript,
-                                                            context: context, service: service,
-                                                            notePath: descriptor.vaultRelativePath)
-            } else {
+            if session.transcriptionJob?.shouldProcessTranscriptTextWithAI != false {
                 await TranscriptPostProcessor(service: service, notePath: descriptor.vaultRelativePath, context: context)
                     .enrich(transcript: transcript.plainText)
             }

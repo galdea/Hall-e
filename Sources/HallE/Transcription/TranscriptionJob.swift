@@ -64,11 +64,15 @@ struct TranscriptionJob: Codable, Equatable {
     var startedAt: Date?
     var completedAt: Date?
     var cloud: CloudTranscriptionJob?
+    /// Optional for legacy decoding. Nil preserves existing behavior; false is
+    /// a durable opt-out for historical jobs that must never enrich transcript text.
+    var allowTranscriptTextAI: Bool?
+    var shouldProcessTranscriptTextWithAI: Bool { allowTranscriptTextAI != false }
 
     init(status: TranscriptionJobStatus = .queued, attemptCount: Int = 0,
          tracks: [TranscriptionTrackProgress] = [], lastError: String? = nil,
          queuedAt: Date = Date(), startedAt: Date? = nil, completedAt: Date? = nil,
-         cloud: CloudTranscriptionJob? = nil) {
+         cloud: CloudTranscriptionJob? = nil, allowTranscriptTextAI: Bool? = nil) {
         self.status = status
         self.attemptCount = attemptCount
         self.tracks = tracks
@@ -77,6 +81,7 @@ struct TranscriptionJob: Codable, Equatable {
         self.startedAt = startedAt
         self.completedAt = completedAt
         self.cloud = cloud
+        self.allowTranscriptTextAI = allowTranscriptTextAI
     }
 
     static func legacy(status: TranscriptStatus) -> TranscriptionJob {

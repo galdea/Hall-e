@@ -33,7 +33,6 @@ struct AppPreferences {
         static let transcriptionEngine = "transcriptionEngine"
         static let transcriptionLanguage = "transcriptionLanguage"
         static let cloudAudioConsent = "cloudAudioConsent"
-        static let cloudTranscriptConsent = "cloudTranscriptConsent"
         static let deepgramMonthlyLimitUSD = "deepgramMonthlyLimitUSD"
         static let speechmaticsAudioConsent = "speechmaticsAudioConsent"
         static let speechmaticsRegion = "speechmaticsRegion"
@@ -180,11 +179,6 @@ struct AppPreferences {
         set { setCodable(newValue, forKey: Key.cloudAudioConsent) }
     }
 
-    static var cloudTranscriptConsent: CloudProcessingConsent? {
-        get { codable(CloudProcessingConsent.self, forKey: Key.cloudTranscriptConsent) }
-        set { setCodable(newValue, forKey: Key.cloudTranscriptConsent) }
-    }
-
     static var speechmaticsAudioConsent: CloudProcessingConsent? {
         get { codable(CloudProcessingConsent.self, forKey: Key.speechmaticsAudioConsent) }
         set { setCodable(newValue, forKey: Key.speechmaticsAudioConsent) }
@@ -204,7 +198,6 @@ struct AppPreferences {
     }
 
     static var allowCloudAudioTranscription: Bool { cloudAudioConsent?.isActive == true }
-    static var allowCloudTranscriptReports: Bool { cloudTranscriptConsent?.isActive == true }
     static var allowSpeechmaticsAudioTranscription: Bool {
         guard let region = speechmaticsRegion, region.isSupported,
               speechmaticsModelTrainingConfirmedOff,

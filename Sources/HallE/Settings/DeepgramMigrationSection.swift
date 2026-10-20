@@ -16,7 +16,6 @@ import AppKit
 
     var keyStored: Bool { KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount) }
     var audioConsent: Bool { AppPreferences.allowCloudAudioTranscription }
-    var reportConsent: Bool { AppPreferences.allowCloudTranscriptReports }
     var engineIsDeepgram: Bool {
         AppPreferences.transcriptionEngine == .deepgram || AppPreferences.transcriptionEngine == .auto
     }
@@ -67,7 +66,7 @@ import AppKit
         do {
             try HistoricalBackfillController.recordABApproval(manifestURL: manifestURL,
                                                               sessionIDs: report.acceptedSessionIDs,
-                                                              reportsApproved: true)
+                                                              sampleReviewAccepted: true)
             manifest = try HistoricalBackfillController.loadManifest(manifestURL)
             status = "A/B acceptance recorded for \(report.acceptedSessionIDs.count) recordings."
         } catch { status = error.localizedDescription }
@@ -150,7 +149,7 @@ struct DeepgramMigrationSection: View {
             }
 
             LabeledContent("3 · Acceptance") {
-                Button(model.samplesApproved ? "Recorded" : "Accept samples & reports") { model.acceptSamples() }
+                Button(model.samplesApproved ? "Recorded" : "Accept A/B samples") { model.acceptSamples() }
                     .disabled(model.sampleReport == nil)
             }
 
@@ -167,7 +166,7 @@ struct DeepgramMigrationSection: View {
             }
             Button("Reveal migration folder") { NSWorkspace.shared.open(AppPaths.backfillDirectory) }
 
-            Text("The manifest hashes local artifacts only. Uploads additionally require an exact-manifest authorization, accepted A/B samples, report approval, and the consent and spend gates. Every recording's prior transcript and note are snapshotted to its `pre-deepgram/` folder before promotion.")
+            Text("The manifest hashes local artifacts only. Uploads additionally require an exact-manifest authorization, accepted A/B samples, and the cloud-audio consent and spend gates. Historical transcription does not run transcript-text AI enrichment. Every recording's prior transcript and note are snapshotted to its pre-deepgram folder before promotion.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -182,7 +181,6 @@ struct DeepgramMigrationSection: View {
         VStack(alignment: .leading, spacing: 3) {
             requirement("Deepgram key in Keychain", model.keyStored)
             requirement("Cloud audio consent", model.audioConsent)
-            requirement("Cloud transcript-text consent (reports)", model.reportConsent)
             requirement("Engine will resolve to Deepgram", model.engineIsDeepgram && model.keyStored && model.audioConsent)
         }
     }

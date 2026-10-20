@@ -1,25 +1,33 @@
 # Hall-E meeting intelligence pipeline
 
-Status: updated for public app preparation on 2026-09-08. The historical migration section below is an operator runbook, not required end-user setup.
+Status: OpenClaw/Gemini structured meeting-report generation was retired from
+Hall-e on 2026-10-20 because the integration was unavailable and unreliable.
+Hall-e has no active automatic or retry path and no OpenClaw activation/settings
+flow. Existing briefing artifacts and historical schemas remain preserved.
+The separately configured generic AI-provider features remain available under
+their own settings and consent; they do not reactivate this pipeline.
+The migration notes below document completed historical work.
 
 ## Runtime path
 
 1. A completed recording is mixed once.
 2. Automatic prefers ready Deepgram Nova-3, or Speechmatics if it is the only ready provider. A definite Deepgram credit-exhaustion rejection can fall back to separately consented Speechmatics. Explicit providers remain fixed. Speechmatics requires its own key, US/EU region-bound consent, and Model Training-off confirmation.
 3. Hall-E validates speaker-bearing words/utterances before atomically replacing the active transcript. Raw successful provider JSON and the prior transcript are retained.
-4. With separate transcript-text consent, Hall-E invokes the dedicated tool-less `halle-reports` OpenClaw agent using a Gemini-only allowlist.
-5. Every substantive report item must carry a valid utterance/time evidence anchor. Unknown owners are `Unassigned`; dates without evidence are rejected.
-6. Hall-E writes `briefing.v1.json`, `briefing.md`, and `briefing.pdf`, then merges the Markdown into the managed Obsidian briefing section.
+4. The generic `TranscriptPostProcessor` may send transcript text automatically
+   after a fresh transcription when AI Providers are enabled and cloud
+   transcript consent is active. This consent applies without a new invocation
+   for each transcript. Other generic AI features follow their own enabled
+   settings, user actions, and provider consent; they are independent of the
+   retired structured-report pipeline.
 
-## Activation gate
+## Provider setup
 
-The application fails closed until all of these are true:
-
-- the exposed Deepgram key has been rotated and entered through Settings → Transcription;
-- cloud-audio consent is recorded;
-- cloud transcript-text consent is recorded;
-- the `halle-reports` OpenClaw agent exists with no tools, no delivery, and primary model `github-copilot/gemini-3.1-pro`;
-- a fixture transcription and a fixture report pass before real audio is selected.
+Cloud transcription remains gated by its provider-specific configuration and
+audio consent. Generic AI-provider features retain their own configuration and
+consent controls, including the enabled AI Providers setting and cloud transcript
+consent used by automatic transcript post-processing. There is no OpenClaw
+agent setup, report-job activation, or report retry procedure for current Hall-e
+releases.
 
 Speechmatics activation additionally requires:
 
@@ -31,13 +39,16 @@ Speechmatics activation additionally requires:
 
 Automatic mode can switch only after definite Deepgram credit exhaustion; ambiguous uploads and the shared spending guard never trigger fallback. If a create response is lost before a Speechmatics job ID is saved, the submission is marked ambiguous and cannot be blindly retried. Once a job ID is saved, relaunch/retry resumes that region-scoped job without re-uploading.
 
-Production OpenClaw configuration is intentionally not mutated by this implementation. Creating the agent remains a separately approved production-config action.
+Briefing JSON, Markdown, and PDF artifacts created before retirement remain
+historical user files. The 2026-10-20 retirement stops new automatic report
+generation and retrying; it does not delete or rewrite those artifacts or their
+historical schema definitions.
 
-## Historical migration
+## Historical migration record
 
-Advanced Settings drives the gates in order: generate manifest, select and
-transcribe A/B samples, accept the samples, run the backfill. The serial runner
-requires:
+During the completed migration, Advanced Settings drove the gates in order:
+generate manifest, select and transcribe A/B samples, accept the samples, run
+the backfill. The serial runner required:
 
 - exactly bound manifest hash;
 - 27 recordings / 67,950 seconds within 1%, or explicit variance acknowledgement;

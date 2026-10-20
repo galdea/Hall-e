@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import HallE
 
-struct MeetingBriefingPipelineTests {
+struct HistoricalMeetingBriefingCompatibilityTests {
     private func transcript() -> Transcript {
         Transcript(sessionID: UUID(), localeUsed: "multi",
                    segments: [
@@ -25,8 +25,8 @@ struct MeetingBriefingPipelineTests {
         return .init(schemaVersion: MeetingBriefing.schema, headline: "Cierre de migración",
                      objectives: [objective], tasks: [task], decisions: [], risks: [], openQuestions: [],
                      milestones: [], confidence: 0.9, transcriptHash: transcript.contentHash,
-                     promptVersion: OpenClawReportConfiguration.promptVersion,
-                     model: "github-copilot/gemini-3.1-pro", generatedAt: "2026-08-09T15:00:00Z")
+                     promptVersion: "legacy-report-v1",
+                     model: "legacy-provider", generatedAt: "2026-08-09T15:00:00Z")
     }
 
     @Test func validatorAcceptsEvidenceBackedOwnerAndDate() throws {
@@ -64,15 +64,6 @@ struct MeetingBriefingPipelineTests {
         #expect(value.accentColor == BriefingDesignProfile.corporateCloseKnit.accentColor)
         #expect(value.sectionOrder.prefix(3) == ["objectives", "tasks", "decisions"])
         #expect(value.logoFileName == nil)
-    }
-
-    @Test func openClawEnvelopeExtractionFindsCanonicalBriefing() throws {
-        let transcript = transcript(); let value = briefing(for: transcript)
-        let data = try JSONEncoder().encode(value)
-        let escaped = String(decoding: data, as: UTF8.self)
-            .replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        let envelope = #"{"payloads":[{"text":""# + escaped + #""}]}"#
-        #expect(OpenClawReportClient.decodeBriefing(envelope)?.transcriptHash == transcript.contentHash)
     }
 
     @Test @MainActor func pdfRendererProducesALocalPDF() async throws {

@@ -99,10 +99,10 @@ enum HistoricalBackfillError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .recordingActive: "Historical processing cannot run while Hall-e is recording."
-        case .consentRequired: "Historical cloud-audio and transcript-text consents are required."
+        case .consentRequired: "Historical cloud-audio consent is required."
         case .keyRequired: "A rotated Deepgram key is required in Keychain."
         case .manifestChanged: "The historical manifest changed after approval."
-        case .sampleGateRequired: "Representative A/B samples and reports must be accepted first."
+        case .sampleGateRequired: "Representative A/B samples must be accepted first."
         case .countVariance(let actual):
             "The ADR baseline is \(HistoricalBackfillController.expectedCount) historical recordings; found \(actual). Acknowledge the drift to proceed."
         case .durationVariance(let actual):
@@ -156,7 +156,7 @@ enum HistoricalBackfillError: Error, LocalizedError {
     static func validateApprovalGate(_ manifest: HistoricalBackfillManifest,
                                      authorization: HistoricalBackfillAuthorization) throws {
         guard !RecordingService.shared.isRecording else { throw HistoricalBackfillError.recordingActive }
-        guard AppPreferences.allowCloudAudioTranscription && AppPreferences.allowCloudTranscriptReports else {
+        guard AppPreferences.allowCloudAudioTranscription else {
             throw HistoricalBackfillError.consentRequired
         }
         guard KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount) else { throw HistoricalBackfillError.keyRequired }
@@ -187,13 +187,41 @@ enum HistoricalBackfillError: Error, LocalizedError {
         try validateApprovalGate(manifest, authorization: authorization)
         for index in manifest.items.indices where manifest.items[index].state != .completed {
             guard !RecordingService.shared.isRecording else { throw HistoricalBackfillError.recordingActive }
-            guard let session = RecordingStore.allSessions().first(where: { $0.id == manifest.items[index].id }) else {
+            guard var session = RecordingStore.allSessions().first(where: { $0.id == manifest.items[index].id }) else {
                 manifest.items[index].state = .skipped; manifest.items[index].lastError = "Recording folder is unavailable."
                 try write(manifest, to: manifestURL); continue
             }
             try snapshot(session)
             manifest.items[index].state = .transcribing; try write(manifest, to: manifestURL)
-            guard let queued = RecordingStore.queueRetranscription(slug: session.slug) else { continue }
+            // Persist the no-text-AI policy before queuing, so automatic recovery
+            // after a crash cannot enrich this historical transcript later.
+            var transcriptionJob = session.transcriptionJob ?? .legacy(status: session.transcriptStatus)
+            transcriptionJob.allowTranscriptTextAI = false
+            session.transcriptionJob = transcriptionJob
+            do {
+                try session.persist()
+            } catch {
+                manifest.items[index].state = .failed
+                manifest.items[index].lastError = "Could not persist the historical no-AI policy; transcription was not started."
+                try write(manifest, to: manifestURL)
+                continue
+            }
+            guard let protected = RecordingStore.allSessions().first(where: { $0.id == session.id }),
+                  protected.transcriptionJob?.allowTranscriptTextAI == false else {
+                manifest.items[index].state = .failed
+                manifest.items[index].lastError = "Could not verify the historical no-AI policy; transcription was not started."
+                try write(manifest, to: manifestURL)
+                continue
+            }
+            guard RecordingStore.queueRetranscription(slug: protected.slug) != nil,
+                  let queued = RecordingStore.allSessions().first(where: { $0.id == session.id }),
+                  queued.transcriptionJob?.status == .queued,
+                  queued.transcriptionJob?.allowTranscriptTextAI == false else {
+                manifest.items[index].state = .failed
+                manifest.items[index].lastError = "Could not verify the protected queued job; transcription was not started."
+                try write(manifest, to: manifestURL)
+                continue
+            }
             await RecordingCoordinator.transcribeAndMerge(session: queued,
                                                           event: queued.eventSnapshot ?? fallbackEvent(queued))
             guard let finished = RecordingStore.allSessions().first(where: { $0.id == session.id }) else { continue }
@@ -241,10 +269,10 @@ enum HistoricalBackfillError: Error, LocalizedError {
         try JSONDecoder().decode(HistoricalBackfillManifest.self, from: Data(contentsOf: url))
     }
 
-    static func recordABApproval(manifestURL: URL, sessionIDs: [UUID], reportsApproved: Bool) throws {
+    static func recordABApproval(manifestURL: URL, sessionIDs: [UUID], sampleReviewAccepted: Bool) throws {
         var manifest = try loadManifest(manifestURL)
         manifest.acceptedABSessionIDs = Array(Set(sessionIDs)).sorted { $0.uuidString < $1.uuidString }
-        manifest.sampleReportsApprovedAt = reportsApproved ? Date() : nil
+        manifest.sampleReportsApprovedAt = sampleReviewAccepted ? Date() : nil
         try write(manifest, to: manifestURL)
     }
 

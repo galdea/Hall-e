@@ -4,7 +4,9 @@ Hall-e stores recordings, transcripts, built-in meeting notes, project data, and
 
 ## Mac App Store edition
 
-The sandboxed Mac App Store edition stores recordings, notes, projects, and its database in its macOS app container, separate from the direct-download edition's Application Support folder. Hall-e does not automatically import that recording library or database. macOS may carry over preferences for the same app identifier; credentials remain in Keychain and access follows macOS signing and permission rules. A notes folder must be selected again if its saved sandbox access is unavailable. Recording is microphone-only; app-audio capture and desktop/browser call detection are unavailable. The Store edition does not include Chrome integration, OpenClaw report launching, or import from `~/.codex`.
+The sandboxed Mac App Store edition stores recordings, notes, projects, and its database in its macOS app container, separate from the direct-download edition's Application Support folder. Hall-e does not automatically import that recording library or database. macOS may carry over preferences for the same app identifier; credentials remain in Keychain and access follows macOS signing and permission rules. A notes folder must be selected again if its saved sandbox access is unavailable. Recording is microphone-only; app-audio capture and desktop/browser call detection are unavailable. The Store edition does not include Chrome integration or import from `~/.codex`.
+
+Hall-e retired its OpenClaw/Gemini structured meeting-report integration on 2026-10-20 because it was unavailable and unreliable. Current Hall-e releases do not automatically create or retry these reports and provide no OpenClaw activation setting. Previously created report files remain local. This does not remove separately configured generic AI-provider features, which continue to use their own provider settings and consent; some transcript processing can run automatically when enabled.
 
 Hall-e data remains local unless you explicitly enable an optional cloud transcription or AI provider, connect an online calendar as described below, or pair devices for shared meetings. Each integration sends only the data needed for the feature you chose and enabled. The [Android privacy notice](https://hall-e.pages.dev/android-privacy.html) describes the separate Android app.
 
@@ -26,7 +28,7 @@ The coordinator expires a workspace after seven days without activity. Invitatio
 
 - **Deepgram:** recording audio, only after you enable its audio permission. Hall-e requests model-improvement opt-out.
 - **Speechmatics:** recording audio, only after its separate permission, supported region selection, and confirmation that Model Training is off. Batch data may be retained for up to seven days. Region changes require renewed consent.
-- **Optional AI:** transcript text or selected project context goes to the AI integration you enable. Structured meeting reports have a separate consent setting.
+- **Optional configured AI providers:** transcript text or selected project context may go to the provider you configure when an enabled feature processes it under its existing consent. In particular, `TranscriptPostProcessor` may run automatically after a fresh transcription when AI Providers are enabled and cloud transcript consent is active; it does not require a new invocation or consent prompt for each transcript. Other features may be user-initiated. The former OpenClaw/Gemini structured-report pipeline was retired from Hall-e on 2026-10-20; existing report files are retained locally and are not sent again by that pipeline.
 - **Optional Google Calendar:** Hall-e retrieves calendar data with your connected account's read-only authorization.
 - **Links:** Update/download, Star, and coffee/support links open a website in your browser. They never install, star, or donate automatically.
 

@@ -31,9 +31,6 @@ struct PrivacySettingsView: View {
                 } else {
                     Label("Codex session indexing is unavailable in the Mac App Store edition", systemImage: "terminal")
                 }
-                if !DistributionCapabilities.supportsOpenClawReports {
-                    Label("OpenClaw transcript reports are unavailable in this edition", systemImage: "checkmark.shield")
-                }
                 Label("ChatGPT and WhatsApp data enters Hall-e only through files you select", systemImage: "square.and.arrow.down")
                 Label("API keys and refresh tokens are stored in macOS Keychain", systemImage: "key.fill")
             }

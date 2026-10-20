@@ -52,6 +52,25 @@ struct TranscriptionRecoveryTests {
         #expect(job.completedAt == nil)
     }
 
+    @Test func historicalTextAIOptOutSurvivesResetRetryAndRelaunch() throws {
+        var job = TranscriptionJob(status: .completed, allowTranscriptTextAI: false)
+        job.resetForRetranscription()
+        #expect(!job.shouldProcessTranscriptTextWithAI)
+        job.queueForRetry()
+        let restored = try JSONDecoder().decode(TranscriptionJob.self, from: JSONEncoder().encode(job))
+        #expect(!restored.shouldProcessTranscriptTextWithAI)
+    }
+
+    @Test func legacyTranscriptionJobsDefaultToExistingAIBehavior() throws {
+        let encoded = try JSONEncoder().encode(TranscriptionJob(status: .queued))
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "allowTranscriptTextAI")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let restored = try JSONDecoder().decode(TranscriptionJob.self, from: legacyData)
+        #expect(restored.allowTranscriptTextAI == nil)
+        #expect(restored.shouldProcessTranscriptTextWithAI)
+    }
+
     @Test func freshInstallUsesLocalSpeechAndExplicitChoicesArePreserved() {
         #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .spanish) == .sfSpeech(language: "es"))
         #expect(TranscriptionEngineResolver.resolve(preference: .auto, language: .english) == .sfSpeech(language: "en"))

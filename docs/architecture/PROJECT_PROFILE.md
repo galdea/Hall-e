@@ -2,7 +2,17 @@
 
 # Hall-E Project Profile
 
-Status: Architecture verified through 2026-09-01; production activation remains gated
+Status: Historical architecture snapshot through 2026-09-01; superseded as an
+active implementation profile on 2026-10-20.
+
+> **Retirement notice — 2026-10-20:** The previously approved and locally
+> implemented OpenClaw/Gemini structured-report integration was retired from
+> Hall-e because it was unavailable and unreliable. Current Hall-e releases
+> have no automatic report or retry path and no OpenClaw activation/settings
+> flow. This profile preserves the earlier approval and design history; do not
+> use its OpenClaw implementation requirements as current work instructions.
+> Historical briefing schemas and existing artifacts remain preserved. Generic
+> configured AI-provider features and their separate consent remain independent.
 
 ## Verified facts
 

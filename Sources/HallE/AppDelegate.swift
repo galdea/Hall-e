@@ -92,7 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.rec.info("transcription recovery task started")
             await RecordingCoordinator.resumeQueuedJobsWhenIdle()
             Log.rec.info("transcription recovery task finished")
-            await MeetingBriefingPipeline.resumeQueuedWhenIdle()
         }
         if ObsidianVaultConfig.load() != nil {
             Features.current = ObsidianFeatureHooks()

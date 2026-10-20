@@ -14,6 +14,10 @@ enum RecordingLibrary {
     /// already hold, and asking an LLM who spoke invites invented names.
     static func fileByContent(session: RecordingSession, event: UnifiedEvent?,
                               transcript: String) async -> RecordingSession {
+        guard session.transcriptionJob?.shouldProcessTranscriptTextWithAI != false else {
+            return refile(session: session, project: resolveProject(session, explicit: event?.projectId),
+                          topic: nil, event: event)
+        }
         let topic = await topic(for: session, event: event, transcript: transcript)
         return refile(session: session, project: resolveProject(session, explicit: event?.projectId),
                       topic: topic, event: event)
