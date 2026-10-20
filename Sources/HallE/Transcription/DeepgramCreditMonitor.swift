@@ -120,7 +120,7 @@ enum DeepgramCreditReason: String {
     /// the scope is missing, the network fails, or the account has no balance
     /// record — none of which are evidence that credit is gone, so none notify.
     static func remainingBalanceUSD(session: URLSession = .shared) async -> Double? {
-        guard let key = KeychainStore.get(account: KeychainStore.deepgramTranscriptionAccount),
+        guard let key = try? await KeychainStore.getAsync(account: KeychainStore.deepgramTranscriptionAccount),
               !key.isEmpty else { return nil }
 
         func get(_ url: URL) async -> [String: Any]? {
@@ -145,8 +145,7 @@ enum DeepgramCreditReason: String {
 
     /// Best-effort check for a low balance. Safe to call on launch and on a timer.
     static func checkBalance() async {
-        guard AppPreferences.allowCloudAudioTranscription,
-              KeychainStore.exists(account: KeychainStore.deepgramTranscriptionAccount) else { return }
+        guard AppPreferences.allowCloudAudioTranscription else { return }
         guard let remaining = await remainingBalanceUSD() else {
             Log.notify.debug("deepgram balance not readable (billing:read scope absent) — relying on request failures")
             return
