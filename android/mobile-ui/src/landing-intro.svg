@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="mechanism" viewBox="0 0 1000 620" fill="none" aria-hidden="true">
+          <defs>
+            <radialGradient id="metal"><stop stop-color="#293a3c"/><stop offset=".62" stop-color="#101c1f"/><stop offset=".88" stop-color="#1f3034"/><stop offset="1" stop-color="#090f11"/></radialGradient>
+            <linearGradient id="bevel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#516467"/><stop offset=".28" stop-color="#17292b"/><stop offset=".52" stop-color="#708081"/><stop offset=".7" stop-color="#142629"/><stop offset="1" stop-color="#3b4b4d"/></linearGradient>
+            <radialGradient id="glass" cx=".38" cy=".26" r=".8"><stop stop-color="#174d4c"/><stop offset=".6" stop-color="#092226"/><stop offset="1" stop-color="#061114"/></radialGradient>
+            <radialGradient id="tealGlow"><stop stop-color="#56e8cb" stop-opacity=".22"/><stop offset=".6" stop-color="#56e8cb" stop-opacity=".04"/><stop offset="1" stop-color="#56e8cb" stop-opacity="0"/></radialGradient>
+            <clipPath id="portraitWindow"><circle r="151"/></clipPath>
+            <linearGradient id="signal"><stop stop-color="#d5a769" stop-opacity="0"/><stop offset=".24" stop-color="#d5a769"/><stop offset=".5" stop-color="#64dec7"/><stop offset=".76" stop-color="#d66554"/><stop offset="1" stop-color="#d66554" stop-opacity="0"/></linearGradient>
+            <path id="topOrbit" d="M 244 282 A 256 256 0 0 1 756 282"/>
+            <path id="bottomOrbit" d="M 257 320 A 248 248 0 0 0 743 320"/>
+            <g id="fastener"><circle r="4" fill="#243638" stroke="#657072" stroke-width=".7"/><path d="m-1.5-1.5 3 3" stroke="#070e11" stroke-width="1.1"/></g>
+            <g id="indexMark"><path d="M0-215v12" stroke="#80928f" stroke-width="1"/><path d="m22.5-213.8-1 8" stroke="#415552" stroke-width="1"/></g>
+          </defs>
+
+          <path class="signal-line" d="M30 282H235m530 0h205" stroke="url(#signal)"/>
+          <path d="M140 262v40m720-40v40M480 10h40M500 0v20" stroke="#3b4e4b" stroke-width="1"/>
+          <g stroke="#23413e" stroke-width=".8"><path d="M259 45h-20v20m502-20h20v20M239 499v20h20m502-20v20h-20"/><path d="M229 282h-16m574 0h-16M500 553v-15"/></g>
+
+          <g transform="translate(500 282)"><g class="outer-orbit">
+            <circle r="247" stroke="#314a46" stroke-width=".8"/>
+            <circle r="236" stroke="#233734" stroke-width=".7" stroke-dasharray="1 9"/>
+            <circle r="227" stroke="#27413e" stroke-width="1"/>
+            <circle r="247" stroke="#82b0a5" stroke-width="2" stroke-dasharray="58 330 5 310"/>
+          </g></g>
+          <text class="orbit-type" fill="#8aaba0"><textPath href="#topOrbit" startOffset="50%" text-anchor="middle">H U M A N   A T   H E A R T   ·   B R I L L I A N T   B Y   D E S I G N</textPath></text>
+          <text class="orbit-type lower-orbit-type" fill="#688f83"><textPath href="#bottomOrbit" startOffset="50%" text-anchor="middle">H A L L – E   /   P E R S O N A L   M E E T I N G   I N T E L L I G E N C E</textPath></text>
+
+          <g transform="translate(500 282)">
+            <g class="index-ring">
+              <use href="#indexMark"/><use href="#indexMark" transform="rotate(12)"/><use href="#indexMark" transform="rotate(24)"/><use href="#indexMark" transform="rotate(36)"/><use href="#indexMark" transform="rotate(48)"/><use href="#indexMark" transform="rotate(60)"/><use href="#indexMark" transform="rotate(72)"/><use href="#indexMark" transform="rotate(84)"/><use href="#indexMark" transform="rotate(96)"/><use href="#indexMark" transform="rotate(108)"/><use href="#indexMark" transform="rotate(120)"/><use href="#indexMark" transform="rotate(132)"/><use href="#indexMark" transform="rotate(144)"/><use href="#indexMark" transform="rotate(156)"/><use href="#indexMark" transform="rotate(168)"/><use href="#indexMark" transform="rotate(180)"/><use href="#indexMark" transform="rotate(192)"/><use href="#indexMark" transform="rotate(204)"/><use href="#indexMark" transform="rotate(216)"/><use href="#indexMark" transform="rotate(228)"/><use href="#indexMark" transform="rotate(240)"/><use href="#indexMark" transform="rotate(252)"/><use href="#indexMark" transform="rotate(264)"/><use href="#indexMark" transform="rotate(276)"/><use href="#indexMark" transform="rotate(288)"/><use href="#indexMark" transform="rotate(300)"/><use href="#indexMark" transform="rotate(312)"/><use href="#indexMark" transform="rotate(324)"/><use href="#indexMark" transform="rotate(336)"/><use href="#indexMark" transform="rotate(348)"/>
+            </g>
+            <circle r="190" stroke="#183b35" stroke-width="14" stroke-dasharray=".8 9.15"/>
+            <circle r="171" fill="url(#metal)" stroke="url(#bevel)" stroke-width="2"/>
+            <circle r="161" stroke="#071012" stroke-width="5"/>
+            <circle r="156" stroke="#516462" stroke-width=".6"/>
+            <circle r="150" fill="#070f12" stroke="#1a3633" stroke-width="6"/>
+            <circle r="145" fill="url(#glass)" stroke="#486f62" stroke-width="1"/>
+            <circle r="137" stroke="#28423d" stroke-width=".7" stroke-dasharray="3 5"/>
+            <path d="M-125-38a131 131 0 0 1 88-88" stroke="#a3c5ad" stroke-opacity=".32" stroke-width="2" stroke-linecap="round"/>
+            <path d="M125 42a131 131 0 0 1-88 83" stroke="#6c9b8a" stroke-opacity=".3" stroke-width="1"/>
+            <use href="#fastener" transform="translate(0 -166)"/><use href="#fastener" transform="translate(143.8 -83)"/><use href="#fastener" transform="translate(143.8 83)"/><use href="#fastener" transform="translate(0 166)"/><use href="#fastener" transform="translate(-143.8 83)"/><use href="#fastener" transform="translate(-143.8 -83)"/>
+            <g class="core-mark">
+              <circle r="143" fill="url(#tealGlow)"/>
+              <g clip-path="url(#portraitWindow)">
+                <g class="portrait-float">
+                  <image class="character-art hall-e-art" data-character-art="" href="/hall-e.webp" x="-180" y="-172" width="360" height="360" preserveAspectRatio="xMidYMid meet"/>
+                </g>
+              </g>
+              <circle r="151" stroke="#98c3b1" stroke-opacity=".2"/>
+            </g>
+            <g class="heart-flight">
+              <image class="character-art wall-e-art" data-character-art="" href="/wall-e.webp" x="-153" y="-169" width="306" height="306" preserveAspectRatio="xMidYMid meet"/>
+              <text y="159" class="source-caption" text-anchor="middle" fill="#e0b77b">WALL-E / HEART</text>
+            </g>
+            <g class="mind-flight">
+              <image class="character-art hal-art" data-character-art="" href="/hal.webp" x="-153" y="-169" width="306" height="306" preserveAspectRatio="xMidYMid meet"/>
+              <text y="159" class="source-caption" text-anchor="middle" fill="#e78d7b">HAL 9000 / MIND</text>
+            </g>
+            <g class="assembly-parts"></g>
+          </g>
+          <g class="assembly-status" fill="#8cae9e"><text x="500" y="580" text-anchor="middle" class="core-caption">HEART + MIND</text></g>
+          <g class="core-status" fill="#8cae9e"><text x="500" y="580" text-anchor="middle" class="core-caption">HELLO, HUMAN.</text></g>
+        </svg>

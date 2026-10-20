@@ -7,13 +7,16 @@ import java.util.UUID
 
 /** Device-side regression for the partial-to-final rename and metadata commit boundary. */
 class MobileStoreInstrumentation : Instrumentation() {
+    private var reminderOnly = false
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
+        reminderOnly = arguments?.getString("screen-reminder") == "true"
         start()
     }
 
     override fun onStart() {
         try {
+            if (reminderOnly) { verifyScreenReminder(); return }
             verifyTransferSchedulingPermission()
             verifyNormalFinalization()
             verifyInterruptedFinalization()
@@ -23,6 +26,37 @@ class MobileStoreInstrumentation : Instrumentation() {
         } catch (failure: Throwable) {
             finish(1, Bundle().apply { putString("failure", failure.toString()) })
             throw failure
+        }
+    }
+
+    /** Explicit opt-in physical check; no microphone, credentials, or audio. */
+    private fun verifyScreenReminder() {
+        val power = targetContext.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+        val wasInteractive = power.isInteractive
+        check(!wasInteractive) { "Physical wake test requires the display to start off" }
+        val reminder = RecordingScreenReminder(targetContext, android.os.Handler(android.os.Looper.getMainLooper()), 5000L)
+        try {
+            runOnMainSync { reminder.start() }
+            val deadline = android.os.SystemClock.elapsedRealtime() + 8000L
+            while (!reminder.holdsWakeLock() && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(25)
+            val heldDuringPulse = reminder.holdsWakeLock()
+            check(heldDuringPulse) { "Wake-lock acquisition was not observed; wake behavior is inconclusive" }
+            val woke = power.isInteractive
+            check(woke) { "Android did not wake the display" }
+            Thread.sleep(1200)
+            val released = !reminder.holdsWakeLock()
+            check(released) { "The one-second reminder wake lock did not expire" }
+            runOnMainSync { reminder.stop() }
+            finish(0, Bundle().apply {
+                putString("result", "passed")
+                putBoolean("interactiveBefore", wasInteractive)
+                putBoolean("interactiveAfterPulse", woke)
+                putBoolean("wakeLockHeldDuringPulse", heldDuringPulse)
+                putBoolean("wakeLockTimedOut", released)
+                putString("cadence", "Accelerated 5s physical pulse; production 5min cadence covered separately")
+            })
+        } finally {
+            runOnMainSync { reminder.stop() }
         }
     }
 

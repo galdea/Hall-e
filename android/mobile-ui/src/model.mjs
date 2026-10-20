@@ -20,6 +20,7 @@ export function send(action,payload={}) {
 }
 export function receive(snapshot) {
   Object.assign(data,snapshot);
+  if (!recording() && typeof document !== 'undefined') document.documentElement.classList.remove('recording-reminder');
   ui.starting=Boolean(snapshot.preparing);
   if(snapshot.active && ['STARTING','RECORDING'].includes(snapshot.active.status)){
     if(ui.detailId!==snapshot.active.id && ui.starting)ui.page='record';
@@ -72,3 +73,12 @@ export function start(){
   repaint();
   setInterval(()=>{if(data.active){data.active.elapsedMs=Date.now()-demoStarted;repaint();}},1000);
 }
+
+// Only a native service-owned reminder invokes this; it never starts capture.
+let reminderTimer = 0;
+globalThis.hallEReminder = () => {
+  if (!recording()) return;
+  clearTimeout(reminderTimer);
+  document.documentElement.classList.add('recording-reminder');
+  reminderTimer = setTimeout(() => document.documentElement.classList.remove('recording-reminder'), 1000);
+};

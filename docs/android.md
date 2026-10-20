@@ -4,6 +4,8 @@ The Android companion is an agenda, reminder, and optional local recording app. 
 
 The agenda reads selected calendars through Android's `CalendarContract` and provides month and week views. Users can organize meetings into local projects, keep or share Markdown notes, and move meetings to trash with restore. Trash preserves source calendar events and hides their Hall-e reminders while trashed. Projects, assignments, notes, recordings, preferences, and reminder identifiers are stored on the phone. Pairing shares selected client-encrypted meeting details plus coordination metadata through the Hall-e coordinator with paired Hall-e devices, including Mac. Hall-e has no account system.
 
+The header uses a circular crop of the actual robot's chest lens: green with a static glow while idle, and red with a static glow after recording is confirmed; its small timer sits below. Home keeps the full robot with its original red chest lens. The adaptive launcher icon uses the full robot. The mechanical assembly animation runs once on app opening/Home, can be skipped, does not block Record, and has a reduced-motion fallback. The startup presentation is not a login or authentication screen; the app has no login flow.
+
 ## Requirements and build
 
 - Android Studio / Android Gradle Plugin 9.0.0, Gradle 9.1.0, and JDK 17.
@@ -19,6 +21,8 @@ Hall-e requests read-only calendar permission at runtime. It initially selects t
 
 Reminder timing can be set to meeting start, 1, 5, 10, 15, or 30 minutes before, or a custom interval from 1 to 1440 minutes. Android notification permission and exact-alarm access are controlled by the operating system and may be denied or revoked. Without notification permission no notification is shown; without exact-alarm access Android may deliver a reminder later than requested, subject to system power restrictions. The app does not use a persistent foreground service to promise delivery.
 
+The service-owned five-minute screen reminder requests a one-second brightness/soft-wash pulse while the app is foregrounded. With the screen off, it attempts a timed wake lock for one second; Android controls the actual wake duration and cadence. It does not unlock the device, start a background activity, keep a persistent wake lock, or change global brightness. An accelerated physical Pixel test observed wake from a dark display, actual wake-lock acquisition and automatic expiry after one second. The production five-minute cadence and stop cancellation are covered by local clock-driven tests; this is not a guarantee of display-on duration under every Android power policy.
+
 The morning overview is shown on the first app open from 04:00 until noon local time on a given date, if calendar access is available and the feature is enabled. It is not a guaranteed background notification: Android may not start the app before the user unlocks or opens it, especially after a reboot. The overview is generated only when the app opens during that local-time window.
 
 ## Privacy
@@ -30,3 +34,5 @@ Android recording is optional and starts only after a visible user action and mi
 If the user explicitly creates or joins a shared workspace, Hall-e encrypts a meeting title and optional project name, meeting URL, and scheduled times on the device before sending them to the allowlisted coordinator. The coordinator also stores opaque workspace/device/session IDs, display-only device names, session ciphertext, audio-transfer ciphertext and metadata, segment timestamps/status, and recording-lease metadata. It does not receive the calendar event ID, calendar contents, or encryption key. Credentials and the workspace key are encrypted with an Android Keystore key.
 
 Shared live recording remains exclusive across the workspace. A phone must publish the encrypted session and obtain a short-lived lease before it starts its microphone; it renews while recording and stops locally if renewal fails or another device requests handoff. The separate live-session lease handoff is only a prompt to the current phone. It cannot start recording on the target phone. The target user must separately choose to record and grant microphone access. Post-stop phone-to-Mac audio transfer uses the registered-device queue and does not replace or alter that shared live-recording handoff.
+
+Candidate 0.3.0/code 4 is not a production release. Mac delivery remains unverified while unpaired, and the Buzz review is blocked; no release readiness is claimed.

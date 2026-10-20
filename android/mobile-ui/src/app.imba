@@ -1,7 +1,15 @@
 import * as model from './model.mjs'
 import {ui,data} from './model.mjs'
-const brandMark = '/hall-e-mark.png'
-const characterArt = '/hall-e.webp'
+import {mountIntro} from './intro.mjs'
+
+tag halle-intro
+	def mount
+		self.stopIntro = mountIntro(self)
+	def unmount
+		if self.stopIntro
+			self.stopIntro!
+	<self>
+
 
 tag halle-meetings
 	prop items
@@ -55,20 +63,13 @@ tag halle-app
 
 	<self data-recording=model.recording!>
 		<header.topbar>
-			<button.brand aria-label='Hall-e · Inicio' @click=go('home')>
-				<span.brand-portrait>
-					<img src=brandMark width='34' height='34' alt=''>
-				<span.brand-wordmark> 'HALL—E.'
-			if model.recording!
-				<button.record-indicator aria-label="Grabando · {model.duration(data.active.elapsedMs)} · Abrir grabación" @click=model.openRecord!>
-					<span.record-eye aria-hidden='true'>
-					<span.record-indicator-copy>
-						<strong> 'Grabando'
-						<span> model.duration(data.active.elapsedMs)
-			elif data.active || ui.starting
-				<button.capture-pending @click=model.openRecord!> 'Iniciando…'
-			else
-				<span.connection> if data.paired then 'Mac vinculado' else 'Tu espacio personal'
+			<button.hal-control aria-label=(model.recording! ? "Grabando · {model.duration(data.active.elapsedMs)} · Abrir grabación" : 'Inicio · micrófono inactivo') data-active=model.recording! @click=(model.recording! ? model.openRecord! : go('home'))>
+				<span.chest-lens data-active=model.recording! aria-hidden='true'>
+					<span.chest-light>
+				if model.recording!
+					<span.eye-clock> model.duration(data.active.elapsedMs)
+			<span.connection> if data.active || ui.starting then (model.recording! ? 'Grabando en este teléfono' : 'Iniciando…') else if data.paired then 'Mac vinculado' else 'Tu espacio personal'
+
 		if data.preview
 			<p.preview-label> 'Vista de prueba · datos de ejemplo'
 		if data.error
@@ -78,7 +79,7 @@ tag halle-app
 				<section.orbit-hero>
 					<p.eyebrow> data.today && model.parseDate(data.today).toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})
 					<h1> 'Deja fluir las ideas.'
-					<img.hero-character src=characterArt width='164' height='198' alt='Hall-e'>
+					<halle-intro>
 					<button.hero-record aria-label=(data.active ? 'Abrir grabación' : 'Grabar ahora') disabled=ui.starting @click=model.quickRecord!>
 						<span> if ui.starting then 'Iniciando…' else if data.active then 'Grabando · abrir' else 'Grabar ahora'
 					<p.hero-caption> 'Tu voz aquí. Tus notas en el Mac.'
@@ -118,7 +119,7 @@ tag halle-app
 			elif ui.page == 'record'
 				<section.recording-panel>
 					<p.eyebrow role='status'> if model.recording! then 'Grabando en este teléfono' else if ui.starting || data.active then 'Preparando micrófono' else if model.chosen! then 'Grabación guardada' else 'Sin grabación activa'
-					<h1.record-clock> if data.active then model.duration(data.active.elapsedMs) else if model.chosen! then 'Todo capturado.' else 'Tu voz, aquí.'
+					<h1.record-heading> if data.active then (model.recording! ? 'Te estoy escuchando.' : 'Un momento…') else if model.chosen! then 'Todo capturado.' else 'Tu voz, aquí.'
 					<p.hero-caption> 'Micrófono del teléfono. No captura el audio interno de otras apps.'
 				if model.chosen!
 					if model.chosen!.error

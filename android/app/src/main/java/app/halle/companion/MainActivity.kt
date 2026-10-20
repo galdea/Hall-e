@@ -4,6 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.media.MediaPlayer
@@ -20,6 +23,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -53,6 +57,24 @@ class MainActivity : Activity() {
     private var lastSnapshot = ""
     private var preview = false
     private var paired = false
+    private var reminderRegistered = false
+    private var previousBrightness: Float? = null
+    private val resetReminder = Runnable {
+        previousBrightness?.let { old -> window.attributes = window.attributes.apply { screenBrightness = old } }
+        previousBrightness = null
+        if (ready) web.evaluateJavascript("document.documentElement.classList.remove('recording-reminder')", null)
+    }
+    private val reminderReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != RecordingScreenReminder.ACTION_REMINDER || !foreground || preview ||
+                meetings.activeRecording()?.status != MobileMeetingStatus.RECORDING) return
+            if (previousBrightness == null) previousBrightness = window.attributes.screenBrightness
+            handler.removeCallbacks(resetReminder)
+            window.attributes = window.attributes.apply { screenBrightness = 1f }
+            if (ready) web.evaluateJavascript("window.hallEReminder?.()", null)
+            handler.postDelayed(resetReminder, RecordingScreenReminder.PULSE_DURATION_MS)
+        }
+    }
     private val poll = object : Runnable {
         override fun run() {
             if (!foreground) return
@@ -78,7 +100,7 @@ class MainActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
                 val path = request.url.path.orEmpty()
-                val mime = when (path) { "/index.html" -> "text/html"; "/app.js" -> "application/javascript"; "/app.css" -> "text/css"; "/hall-e.webp" -> "image/webp"; "/hall-e-mark.png" -> "image/png"; else -> null }
+                val mime = when (path) { "/index.html" -> "text/html"; "/app.js" -> "application/javascript"; "/app.css" -> "text/css"; "/hall-e.webp", "/hal.webp", "/wall-e.webp" -> "image/webp"; else -> null }
                 if (request.url.scheme != "https" || request.url.host != ASSET_HOST || request.method != "GET" || mime == null)
                     return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 return WebResourceResponse(mime, "UTF-8", assets.open("orbita" + path))
@@ -103,11 +125,17 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume(); foreground = true
         if (preview) return
+        ContextCompat.registerReceiver(this, reminderReceiver, IntentFilter(RecordingScreenReminder.ACTION_REMINDER), ContextCompat.RECEIVER_NOT_EXPORTED)
+        reminderRegistered = true
         refreshCalendar(); refreshReminders()
         pendingStartId?.let { if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startCapture(it) }
         PhoneAudioTransferWorker.kick(this); handler.removeCallbacks(poll); handler.post(poll)
     }
-    override fun onPause() { foreground = false; handler.removeCallbacks(poll); super.onPause() }
+    override fun onPause() {
+        foreground = false; handler.removeCallbacks(poll); handler.removeCallbacks(resetReminder); resetReminder.run()
+        if (reminderRegistered) { unregisterReceiver(reminderReceiver); reminderRegistered = false }
+        super.onPause()
+    }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumeIntent(intent) }
     private fun consumeIntent(source: Intent) {
         if (preview) return

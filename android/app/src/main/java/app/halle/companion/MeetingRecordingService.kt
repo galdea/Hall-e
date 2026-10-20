@@ -33,6 +33,7 @@ class MeetingRecordingService : Service() {
     private var sharedLeaseClient: SharedSessionClient? = null
     private var sharedLeaseDeadline: LeaseDeadline? = null
     private var sharedLeaseRenewal: AutoCloseable? = null
+    private var screenReminder: RecordingScreenReminder? = null
     private val handler = Handler(Looper.getMainLooper())
 
     private val leasePoll = object : Runnable {
@@ -164,6 +165,7 @@ class MeetingRecordingService : Service() {
                 return false
             }
             registerSilenceMonitor(media)
+            screenReminder = runCatching { RecordingScreenReminder(this, handler).also { it.start() } }.getOrNull()
             if (assignedLease != null) {
                 sharedLeaseRenewal = sharedLeaseClient?.renewWhileRecording(
                     assignedLease, sharedLeaseDeadline!!,
@@ -176,6 +178,8 @@ class MeetingRecordingService : Service() {
             if (leaseGuard != null) handler.postDelayed(leasePoll, LEASE_POLL_MS)
             return true
         } catch (failure: Exception) {
+            screenReminder?.stop()
+            screenReminder = null
             releaseRecorder()
             store.failRecording(id, "Could not start microphone recording: ${failure.javaClass.simpleName}.")
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -213,6 +217,8 @@ class MeetingRecordingService : Service() {
         val id = meetingId ?: run { stopSelf(); return }
         val output = partialFile
         val elapsed = (SystemClock.elapsedRealtime() - startedElapsedMs).coerceAtLeast(0)
+        screenReminder?.stop()
+        screenReminder = null
         handler.removeCallbacks(leasePoll)
         sharedLeaseRenewal?.close()
         sharedLeaseRenewal = null
@@ -309,6 +315,8 @@ class MeetingRecordingService : Service() {
             finishRecording("Android stopped the recording service. The saved audio may be incomplete.")
         } else {
             handler.removeCallbacks(leasePoll)
+            screenReminder?.stop()
+            screenReminder = null
             unregisterSilenceMonitor()
             releaseRecorder()
         }
