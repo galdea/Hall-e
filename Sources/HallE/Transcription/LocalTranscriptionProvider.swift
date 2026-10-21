@@ -157,11 +157,20 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
         private(set) var latestMeaningfulPartial: ChunkResult?
         private(set) var isTerminal = false
         private var observedWordExtents: [WordTimeExtent] = []
+        private var pendingProvisionalRevision = false
 
         mutating func consume(_ event: Event) -> Decision {
             guard !isTerminal else { return .ignored }
             switch event {
             case .partial(let snapshot):
+                // Some Speech callbacks expose placeholder words on a precise
+                // 11ms grid before real timed segments arrive. They are not
+                // evidence of acoustic coverage and must not poison fallback.
+                if Self.isProvisionalElevenMillisecondGrid(snapshot) {
+                    if Self.isMeaningful(snapshot) { pendingProvisionalRevision = true }
+                    return .awaiting
+                }
+                if Self.isMeaningful(snapshot) { pendingProvisionalRevision = false }
                 let extents = Self.validWordExtents(snapshot)
                 if !extents.isEmpty { observedWordExtents = Self.merged(observedWordExtents + extents) }
                 if Self.isMeaningful(snapshot),
@@ -175,6 +184,9 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
                 isTerminal = true
                 if Self.isMeaningful(snapshot) { return .recognized(snapshot) }
                 if let latestMeaningfulPartial {
+                    guard !pendingProvisionalRevision else {
+                        return .failed(Self.incompleteResultsMessage)
+                    }
                     guard Self.covers(Self.validWordExtents(latestMeaningfulPartial),
                                       observedWordExtents) else {
                         return .failed(Self.incompleteResultsMessage)
@@ -206,6 +218,18 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
                 let end = word.start + word.duration
                 guard end.isFinite, end > word.start else { return nil }
                 return WordTimeExtent(start: word.start, end: end)
+            }
+        }
+
+        private static func isProvisionalElevenMillisecondGrid(_ result: ChunkResult) -> Bool {
+            let extents = validWordExtents(result).sorted { $0.start < $1.start }
+            guard !extents.isEmpty else { return false }
+            let step = 0.011
+            let tolerance = 0.000_001
+            let firstStart = extents[0].start
+            return extents.enumerated().allSatisfy { index, extent in
+                abs(extent.end - extent.start - step) <= tolerance &&
+                    abs(extent.start - (firstStart + Double(index) * step)) <= tolerance
             }
         }
 

@@ -72,6 +72,65 @@ struct TranscriptionDedupTests {
         #expect(policy.consume(.final(snapshot("", word: ""))) == .empty)
     }
 
+    private func provisionalGridSnapshot(wordCount: Int = 18,
+                                         startingAt start: TimeInterval = 0) -> LocalTranscriptionProvider.ChunkResult {
+        let words = (0..<wordCount).map { index in
+            word("placeholder", at: start + Double(index) * 0.011, dur: 0.011)
+        }
+        return snapshot(Array(repeating: "placeholder", count: wordCount).joined(separator: " "), words: words)
+    }
+
+    @Test func provisionalElevenMillisecondGridIsIgnoredBeforeRealGroupedSegments() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let real = snapshot(
+            "This is a test to my Mac the map keeps the transcript is deleted after transcript and verified",
+            words: [
+                word("This is", at: 4.14, dur: 1.11),
+                word("a test to my Mac the map keeps the", at: 5.25, dur: 4.23),
+                word("transcript is deleted after transcript and verified", at: 9.48, dur: 4.80)
+            ])
+        #expect(policy.consume(.partial(provisionalGridSnapshot(wordCount: 1))) == .awaiting)
+        #expect(policy.consume(.partial(provisionalGridSnapshot(wordCount: 2))) == .awaiting)
+        #expect(policy.consume(.partial(provisionalGridSnapshot(wordCount: 3))) == .awaiting)
+        #expect(policy.consume(.partial(real)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(real))
+    }
+
+    @Test func provisionalElevenMillisecondGridCannotBePromotedAtEmptyFinal() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        #expect(policy.consume(.partial(provisionalGridSnapshot(wordCount: 1))) == .awaiting)
+        #expect(policy.consume(.partial(provisionalGridSnapshot(wordCount: 2))) == .awaiting)
+        #expect(policy.consume(.partial(provisionalGridSnapshot(wordCount: 3))) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .empty)
+    }
+
+    @Test func provisionalGridAfterRealPrefixMakesEmptyFinalRetryable() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let prefix = snapshot("The opening words.", words: [
+            word("The", at: 0), word("opening", at: 0.5), word("words", at: 1.0)
+        ])
+        #expect(policy.consume(.partial(prefix)) == .awaiting)
+        #expect(policy.consume(.partial(provisionalGridSnapshot(startingAt: 8.0))) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .failed(
+            "Speech returned incomplete results. Your recording is saved; try transcription again."))
+    }
+
+    @Test func laterCompleteRealSnapshotClearsPendingProvisionalRevision() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let prefix = snapshot("The opening words.", words: [
+            word("The", at: 0), word("opening", at: 0.5), word("words", at: 1.0)
+        ])
+        let complete = snapshot("The complete sentence reaches its final word.", words: [
+            word("The", at: 0), word("complete", at: 0.5), word("sentence", at: 1.0),
+            word("reaches", at: 5.0), word("its", at: 5.5), word("final", at: 6.0),
+            word("word", at: 6.5)
+        ])
+        #expect(policy.consume(.partial(prefix)) == .awaiting)
+        #expect(policy.consume(.partial(provisionalGridSnapshot(startingAt: 8.0))) == .awaiting)
+        #expect(policy.consume(.partial(complete)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(complete))
+    }
+
     @Test func fullerPrefixAndTailSurvivesLaterTailOnlySnapshot() {
         var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
         let fuller = snapshot("The phone sends audio, and the Mac saves it.", words: [
