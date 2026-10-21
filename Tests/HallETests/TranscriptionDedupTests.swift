@@ -41,9 +41,12 @@ struct TranscriptionDedupTests {
         #expect(LocalTranscriptionProvider.hasMeaningfulText(in: [blankSystem, spokenMic]))
     }
 
-    private func snapshot(_ text: String, word: String? = nil) -> LocalTranscriptionProvider.ChunkResult {
-        let words = word.map { [self.word($0, at: 0.1, dur: 0.3)] } ?? []
+    private func snapshot(_ text: String, words: [TranscriptSegment]) -> LocalTranscriptionProvider.ChunkResult {
         return LocalTranscriptionProvider.ChunkResult(words: words, formatted: text)
+    }
+
+    private func snapshot(_ text: String, word: String) -> LocalTranscriptionProvider.ChunkResult {
+        snapshot(text, words: [self.word(word, at: 0.1, dur: 0.3)])
     }
 
     @Test func meaningfulFinalWinsOverEarlierPartial() {
@@ -67,6 +70,83 @@ struct TranscriptionDedupTests {
         var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
         #expect(policy.consume(.partial(snapshot(" \n ", word: " "))) == .awaiting)
         #expect(policy.consume(.final(snapshot("", word: ""))) == .empty)
+    }
+
+    @Test func fullerPrefixAndTailSurvivesLaterTailOnlySnapshot() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let fuller = snapshot("The phone sends audio, and the Mac saves it.", words: [
+            word("The", at: 0.0), word("phone", at: 0.5), word("sends", at: 1.0),
+            word("audio", at: 1.5), word("Mac", at: 8.0), word("saves", at: 8.5),
+            word("it", at: 9.0)
+        ])
+        let tail = snapshot("the Mac saves it", words: [
+            word("Mac", at: 8.0), word("saves", at: 8.5), word("it", at: 9.0)
+        ])
+        #expect(policy.consume(.partial(fuller)) == .awaiting)
+        #expect(policy.consume(.partial(tail)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(fuller))
+    }
+
+    @Test func olderSnapshotThatCoversObservedUnionBeatsLongerTailDroppingSnapshot() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let complete = snapshot("Prefix and tail.", words: [
+            word("Prefix", at: 1.0, dur: 1.0), word("tail", at: 10.0, dur: 0.1)
+        ])
+        let tailDropping = snapshot("Expanded prefix only.", words: [word("Expanded", at: 0.8, dur: 1.4)])
+        #expect(policy.consume(.partial(complete)) == .awaiting)
+        #expect(policy.consume(.partial(tailDropping)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(complete))
+    }
+
+    @Test func newerFullUnionSnapshotWinsEvenWithLowerMeasuredDuration() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let earlier = snapshot("First version.", words: [
+            word("First", at: 1.0, dur: 1.0), word("version", at: 10.0, dur: 0.1)
+        ])
+        let fullUnionRevision = snapshot("Revised full sentence.", words: [
+            word("Revised", at: 1.2, dur: 0.6), word("sentence", at: 10.2, dur: 0.4)
+        ])
+        #expect(policy.consume(.partial(earlier)) == .awaiting)
+        #expect(policy.consume(.partial(fullUnionRevision)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(fullUnionRevision))
+    }
+
+    @Test func newerRevisionWinsWhenTemporalCoverageTies() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let earlier = snapshot("The phone send audio.", words: [
+            word("The", at: 0), word("phone", at: 0.5), word("send", at: 1.0), word("audio", at: 1.5)
+        ])
+        let newer = snapshot("The phone sends audio.", words: [
+            word("The", at: 0), word("phone", at: 0.5), word("sends", at: 1.0), word("audio", at: 1.5)
+        ])
+        #expect(policy.consume(.partial(earlier)) == .awaiting)
+        #expect(policy.consume(.partial(newer)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(newer))
+    }
+
+    @Test func disjointPartialSnapshotsCannotBePromotedAtEmptyFinal() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let prefix = snapshot("The phone sends audio.", words: [word("The", at: 0), word("audio", at: 1.0)])
+        let tail = snapshot("after the transcript", words: [word("transcript", at: 10.0)])
+        #expect(policy.consume(.partial(prefix)) == .awaiting)
+        #expect(policy.consume(.partial(tail)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .failed(
+            "Speech returned incomplete results. Your recording is saved; try transcription again."))
+    }
+
+    @Test func completeCumulativePartialResolvesEarlierFragmentation() {
+        var policy = LocalTranscriptionProvider.RecognitionCallbackPolicy()
+        let prefix = snapshot("The phone sends audio.", words: [word("The", at: 0), word("audio", at: 1.0)])
+        let tail = snapshot("after the transcript", words: [word("transcript", at: 10.0)])
+        let complete = snapshot("The phone sends audio after the transcript.", words: [
+            word("The", at: 0), word("phone", at: 0.5), word("sends", at: 0.8),
+            word("audio", at: 1.0), word("after", at: 9.5), word("the", at: 10.0),
+            word("transcript", at: 10.5)
+        ])
+        #expect(policy.consume(.partial(prefix)) == .awaiting)
+        #expect(policy.consume(.partial(tail)) == .awaiting)
+        #expect(policy.consume(.partial(complete)) == .awaiting)
+        #expect(policy.consume(.final(snapshot("", words: []))) == .recognized(complete))
     }
 
     @Test(arguments: [

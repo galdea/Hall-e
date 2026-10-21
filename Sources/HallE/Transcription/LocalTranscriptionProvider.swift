@@ -125,10 +125,19 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
 
     /// Speech can emit useful cumulative partials and then a successful but
     /// empty final callback (observed with the phone's AAC recordings). Keep
-    /// only the latest meaningful snapshot, and consult it only when a final
-    /// callback arrives. Failures never turn an unfinished hypothesis into a
-    /// transcript.
+    /// the best meaningful snapshot by timed-word coverage, and consult it
+    /// only when a final callback arrives. Failures never turn an unfinished
+    /// hypothesis into a transcript.
     struct RecognitionCallbackPolicy: Equatable {
+        private struct WordTimeExtent: Equatable {
+            let start: TimeInterval
+            let end: TimeInterval
+        }
+
+        private static let timingTolerance: TimeInterval = 0.25
+        private static let incompleteResultsMessage =
+            "Speech returned incomplete results. Your recording is saved; try transcription again."
+
         enum Event: Equatable {
             case partial(ChunkResult)
             case final(ChunkResult)
@@ -147,17 +156,31 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
 
         private(set) var latestMeaningfulPartial: ChunkResult?
         private(set) var isTerminal = false
+        private var observedWordExtents: [WordTimeExtent] = []
 
         mutating func consume(_ event: Event) -> Decision {
             guard !isTerminal else { return .ignored }
             switch event {
             case .partial(let snapshot):
-                if Self.isMeaningful(snapshot) { latestMeaningfulPartial = snapshot }
+                let extents = Self.validWordExtents(snapshot)
+                if !extents.isEmpty { observedWordExtents = Self.merged(observedWordExtents + extents) }
+                if Self.isMeaningful(snapshot),
+                   latestMeaningfulPartial.map({
+                       Self.prefers(snapshot, over: $0, observed: observedWordExtents)
+                   }) ?? true {
+                    latestMeaningfulPartial = snapshot
+                }
                 return .awaiting
             case .final(let snapshot):
                 isTerminal = true
                 if Self.isMeaningful(snapshot) { return .recognized(snapshot) }
-                if let latestMeaningfulPartial { return .recognized(latestMeaningfulPartial) }
+                if let latestMeaningfulPartial {
+                    guard Self.covers(Self.validWordExtents(latestMeaningfulPartial),
+                                      observedWordExtents) else {
+                        return .failed(Self.incompleteResultsMessage)
+                    }
+                    return .recognized(latestMeaningfulPartial)
+                }
                 return .empty
             case .failed(let message):
                 isTerminal = true
@@ -173,10 +196,53 @@ struct LocalTranscriptionProvider: TranscriptionProvider {
 
         private static func isMeaningful(_ result: ChunkResult) -> Bool {
             !result.formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                result.words.contains {
-                    !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                        $0.start.isFinite && $0.duration.isFinite && $0.duration > 0
+                !validWordExtents(result).isEmpty
+        }
+
+        private static func validWordExtents(_ result: ChunkResult) -> [WordTimeExtent] {
+            result.words.compactMap { word in
+                guard !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      word.start.isFinite, word.duration.isFinite, word.duration > 0 else { return nil }
+                let end = word.start + word.duration
+                guard end.isFinite, end > word.start else { return nil }
+                return WordTimeExtent(start: word.start, end: end)
+            }
+        }
+
+        private static func merged(_ extents: [WordTimeExtent]) -> [WordTimeExtent] {
+            let sorted = extents.sorted { $0.start < $1.start }
+            return sorted.reduce(into: [WordTimeExtent]()) { result, extent in
+                guard let last = result.last else { result.append(extent); return }
+                if extent.start <= last.end + timingTolerance {
+                    result[result.count - 1] = WordTimeExtent(start: last.start, end: max(last.end, extent.end))
+                } else {
+                    result.append(extent)
                 }
+            }
+        }
+
+        private static func prefers(_ candidate: ChunkResult, over current: ChunkResult,
+                                    observed: [WordTimeExtent]) -> Bool {
+            let candidateExtents = merged(validWordExtents(candidate))
+            let currentExtents = merged(validWordExtents(current))
+            let candidateCoversObserved = covers(candidateExtents, observed)
+            let currentCoversObserved = covers(currentExtents, observed)
+            if candidateCoversObserved != currentCoversObserved { return candidateCoversObserved }
+            let candidateCoverage = candidateExtents.reduce(0) { $0 + $1.end - $1.start }
+            let currentCoverage = currentExtents.reduce(0) { $0 + $1.end - $1.start }
+            if candidateCoverage > currentCoverage + timingTolerance { return true }
+            if currentCoverage > candidateCoverage + timingTolerance { return false }
+            return true // Similar temporal coverage: prefer the newer revision.
+        }
+
+        private static func covers(_ candidate: [WordTimeExtent], _ observed: [WordTimeExtent]) -> Bool {
+            let candidate = merged(candidate)
+            let observed = merged(observed)
+            return observed.allSatisfy { target in
+                candidate.contains {
+                    $0.start <= target.start + timingTolerance && $0.end >= target.end - timingTolerance
+                }
+            }
         }
     }
 
