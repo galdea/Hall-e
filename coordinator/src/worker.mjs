@@ -94,8 +94,18 @@ export class WorkspaceCoordinator {
   }
 
   async fetch(request) {
+    // Network reads must not hold the workspace mutation queue: a slow phone
+    // upload must not delay another recorder's lease renewal. All credentials,
+    // transfer bindings and current state are checked below after buffering.
+    let chunkBytes;
+    const path = new URL(request.url).pathname.replace(/\/$/, "");
+    if (request.method === "PUT" && /^\/v1\/workspaces\/[0-9a-f-]+\/transfers\/[0-9a-f-]+\/chunks\/\d+$/i.test(path)) {
+      if (Number(request.headers.get("content-length")) > AUDIO_CHUNK_BYTES + 28) return fail("body_too_large", 413);
+      try { chunkBytes = await readBounded(request, AUDIO_CHUNK_BYTES + 28); }
+      catch (error) { return parseFailure(error); }
+    }
     return this.serialized(async () => {
-      try { return await this.handle(request); }
+      try { return await this.handle(request, chunkBytes); }
       catch (error) {
         if (error?.message === "workspace_state_limit") return fail("workspace_storage_limit", 507);
         throw error;
@@ -103,7 +113,7 @@ export class WorkspaceCoordinator {
     });
   }
 
-  async handle(request) {
+  async handle(request, chunkBytes) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, "");
     const now = Date.now();
@@ -259,9 +269,8 @@ export class WorkspaceCoordinator {
         const declaredLength = request.headers.get("content-length");
         const length = declaredLength === null ? expectedBytes : Number(declaredLength);
         if (length !== expectedBytes || expectedBytes > AUDIO_CHUNK_BYTES + 28) return fail("invalid_chunk_length");
-        let bytes;
-        try { bytes = await readBounded(request, AUDIO_CHUNK_BYTES + 28); }
-        catch (error) { return parseFailure(error); }
+        const bytes = chunkBytes;
+        if (!bytes) return fail("invalid_chunk_length");
         if (bytes.byteLength !== expectedBytes) return fail("invalid_chunk_length");
         const chunkKey = `phone-chunk:${transferId}:${index}`;
         const old = await this.state.storage.get(chunkKey);

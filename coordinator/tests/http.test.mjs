@@ -253,6 +253,60 @@ test("phone audio transfer is scoped to an explicit Mac consumer and purges only
   assert.equal((await request(env, path(`/transfers/${transferId}/chunks/0`), { token: mac.deviceToken })).status, 404);
 });
 
+for (const revokeWhileUploading of [false, true]) {
+  test(`stalled audio upload permits lease renewal and rechecks credentials (revoke=${revokeWhileUploading})`, async () => {
+    const { env } = fakeCloudflare();
+    const mac = await createWorkspace(env);
+    const phone = (await joinWorkspace(env, mac.workspaceId, mac.inviteToken)).value;
+    const path = suffix => workspacePath(mac, suffix);
+    const recordingId = "47f13ed1-11e1-4fb7-9c88-158084e94a4a";
+    await createSession(env, mac, mac.deviceToken, recordingId);
+    const lease = await (await request(env, path("/lease/claim"), {
+      method: "POST", token: mac.deviceToken, body: { sessionId: recordingId },
+    })).json();
+    assert.equal((await request(env, path("/transfers/consumer"), {
+      method: "POST", token: mac.deviceToken, body: {},
+    })).status, 200);
+    const transferId = "670c74f6-9a38-4bc9-9fdc-e2d090d725f3";
+    assert.equal((await request(env, path("/transfers"), {
+      method: "POST", token: phone.deviceToken,
+      body: { v: 1, protocolVersion: 1, workspaceId: mac.workspaceId, deviceId: phone.deviceId,
+        transferId, recordingId, macDeviceId: mac.deviceId, audioSHA256: "a".repeat(64),
+        plaintextLength: 3, chunkSize: 262144, chunkCount: 1 },
+    })).status, 201);
+    let controller, signalRead;
+    const readStarted = new Promise(resolve => { signalRead = resolve; });
+    const body = new ReadableStream({
+      start(value) { controller = value; controller.enqueue(new Uint8Array(1)); },
+      pull() { signalRead(); },
+    });
+    const upload = worker.fetch(new Request(`https://coordinator.test${path(`/transfers/${transferId}/chunks/0`)}`, {
+      method: "PUT", headers: { authorization: `Bearer ${phone.deviceToken}` }, body, duplex: "half",
+    }), env);
+    await readStarted;
+    let timer;
+    try {
+      const renewal = await Promise.race([
+        request(env, path("/lease/renew"), { method: "POST", token: mac.deviceToken,
+          body: { leaseId: lease.leaseId, generation: lease.generation, generationToken: lease.generationToken } }),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); }),
+      ]);
+      assert.ok(renewal, "lease renewal must finish before the upload body closes");
+      assert.equal(renewal.status, 200);
+      if (revokeWhileUploading) assert.equal((await request(env, path(`/devices/${phone.deviceId}`), {
+        method: "DELETE", token: mac.deviceToken,
+      })).status, 200);
+    } finally {
+      clearTimeout(timer);
+      controller.enqueue(new Uint8Array(30));
+      controller.close();
+    }
+    assert.equal((await upload).status, revokeWhileUploading ? 401 : 201);
+    const chunk = await request(env, path(`/transfers/${transferId}/chunks/0`), { token: mac.deviceToken });
+    assert.equal(chunk.status, revokeWhileUploading ? 404 : 200);
+  });
+}
+
 test("HTTP device revocation rejects future auth and request-size bounds return 413", async () => {
   const { env } = fakeCloudflare();
   const owner = await createWorkspace(env);
