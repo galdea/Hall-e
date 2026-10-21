@@ -38,36 +38,49 @@ struct RecordingTransportView: View {
     @State private var seekingValue: TimeInterval = 0
     @State private var isSeeking = false
 
+    private var audioAvailable: Bool { FileManager.default.fileExists(atPath: session.playbackURL.path) }
+    private var transcriptRetained: Bool {
+        guard let transcript = TranscriptStore.load(session), transcript.status == .completed else { return false }
+        return !transcript.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     private var active: Bool { playback.activeSessionID == session.id }
     private var current: TimeInterval { active ? playback.currentTime : 0 }
     private var duration: TimeInterval { active ? playback.duration : Self.fileDuration(session) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 9) {
-                Button { playback.toggle(session) } label: {
-                    Image(systemName: active && playback.isPlaying ? "pause.fill" : "play.fill")
-                        .frame(width: 18)
+        if !audioAvailable {
+            Label(transcriptRetained
+                  ? PublicUICopy.text("Transcript saved · no audio available", "Transcripción guardada · sin audio")
+                  : PublicUICopy.text("Audio unavailable", "Audio no disponible"),
+                  systemImage: "doc.text")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 9) {
+                    Button { playback.toggle(session) } label: {
+                        Image(systemName: active && playback.isPlaying ? "pause.fill" : "play.fill")
+                            .frame(width: 18)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    Slider(value: Binding(get: { isSeeking ? seekingValue : current }, set: { seekingValue = $0 }),
+                           in: 0...max(1, duration), onEditingChanged: { editing in
+                        isSeeking = editing
+                        if !editing { playback.seek(to: seekingValue) }
+                    })
+                    Text("\((isSeeking ? seekingValue : current).artifactDuration) / \(duration.artifactDuration)")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 82)
                 }
-                .buttonStyle(.borderedProminent).controlSize(.small)
-                Slider(value: Binding(get: { isSeeking ? seekingValue : current }, set: { seekingValue = $0 }),
-                       in: 0...max(1, duration), onEditingChanged: { editing in
-                    isSeeking = editing
-                    if !editing { playback.seek(to: seekingValue) }
-                })
-                Text("\((isSeeking ? seekingValue : current).artifactDuration) / \(duration.artifactDuration)")
-                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 82)
-            }
-            if active, let error = playback.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            HStack {
-                Text(session.stopReason.map { "Stopped: \($0.displayName)" } ?? "Local recording")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([session.playbackURL]) }
-                    .buttonStyle(.link).font(.caption)
+                if active, let error = playback.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                HStack {
+                    Text(session.stopReason.map { "Stopped: \($0.displayName)" } ?? "Local recording")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([session.playbackURL]) }
+                        .buttonStyle(.link).font(.caption)
+                }
             }
         }
     }
@@ -101,7 +114,7 @@ struct TranscriptReaderView: View {
                 Button { exportTranscript() } label: { Image(systemName: "square.and.arrow.up") }
                     .buttonStyle(.borderless).help("Export transcript")
                     .disabled(transcript.isEmpty)
-                if session.transcriptStatus == .completed {
+                if session.transcriptStatus == .completed && FileManager.default.fileExists(atPath: session.playbackURL.path) {
                     Button { showRetranscriptionConfirmation = true } label: {
                         Image(systemName: "arrow.clockwise")
                     }

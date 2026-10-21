@@ -290,7 +290,7 @@ struct RecordingDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text(session.eventTitle).font(.title2.weight(.semibold)); HalleStatusBadge(text: session.transcriptStatus.rawValue, tone: session.transcriptStatus == .failed ? .error : session.transcriptStatus == .completed ? .success : .warning)
-                LabeledContent("Started", value: session.startedAt.formatted(date: .abbreviated, time: .shortened)); LabeledContent("Audio", value: session.micFileName)
+                LabeledContent("Started", value: session.startedAt.formatted(date: .abbreviated, time: .shortened)); LabeledContent("Audio", value: FileManager.default.fileExists(atPath: session.playbackURL.path) ? session.playbackURL.lastPathComponent : PublicUICopy.text("No audio", "Sin audio"))
                 if let note = session.notePath { LabeledContent("Note", value: note) }
                 if recorder.currentSession?.id == session.id && recorder.isRecording {
                     HStack {
@@ -309,14 +309,14 @@ struct RecordingDetailView: View {
                 HStack {
                     Button("Reveal recording folder") { NSWorkspace.shared.activateFileViewerSelecting([session.folderURL]) }
                     Spacer()
-                    Button("Delete Audio…", role: .destructive) { confirmsDeletion = true }
+                    Button(PublicUICopy.text("Delete recording…", "Eliminar grabación…"), role: .destructive) { confirmsDeletion = true }
                         .disabled(recorder.currentSession?.id == session.id && !session.isFinished)
                 }
                 if let deletionError { Text(deletionError).font(.caption).foregroundStyle(.red) }
             }.padding(20)
         }
         .confirmationDialog("Delete this recording?", isPresented: $confirmsDeletion) {
-            Button("Delete Audio", role: .destructive) { deleteRecording() }
+            Button(PublicUICopy.text("Delete recording", "Eliminar grabación"), role: .destructive) { deleteRecording() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This permanently deletes the audio and transcript files from this Mac. The meeting note is kept.")

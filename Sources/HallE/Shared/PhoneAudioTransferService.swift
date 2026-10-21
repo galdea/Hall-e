@@ -411,11 +411,20 @@ final class PhoneAudioTransferService {
             guard let proof,
                   let latest = RecordingStore.allSessions().first(where: { $0.id == candidate.id }),
                   !RecordingCoordinator.isProcessing(sessionID: latest.id) else { continue }
-            if PhoneAudioTransferCleanup.apply(proof, to: latest) {
+            let cleaned = PhoneAudioTransferCleanup.apply(proof, to: latest)
+            releasePlaybackIfAudioWasRemoved(latest)
+            if cleaned {
                 NotificationCenter.default.post(name: .halleRecordingChanged, object: nil)
                 Log.rec.info("reconciled completed phone transfer audio cleanup: \(latest.id.uuidString, privacy: .public)")
             }
         }
+    }
+
+    private func releasePlaybackIfAudioWasRemoved(_ recording: RecordingSession) {
+        let playback = RecordingPlaybackService.shared
+        guard playback.activeSessionID == recording.id,
+              !FileManager.default.fileExists(atPath: recording.playbackURL.path) else { return }
+        playback.stop()
     }
 
     private func importTransfer(_ m: Manifest, config c: PhoneAudioTransferCredentials) async throws {
@@ -512,8 +521,10 @@ final class PhoneAudioTransferService {
         do {
             try PhoneAudioTransferCleanup.purgeAudio(session: librarySession, transferAudioURL: partial)
         } catch {
+            releasePlaybackIfAudioWasRemoved(librarySession)
             throw TransferError.macAudioCleanupFailed
         }
+        releasePlaybackIfAudioWasRemoved(librarySession)
         let receipt: [String: Any]
         if let priorReceipt {
             receipt = priorReceipt
