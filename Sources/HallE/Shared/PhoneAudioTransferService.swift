@@ -99,6 +99,36 @@ enum PhoneAudioTransferRetryPolicy {
     }
 }
 
+enum PhoneAudioTransferCleanup {
+    static func libraryAudioURL(for session: RecordingSession,
+                                recordingsRoot: URL = AppPaths.recordingsDir) -> URL {
+        var folder = recordingsRoot
+        for part in (session.folderPath ?? session.slug).split(separator: "/") where part != "." && part != ".." {
+            folder.appendPathComponent(String(part))
+        }
+        return folder.appendingPathComponent("phone.m4a")
+    }
+
+    /// Removes audio from the session's current folder, which can differ from
+    /// the path captured before transcript-based filing moved the recording.
+    static func purgeAudio(session: RecordingSession, transferAudioURL: URL,
+                           recordingsRoot: URL = AppPaths.recordingsDir) throws {
+        let libraryAudio = libraryAudioURL(for: session, recordingsRoot: recordingsRoot)
+        if FileManager.default.fileExists(atPath: libraryAudio.path) {
+            try FileManager.default.removeItem(at: libraryAudio)
+        }
+        if FileManager.default.fileExists(atPath: transferAudioURL.path) {
+            try FileManager.default.removeItem(at: transferAudioURL)
+        }
+        guard !FileManager.default.fileExists(atPath: libraryAudio.path),
+              !FileManager.default.fileExists(atPath: transferAudioURL.path) else {
+            throw AudioCleanupError.filesRemain
+        }
+    }
+
+    enum AudioCleanupError: Error { case filesRemain }
+}
+
 /// Receives explicitly queued phone audio, transcribes it on this Mac, and
 /// publishes a deletion receipt only after transcript.json survives readback.
 @MainActor
@@ -196,10 +226,10 @@ final class PhoneAudioTransferService {
 
         let sessionRecord = try await importedSession(transfer: m, audioFile: partial, config: c, audioId: audioID)
         let receiptFile = partialRoot.appendingPathComponent(m.transferId + ".receipt.json")
-        let libraryAudio = sessionRecord.folderURL.appendingPathComponent("phone.m4a")
         let existingTranscript = TranscriptStore.load(sessionRecord)
         let jobStatus = (sessionRecord.transcriptionJob ?? .legacy(status: sessionRecord.transcriptStatus)).status
-        let hasBothAudioCopies = hasAudioBytes(at: partial) && hasAudioBytes(at: libraryAudio)
+        let hasBothAudioCopies = hasAudioBytes(at: partial) &&
+            hasAudioBytes(at: PhoneAudioTransferCleanup.libraryAudioURL(for: sessionRecord))
         if PhoneAudioTransferRetryPolicy.shouldRetryCompletedEmptyTranscript(
             jobStatus: jobStatus, sessionStatus: sessionRecord.transcriptStatus,
             transcript: existingTranscript, hasBothAudioCopies: hasBothAudioCopies,
@@ -239,10 +269,11 @@ final class PhoneAudioTransferService {
         }
         // The phone only deletes after receipt, so the Mac can now clean its
         // imported audio copies. The library session and transcript are durable.
-        if FileManager.default.fileExists(atPath: libraryAudio.path) { try FileManager.default.removeItem(at: libraryAudio) }
-        if FileManager.default.fileExists(atPath: partial.path) { try FileManager.default.removeItem(at: partial) }
-        guard !FileManager.default.fileExists(atPath: libraryAudio.path),
-              !FileManager.default.fileExists(atPath: partial.path) else { throw TransferError.macAudioCleanupFailed }
+        do {
+            try PhoneAudioTransferCleanup.purgeAudio(session: librarySession, transferAudioURL: partial)
+        } catch {
+            throw TransferError.macAudioCleanupFailed
+        }
         let receipt: [String: Any]
         if let priorReceipt {
             receipt = priorReceipt

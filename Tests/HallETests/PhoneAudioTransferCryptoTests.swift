@@ -114,6 +114,49 @@ struct PhoneAudioTransferCryptoTests {
         stale = receipt; stale["macAudioPurged"] = false
         #expect(!PhoneAudioTransferCrypto.storedReceiptMatches(stale, fields: fields, transcriptHash: transcriptHash, key: key))
     }
+
+    @Test func transferCleanupUsesSessionFolderAfterTranscriptFilingMovesIt() throws {
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("halle-phone-transfer-cleanup-\(UUID().uuidString)", isDirectory: true)
+        let recordingsRoot = temporaryRoot.appendingPathComponent("Recordings", isDirectory: true)
+        let transferAudio = temporaryRoot.appendingPathComponent("transfer.m4a")
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+        let event = UnifiedEvent(dedupKey: "phone-transfer:test-transfer", title: "Reunión instantánea",
+            startTs: Date(timeIntervalSince1970: 1_792_540_000), endTs: Date(timeIntervalSince1970: 1_792_540_060),
+            isAllDay: false, status: "confirmed", effectiveResponse: nil, meetingURL: nil, location: nil,
+            descriptionText: nil, htmlLink: nil, organizerEmail: nil, attendeesJSON: nil, iCalUID: nil,
+            winnerAccountEmail: "", projectId: nil, projectConfidence: nil, sourcesJSON: "[]")
+        var session = RecordingSession(event: event, notePath: nil, sourceKind: .manual)
+        session.playbackFileName = "phone.m4a"
+        session.folderPath = "Unclassified/\(session.slug)"
+        let originalFolder = recordingsRoot.appendingPathComponent(session.folderPath!)
+        try FileManager.default.createDirectory(at: originalFolder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(session).write(to: originalFolder.appendingPathComponent("session.json"))
+        try Data("library audio".utf8).write(to: originalFolder.appendingPathComponent("phone.m4a"))
+        try Data("transfer audio".utf8).write(to: transferAudio)
+
+        // Successful transcription files the session into a descriptive folder.
+        let movedRelativePath = "Unclassified/2026-10-20 2054 - Reunión instantánea"
+        let movedFolder = recordingsRoot.appendingPathComponent(movedRelativePath)
+        try FileManager.default.createDirectory(at: movedFolder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: originalFolder, to: movedFolder)
+        session.folderPath = movedRelativePath
+        try JSONEncoder().encode(session).write(to: movedFolder.appendingPathComponent("session.json"), options: .atomic)
+
+        let currentSession = try #require(RecordingStore.sessions(in: recordingsRoot)
+            .first(where: { $0.eventDedupKey == event.dedupKey }))
+        let renamedLibraryAudio = PhoneAudioTransferCleanup.libraryAudioURL(for: currentSession,
+                                                                            recordingsRoot: recordingsRoot)
+        #expect(renamedLibraryAudio.path == movedFolder.appendingPathComponent("phone.m4a").path)
+        #expect(FileManager.default.fileExists(atPath: renamedLibraryAudio.path))
+
+        try PhoneAudioTransferCleanup.purgeAudio(session: currentSession, transferAudioURL: transferAudio,
+                                                 recordingsRoot: recordingsRoot)
+
+        #expect(!FileManager.default.fileExists(atPath: renamedLibraryAudio.path))
+        #expect(!FileManager.default.fileExists(atPath: transferAudio.path))
+    }
 }
 
 private extension Data {
