@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import HallE
 
@@ -157,6 +158,170 @@ struct PhoneAudioTransferCryptoTests {
         #expect(!FileManager.default.fileExists(atPath: renamedLibraryAudio.path))
         #expect(!FileManager.default.fileExists(atPath: transferAudio.path))
     }
+
+    @Test func localReceiptReconciliationRequiresSignedCurrentArtifacts() throws {
+        let key = Data(repeating: 7, count: 32)
+        let workspace = "10000000-0000-4000-8000-000000000001"
+        let phone = "20000000-0000-4000-8000-000000000001"
+        let mac = "30000000-0000-4000-8000-000000000001"
+        let transfer = "40000000-0000-4000-8000-000000000001"
+        let recording = "50000000-0000-4000-8000-000000000001"
+        let audioBytes = Data("verified phone audio".utf8)
+
+        func makeFixture(transcriptText: String = "Verified spoken words",
+                         partialBytes: Data? = nil,
+                         tamperManifestMAC: Bool = false,
+                         tamperReceiptMAC: Bool = false) throws -> (URL, URL, URL, RecordingSession) {
+            let temporary = FileManager.default.temporaryDirectory
+                .appendingPathComponent("halle-local-transfer-reconcile-\(UUID().uuidString)", isDirectory: true)
+            let recordingsRoot = temporary.appendingPathComponent("Recordings", isDirectory: true)
+            let transfersRoot = temporary.appendingPathComponent("PhoneTransfers", isDirectory: true)
+            let folderPath = "Unclassified/2026-10-20 verified phone transfer"
+            let folder = recordingsRoot.appendingPathComponent(folderPath)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: transfersRoot, withIntermediateDirectories: true)
+
+            let event = UnifiedEvent(dedupKey: "phone-transfer:\(transfer)", title: "Verified phone transfer",
+                startTs: Date(timeIntervalSince1970: 1_792_540_000), endTs: Date(timeIntervalSince1970: 1_792_540_060),
+                isAllDay: false, status: "confirmed", effectiveResponse: nil, meetingURL: nil, location: nil,
+                descriptionText: nil, htmlLink: nil, organizerEmail: nil, attendeesJSON: nil, iCalUID: nil,
+                winnerAccountEmail: "", projectId: nil, projectConfidence: nil, sourcesJSON: "[]")
+            var session = RecordingSession(event: event, notePath: nil, sourceKind: .manual)
+            session.folderPath = folderPath
+            session.playbackFileName = "phone.m4a"
+            session.transcriptStatus = .completed
+            session.transcriptionJob = TranscriptionJob(status: .completed)
+            session.sharedSessionID = recording
+            try JSONEncoder().encode(session).write(to: folder.appendingPathComponent("session.json"))
+            try audioBytes.write(to: folder.appendingPathComponent("phone.m4a"))
+            let transcript = Transcript(sessionID: session.id, localeUsed: "en-US",
+                segments: transcriptText.isEmpty ? [] : [TranscriptSegment(start: 0, duration: 1,
+                    text: transcriptText, track: "mic")], status: .completed, source: "sfspeech-on-device")
+            let transcriptBytes = try JSONEncoder().encode(transcript)
+            try transcriptBytes.write(to: folder.appendingPathComponent("transcript.json"))
+            if let partialBytes {
+                try partialBytes.write(to: transfersRoot.appendingPathComponent(transfer + ".m4a"))
+            }
+
+            let chunkSize = 262_144
+            let manifestFields = ["1", "1", workspace, phone, mac, transfer, recording,
+                Data(audioBytes).sha256Hex, String(audioBytes.count), String(chunkSize),
+                String((audioBytes.count + chunkSize - 1) / chunkSize)]
+            let manifestCanonical = "halle-phone-audio-manifest-v1\n" + manifestFields.joined(separator: "\n")
+            var manifestMAC = PhoneAudioTransferCrypto.manifestMAC(key: key, canonical: manifestCanonical)
+            if tamperManifestMAC { manifestMAC[manifestMAC.startIndex] ^= 1 }
+            let signedManifest: [String: String] = ["canonical": manifestCanonical,
+                "mac": SharedMeetingCrypto.urlEncode(manifestMAC)]
+            try JSONSerialization.data(withJSONObject: signedManifest, options: [.sortedKeys])
+                .write(to: transfersRoot.appendingPathComponent(transfer + ".manifest.json"))
+
+            let receiptFields = ["1", "1", transfer, workspace, phone, mac, recording,
+                manifestFields[7], manifestFields[8], manifestFields[9], manifestFields[10]]
+            let savedAtMs = 1_792_540_000_000
+            let transcriptHash = transcriptBytes.sha256Hex
+            let canonical = "halle-phone-audio-receipt-v1\n" +
+                (receiptFields + [transcriptHash, "true", String(savedAtMs)]).joined(separator: "\n")
+            var receiptMAC = PhoneAudioTransferCrypto.receiptMAC(key: key, canonical: canonical)
+            if tamperReceiptMAC { receiptMAC[receiptMAC.startIndex] ^= 1 }
+            let receipt: [String: Any] = ["v": 1, "protocolVersion": 1, "transferId": transfer,
+                "workspaceId": workspace, "deviceId": phone, "macDeviceId": mac, "recordingId": recording,
+                "audioSHA256": manifestFields[7], "plaintextLength": audioBytes.count,
+                "chunkSize": chunkSize, "chunkCount": 1, "transcriptSHA256": transcriptHash,
+                "macAudioPurged": true, "savedAtMs": savedAtMs,
+                "mac": receiptMAC.base64URLEncoded]
+            try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+                .write(to: transfersRoot.appendingPathComponent(transfer + ".receipt.json"))
+            return (recordingsRoot, transfersRoot, temporary, session)
+        }
+
+        let valid = try makeFixture(partialBytes: audioBytes)
+        defer { try? FileManager.default.removeItem(at: valid.2) }
+        #expect(PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: valid.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: valid.0, transfersRoot: valid.1))
+        #expect(!FileManager.default.fileExists(atPath: valid.0.appendingPathComponent(valid.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+        #expect(!FileManager.default.fileExists(atPath: valid.1.appendingPathComponent(transfer + ".m4a").path))
+
+        let badSignature = try makeFixture(tamperManifestMAC: true)
+        defer { try? FileManager.default.removeItem(at: badSignature.2) }
+        #expect(!PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: badSignature.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: badSignature.0, transfersRoot: badSignature.1))
+        #expect(FileManager.default.fileExists(atPath: badSignature.0.appendingPathComponent(badSignature.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+
+        let badReceipt = try makeFixture(tamperReceiptMAC: true)
+        defer { try? FileManager.default.removeItem(at: badReceipt.2) }
+        #expect(!PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: badReceipt.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: badReceipt.0, transfersRoot: badReceipt.1))
+        #expect(FileManager.default.fileExists(atPath: badReceipt.0.appendingPathComponent(badReceipt.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+
+        let wrongWorkspace = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: wrongWorkspace.2) }
+        #expect(!PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: wrongWorkspace.3,
+            workspaceID: "60000000-0000-4000-8000-000000000001", macDeviceID: mac, key: key,
+            recordingsRoot: wrongWorkspace.0, transfersRoot: wrongWorkspace.1))
+        #expect(FileManager.default.fileExists(atPath: wrongWorkspace.0.appendingPathComponent(wrongWorkspace.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+
+        let changedTranscript = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: changedTranscript.2) }
+        let changed = Transcript(sessionID: changedTranscript.3.id, localeUsed: "en-US",
+            segments: [TranscriptSegment(start: 0, duration: 1, text: "Edited after receipt", track: "mic")],
+            status: .completed, source: "sfspeech-on-device")
+        try JSONEncoder().encode(changed).write(to: changedTranscript.0
+            .appendingPathComponent(changedTranscript.3.folderPath!).appendingPathComponent("transcript.json"), options: .atomic)
+        #expect(!PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: changedTranscript.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: changedTranscript.0, transfersRoot: changedTranscript.1))
+        #expect(FileManager.default.fileExists(atPath: changedTranscript.0.appendingPathComponent(changedTranscript.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+
+        let blank = try makeFixture(transcriptText: " \n ")
+        defer { try? FileManager.default.removeItem(at: blank.2) }
+        #expect(!PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: blank.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: blank.0, transfersRoot: blank.1))
+        #expect(FileManager.default.fileExists(atPath: blank.0.appendingPathComponent(blank.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+
+        let mismatchedPartial = try makeFixture(partialBytes: Data("different bytes".utf8))
+        defer { try? FileManager.default.removeItem(at: mismatchedPartial.2) }
+        #expect(!PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: mismatchedPartial.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: mismatchedPartial.0, transfersRoot: mismatchedPartial.1))
+        #expect(FileManager.default.fileExists(atPath: mismatchedPartial.0.appendingPathComponent(mismatchedPartial.3.folderPath!)
+            .appendingPathComponent("phone.m4a").path))
+
+        let changedAfterProof = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: changedAfterProof.2) }
+        let proof = try #require(PhoneAudioTransferCleanup.prepareProof(
+            eventDedupKey: changedAfterProof.3.eventDedupKey,
+            sharedSessionID: changedAfterProof.3.sharedSessionID, sessionID: changedAfterProof.3.id,
+            relativeFolder: changedAfterProof.3.folderPath!, workspaceID: workspace, macDeviceID: mac,
+            key: key, recordingsRoot: changedAfterProof.0, transfersRoot: changedAfterProof.1))
+        let changedAudioURL = changedAfterProof.0.appendingPathComponent(changedAfterProof.3.folderPath!)
+            .appendingPathComponent("phone.m4a")
+        let changedAudio = try Data(contentsOf: changedAudioURL) + Data(" changed".utf8)
+        try changedAudio.write(to: changedAudioURL, options: .atomic)
+        #expect(!PhoneAudioTransferCleanup.apply(proof, to: changedAfterProof.3,
+                                                 recordingsRoot: changedAfterProof.0))
+        #expect(FileManager.default.fileExists(atPath: changedAudioURL.path))
+
+        let stagingOnly = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: stagingOnly.2) }
+        let libraryAudioURL = stagingOnly.0.appendingPathComponent(stagingOnly.3.folderPath!)
+            .appendingPathComponent("phone.m4a")
+        try FileManager.default.removeItem(at: libraryAudioURL)
+        try audioBytes.write(to: stagingOnly.1.appendingPathComponent(transfer + ".m4a"))
+        #expect(PhoneAudioTransferCleanup.reconcileStoredReceiptAudio(session: stagingOnly.3,
+            workspaceID: workspace, macDeviceID: mac, key: key,
+            recordingsRoot: stagingOnly.0, transfersRoot: stagingOnly.1))
+        #expect(!FileManager.default.fileExists(atPath: stagingOnly.1.appendingPathComponent(transfer + ".m4a").path))
+    }
 }
 
 private extension Data {
@@ -173,5 +338,8 @@ private extension Data {
     var base64URLEncoded: String {
         base64EncodedString().replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+    var sha256Hex: String {
+        SHA256.hash(data: self).map { String(format: "%02x", $0) }.joined()
     }
 }
