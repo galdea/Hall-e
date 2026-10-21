@@ -266,7 +266,9 @@ class SharedSessionActivity : Activity() {
             .setPrompt("Escanea el QR de invitación de Hall-e en tu Mac")
             .setBeepEnabled(false)
             .setBarcodeImageEnabled(false)
-            .setOrientationLocked(true)
+            // The manifest owns portrait orientation. ZXing must not lock the
+            // device's previous display rotation over that explicit choice.
+            .setOrientationLocked(false)
         options.initiateScan()
     }
 

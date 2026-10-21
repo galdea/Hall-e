@@ -13,8 +13,8 @@ export function mountRobotRig(root,host,image,preference){
   // Shoulder and elbow articulation lets the claws lift to the chest, instead
   // of making a small wrist swing. The original hands frame the red lens.
   const cuts=[
-    {side:'left',full:'M0 38L28 39L35 47L31 57L26 65L25 79L22 100H0Z',lower:'M0 57.6L16.6 57L26 65L25 79L22 100H0Z',wristCut:'M0 81.25H100V100H0Z',thumb:'M16 82L20 81.8L23.8 87.8L23.5 91.7L20.5 91.6L17.5 87.8L14.8 85Z',fingers:'M6 85.5L9.5 84.8L13.2 86.4L16.5 86L19.4 87.2L20.5 90L19.4 94.1L17.1 97.3L13.8 96.6L10.5 94.1L7.9 91.1Z',shoulder:[300,690],elbow:[174,841],wrist:[170,1130],endWrist:[570,740],handCut:1115,thumbSource:[[205,1160],[235,1205],[260,1245]],thumbTarget:[[605,770],[625,830],[665,890]],fingerSource:[[100,1190],[132,1255],[177,1291],[230,1320]],fingerTarget:[[500,800],[535,710],[605,695],[665,735]]},
-    {side:'right',full:'M76 42L100 40V100H82L79 82L80 65L76 61L76 55L72 49Z',lower:'M79.4 62L89 58.3L100 65.6V100H82L79 82Z',wristCut:'M0 82.7H100V100H0Z',thumb:'M82.8 83.2L87.8 83.8L90.5 86.3L90.1 89.2L87.4 91L84.3 88.4Z',fingers:'M86.1 86.3L89.1 85.1L92.3 86.2L95 85.8L98 87.2L98.5 90.4L97.1 94.1L94.6 97.1L91.4 96.7L88.8 94.2L86.2 91Z',shoulder:[875,704],elbow:[963,914],wrist:[1030,1150],endWrist:[760,750],handCut:1135,thumbSource:[[995,1170],[970,1210],[950,1250]],thumbTarget:[[725,770],[705,830],[665,890]],fingerSource:[[1090,1190],[1080,1255],[1045,1291],[1000,1320]],fingerTarget:[[820,790],[790,710],[725,695],[665,735]]},
+    {side:'left',full:'M0 38L28 39L35 47L31 57L26 65L25 79L22 100H0Z',lower:'M0 57.6L16.6 57L26 65L25 79L22 100H0Z',wristCut:'M0 81.25H100V100H0Z',thumb:'M16 82L20 81.8L23.8 87.8L23.5 91.7L20.5 91.6L17.5 87.8L14.8 85Z',fingers:'M9.6 87.3H15.7V97H9.6Z',shoulder:[300,690],elbow:[174,841],wrist:[170,1130],endWrist:[590,820],handTurn:70,handCut:1115,thumbSource:[[205,1160],[235,1205],[260,1245]],thumbTarget:[[574,863],[620,905],[665,940]],fingerSource:[[140,1210],[140,1232],[140,1255],[140,1291],[140,1330]],fingerTarget:[[505,819],[500,735],[540,680],[605,680],[665,780]]},
+    {side:'right',full:'M76 42L100 40V100H82L79 82L80 65L76 61L76 55L72 49Z',lower:'M79.4 62L89 58.3L100 65.6V100H82L79 82Z',wristCut:'M0 82.7H100V100H0Z',thumb:'M84.4 82.7L87.8 83.7L88.4 86.7L85.8 91L84.5 91.9L82.2 91.2L81.7 90.1L83.3 87.1L83 85.3Z',fingers:'M90.2 87.3H95V97H90.2Z',shoulder:[875,704],elbow:[963,914],wrist:[1030,1150],endWrist:[742,830],handTurn:-70,handCut:1135,thumbSource:[[995,1170],[970,1210],[950,1250]],thumbTarget:[[749,870],[710,905],[665,940]],fingerSource:[[1070,1210],[1070,1232],[1070,1255],[1070,1291],[1070,1330]],fingerTarget:[[812,813],[820,735],[780,680],[725,680],[665,780]]},
   ];
   const angle=(a,b)=>Math.atan2(b[1]-a[1],b[0]-a[0]);
   const distance=(a,b)=>Math.hypot(b[0]-a[0],b[1]-a[1]);
@@ -37,31 +37,29 @@ export function mountRobotRig(root,host,image,preference){
   defs.append(body);
   const chassis=element('g',{'data-mechanism-part':'body'});
   chassis.append(picture(`${prefix}-body`));rig.append(chassis);
-  const metal=element('pattern',{id:`${prefix}-joint-metal`,patternUnits:'userSpaceOnUse',width:64,height:64});
-  metal.append(element('image',{href:'/hall-e.webp',x:-120,y:-1220,width,height}));defs.append(metal);
-  // The photo has no hidden joint surfaces. Textured bearing sleeves reveal
-  // as the same original finger pieces turn, keeping their hinges connected.
+  // Original hinge artwork carries the gesture. Small inner pins only cover
+  // the newly exposed seams; no long sleeve draws across the heart opening.
   const bearing=(a,b)=>{
-    const g=element('g',{'data-finger-bearing':'',opacity:0}),d=`M${a.join(' ')}L${b.join(' ')}`;
-    g.append(element('path',{d,stroke:'#11191a','stroke-width':38,'stroke-linecap':'round',fill:'none'}));
-    g.append(element('path',{d,stroke:`url(#${prefix}-joint-metal)`,'stroke-width':30,'stroke-linecap':'round',fill:'none'}));
-    g.append(element('path',{d,stroke:'#d8c3a055','stroke-width':2,'stroke-linecap':'round',fill:'none'}));
-    g.append(element('circle',{cx:a[0],cy:a[1],r:20,fill:'#1b2424',stroke:'#b69a66','stroke-width':2}));
-    g.append(element('circle',{cx:a[0],cy:a[1],r:8,fill:'#665331',stroke:'#c9b487','stroke-width':2}));
+    const g=element('g',{'data-finger-bearing':'',opacity:0});
+    g.append(element('circle',{cx:a[0],cy:a[1],r:9,fill:'#1b2424',stroke:'#b69a66','stroke-width':1.5}));
+    g.append(element('circle',{cx:a[0],cy:a[1],r:3,fill:'#665331'}));
     return g;
   };
   const arms=[];
   for(const part of cuts){
     const upperMask=mask(`${prefix}-${part.side}-upper`),lowerMask=mask(`${prefix}-${part.side}-lower`);
-    const wristMask=mask(`${prefix}-${part.side}-wrist`),thumbMasks=[0,1].map(i=>mask(`${prefix}-${part.side}-thumb-${i}`)),fingerMasks=[0,1,2].map(i=>mask(`${prefix}-${part.side}-finger-${i}`));
+    const wristMask=mask(`${prefix}-${part.side}-wrist`),thumbMasks=[0,1].map(i=>mask(`${prefix}-${part.side}-thumb-${i}`)),fingerMasks=Array.from({length:20},(_,i)=>i).map(i=>mask(`${prefix}-${part.side}-finger-${i}`));
     upperMask.append(shape(part.full,'white'),shape(part.lower,'black'));
     lowerMask.append(shape(part.lower,'white'),shape(part.wristCut,'black'),shape(part.thumb,'black'),shape(part.fingers,'black'));
     wristMask.append(shape(part.lower,'white'),element('rect',{x:0,y:0,width,height:part.handCut,fill:'black'}),shape(part.thumb,'black'),shape(part.fingers,'black'));
     thumbMasks[0].append(shape(part.thumb,'white'),element('rect',{x:0,y:height*.887,width,height:height*.113,fill:'black'}));
     thumbMasks[1].append(shape(part.thumb,'white'),element('rect',{x:0,y:0,width,height:height*.887,fill:'black'}));
-    fingerMasks[0].append(shape(part.fingers,'white'),shape(part.thumb,'black'),element('rect',{x:0,y:height*.915,width,height:height*.085,fill:'black'}));
-    fingerMasks[1].append(shape(part.fingers,'white'),shape(part.thumb,'black'),element('rect',{x:0,y:0,width,height:height*.915,fill:'black'}),element('rect',{x:0,y:height*.941,width,height:height*.059,fill:'black'}));
-    fingerMasks[2].append(shape(part.fingers,'white'),shape(part.thumb,'black'),element('rect',{x:0,y:0,width,height:height*.941,fill:'black'}));
+    const fingerCuts=Array.from({length:21},(_,i)=>1210+i*6);
+    fingerMasks.forEach((m,i)=>{
+      m.append(shape(part.fingers,'white'),shape(part.thumb,'black'));
+      if(i)m.append(element('rect',{x:0,y:0,width,height:fingerCuts[i]-1.2,fill:'black'}));
+      if(i<fingerMasks.length-1)m.append(element('rect',{x:0,y:fingerCuts[i+1]+1.2,width,height:height-fingerCuts[i+1],fill:'black'}));
+    });
     defs.append(upperMask,lowerMask,wristMask,...thumbMasks,...fingerMasks);
     const stage=element('g',{'data-mechanism-part':`${part.side}-arm`});
     const upper=element('g',{'data-robot-arm':part.side}),lower=element('g',{'data-robot-forearm':part.side});
@@ -69,7 +67,7 @@ export function mountRobotRig(root,host,image,preference){
     const wrist=element('g',{'data-robot-wrist':part.side});wrist.append(picture(`${prefix}-${part.side}-wrist`));
     lower.append(wrist);upper.append(picture(`${prefix}-${part.side}-upper`),lower);stage.append(upper);
     const thumbParts=thumbMasks.map((_,i)=>{const g=element('g',{'data-robot-thumb-segment':`${part.side}-${i}`});g.append(bearing(part.thumbSource[i],part.thumbSource[i+1]),picture(`${prefix}-${part.side}-thumb-${i}`));wrist.append(g);return g;});
-    const fingerParts=fingerMasks.map((_,i)=>{const g=element('g',{'data-robot-finger-segment':`${part.side}-${i}`});g.append(bearing(part.fingerSource[i],part.fingerSource[i+1]),picture(`${prefix}-${part.side}-finger-${i}`));wrist.append(g);return g;});
+    const fingerParts=fingerMasks.map((_,i)=>{const g=element('g',{'data-robot-finger-segment':`${part.side}-${i}`});g.append(picture(`${prefix}-${part.side}-finger-${i}`));wrist.append(g);return g;});
     rig.append(stage);
     arms.push({...part,upperElement:upper,lowerElement:lower,wristElement:wrist,thumbElements:thumbParts,fingerElements:fingerParts});
   }
@@ -90,22 +88,49 @@ export function mountRobotRig(root,host,image,preference){
     for(const arm of arms){
       arm.upperElement.setAttribute('transform',`rotate(${(arm.upper*ease).toFixed(3)} ${arm.shoulder.join(' ')})`);
       arm.lowerElement.setAttribute('transform',`rotate(${(arm.lowerAngle*ease).toFixed(3)} ${arm.elbow.join(' ')})`);
-      arm.wristElement.setAttribute('transform',`rotate(${(-(arm.upper+arm.lowerAngle)*ease).toFixed(3)} ${arm.wrist.join(' ')})`);
+      arm.wristElement.setAttribute('transform',`rotate(${((-(arm.upper+arm.lowerAngle)+arm.handTurn)*ease).toFixed(3)} ${arm.wrist.join(' ')})`);
       // Forward articulation keeps every phalanx on the previous joint all
       // the way through the gesture, rather than sliding bitmap strips.
       const mapSegments=(elements,source,target,narrow)=>{
+        const turn=arm.handTurn*Math.PI/180;
+        const local=target.map(([x,y])=>{const dx=x-arm.endWrist[0],dy=y-arm.endWrist[1];return [arm.wrist[0]+dx*Math.cos(turn)+dy*Math.sin(turn),arm.wrist[1]-dx*Math.sin(turn)+dy*Math.cos(turn)];});
         let joint=[...source[0]];
         elements.forEach((group,i)=>{
-          const a=source[i],b=source[i+1],c=target[i],d=target[i+1];
+          const a=source[i],b=source[i+1],c=local[i],d=local[i+1];
           group.children[0].setAttribute('opacity',String(ease));
           const sourceAngle=angle(a,b),targetAngle=angle(c,d),direction=sourceAngle+wrap(targetAngle-sourceAngle)*ease;
           const length=distance(a,b)+(distance(c,d)-distance(a,b))*ease,size=length/distance(a,b);
-          group.setAttribute('transform',`translate(${joint.join(' ')}) rotate(${direction*180/Math.PI}) scale(${size} ${1-(1-narrow)*ease}) rotate(${-sourceAngle*180/Math.PI}) translate(${-a[0]} ${-a[1]})`);
+          group.setAttribute('transform',`translate(${joint.join(' ')}) rotate(${direction*180/Math.PI}) scale(${size} ${1-(1-(Array.isArray(narrow)?narrow[i]:narrow))*ease}) rotate(${-sourceAngle*180/Math.PI}) translate(${-a[0]} ${-a[1]})`);
           joint=[joint[0]+Math.cos(direction)*length,joint[1]+Math.sin(direction)*length];
         });
       };
-      mapSegments(arm.thumbElements,arm.thumbSource,arm.thumbTarget,.48);
-      mapSegments(arm.fingerElements,arm.fingerSource,arm.fingerTarget,.65);
+      mapSegments(arm.thumbElements,arm.thumbSource,arm.thumbTarget,.8);
+      // Bend the photographed index tine continuously. Fine connected surface
+      // slices preserve the original metal and avoid broad bitmap bands that
+      // projected past the real fingertips and crossed the chest.
+      const curves=arm.side==='left'
+        ? [[[505,819],[475,740],[490,675],[555,675]],[[555,675],[615,675],[645,720],[665,755]]]
+        : [[[812,813],[845,740],[825,675],[775,675]],[[775,675],[720,675],[685,720],[665,755]]];
+      const turn=arm.handTurn*Math.PI/180;
+      const localPoint=([x,y])=>{const dx=x-arm.endWrist[0],dy=y-arm.endWrist[1];return [arm.wrist[0]+dx*Math.cos(turn)+dy*Math.sin(turn),arm.wrist[1]-dx*Math.sin(turn)+dy*Math.cos(turn)];};
+      let joint=[arm.fingerSource[0][0],1210],previousDirection=Math.PI/2;
+      const start=localPoint(curves[0][0]);
+      joint=[joint[0]+(start[0]-joint[0])*ease,joint[1]+(start[1]-joint[1])*ease];
+      arm.fingerElements.forEach((group,i)=>{
+        const t=(i+.5)/arm.fingerElements.length,j=t<.5?0:1,u=t*2-j,v=1-u;
+        const [a,b,c,d]=curves[j];
+        const tangent=[0,1].map(k=>3*v*v*(b[k]-a[k])+6*v*u*(c[k]-b[k])+3*u*u*(d[k]-c[k]));
+        const sourceX=arm.fingerSource[0][0],sourceY=1210+t*120;
+        const localDX=tangent[0]*Math.cos(turn)+tangent[1]*Math.sin(turn),localDY=-tangent[0]*Math.sin(turn)+tangent[1]*Math.cos(turn);
+        const rawDirection=Math.atan2(localDY,localDX);
+        const unwrapped=previousDirection+wrap(rawDirection-previousDirection);
+        previousDirection=unwrapped;
+        const direction=Math.PI/2+(unwrapped-Math.PI/2)*ease;
+        const length=6*(1+(Math.hypot(...tangent)/60-1)*ease);
+        const center=[joint[0]+Math.cos(direction)*length/2,joint[1]+Math.sin(direction)*length/2];
+        group.setAttribute('transform',`translate(${center.join(' ')}) rotate(${(direction-Math.PI/2)*180/Math.PI}) scale(${1-.3*ease} ${length/6}) translate(${-sourceX} ${-sourceY})`);
+        joint=[joint[0]+Math.cos(direction)*length,joint[1]+Math.sin(direction)*length];
+      });
     }
   };
   function tick(now){
