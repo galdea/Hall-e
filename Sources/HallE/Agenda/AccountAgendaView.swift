@@ -105,7 +105,7 @@ struct AccountAgendaView: View {
             if new == nil { model.resetChallenge() }
         }
         .sheet(item: $editing) { meeting in
-            AccountMeetingEditor(meeting: meeting) { updated in
+            AccountMeetingEditor(meeting: meeting, projects: model.cache.visible.compactMap(\.project)) { updated in
                 try model.enqueue(updated)
                 refresh()
             }
@@ -190,6 +190,7 @@ struct AccountAgendaView: View {
             if let start = AccountMeeting.date(meeting.startAt), let end = AccountMeeting.date(meeting.endAt) {
                 Text(start.formatted() + " — " + end.formatted()).font(.caption).foregroundStyle(.secondary)
             }
+            if let project = meeting.project { Label(project.name, systemImage: "folder").font(.callout) }
             if meeting.revision > 0 && !model.cache.pending.contains(where: { $0.meeting.id == meeting.id }) {
                 AccountTranscriptImportControls(meeting: meeting, model: model)
             }
@@ -215,15 +216,21 @@ struct AccountAgendaView: View {
 private struct AccountMeetingEditor: View {
     @Environment(\.dismiss) private var dismiss
     let meeting: AccountMeeting
+    let projects: [AccountProject]
     let save: (AccountMeeting) throws -> Void
     @State private var title: String
     @State private var start: Date
     @State private var end: Date
     @State private var error = ""
+    @State private var projectID: String
+    @State private var newName = ""
 
-    init(meeting: AccountMeeting, save: @escaping (AccountMeeting) throws -> Void) {
+    init(meeting: AccountMeeting, projects: [AccountProject], save: @escaping (AccountMeeting) throws -> Void) {
         self.meeting = meeting
         self.save = save
+        self.projects = Dictionary(grouping: projects, by: \.id).compactMap { $0.value.first }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        _projectID = .init(initialValue: meeting.project?.id ?? "")
         _title = .init(initialValue: meeting.title)
         _start = .init(initialValue: AccountMeeting.date(meeting.startAt) ?? .now)
         _end = .init(initialValue: AccountMeeting.date(meeting.endAt) ?? .now)
@@ -234,6 +241,14 @@ private struct AccountMeetingEditor: View {
             TextField(PublicUICopy.text("Meeting title", "Título de la reunión"), text: $title)
             DatePicker(PublicUICopy.text("Starts", "Inicio"), selection: $start)
             DatePicker(PublicUICopy.text("Ends", "Fin"), selection: $end)
+            Picker(PublicUICopy.text("Private account project", "Proyecto privado de la cuenta"), selection: $projectID) {
+                Text(PublicUICopy.text("Unassigned", "Sin proyecto")).tag("")
+                ForEach(projects) { Text($0.name).tag($0.id) }
+                Text(PublicUICopy.text("New project…", "Nuevo proyecto…")).tag("new")
+            }
+            if projectID == "new" {
+                TextField(PublicUICopy.text("Project name shared with this account", "Nombre que se compartirá con esta cuenta"), text: $newName)
+            }
             if !error.isEmpty { Text(error).foregroundStyle(.red) }
             HStack {
                 Button(PublicUICopy.text("Cancel", "Cancelar")) { dismiss() }
@@ -242,6 +257,15 @@ private struct AccountMeetingEditor: View {
                     next.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
                     next.startAt = AccountMeeting.timestamp(start)
                     next.endAt = AccountMeeting.timestamp(end)
+                    if projectID == "new" {
+                        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty, name.utf16.count <= 120, name.rangeOfCharacter(from: .controlCharacters) == nil else {
+                            error = PublicUICopy.text("Enter a project name of up to 120 characters.", "Escribe un nombre de proyecto de hasta 120 caracteres.")
+                            return
+                        }
+                        next.project = projects.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+                            ?? AccountProject(id: UUID().uuidString.lowercased(), name: name)
+                    } else { next.project = projects.first { $0.id == projectID } }
                     do { try save(next); dismiss() } catch { self.error = error.localizedDescription }
                 }
             }

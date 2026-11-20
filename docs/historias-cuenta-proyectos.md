@@ -1,0 +1,23 @@
+# Historias de usuario de cuenta, grabación y proyectos
+
+Las pruebas usan cuentas, reuniones y audio sintéticos. La revisión de una biblioteca personal se entrega por separado en el equipo de su propietario. Los nombres, correos, reuniones y transcripciones de esa biblioteca no se incluyen en los ejemplos.
+
+| Historia | Resultado que se comprueba | Evidencia |
+| --- | --- | --- |
+| Entro desde Mac por correo y desde el móvil con Google. | Al coincidir el correo se exige vinculación explícita. El vínculo conserva el usuario y rota la sesión iniciadora. | `coordinator/test/account-auth.test.mjs`, `account-browser.test.mjs` y smoke en workerd. |
+| Creo una reunión en Mac y la cambio en Android. | Ambos recuperan el mismo UUID, horas y revisión. Repetir la operación después de perder su respuesta conserva una sola reunión. | `coordinator/test/account-flow.test.mjs`, `AccountAgendaTests.swift`. |
+| Elijo un proyecto privado desde el teléfono. | Mac recibe su identificador y nombre. Un cambio de título desde un cliente anterior conserva el vínculo. Otra cuenta con los mismos identificadores conserva su propio contenido. | `coordinator/test/account-meetings.test.mjs`, smoke en workerd, `AccountProjectTest.kt`. |
+| Cambio o quito el proyecto sin conexión. | La cola distingue omitir el campo, establecer un proyecto y retirar la asignación. Los conflictos requieren resolución y un reintento antiguo no restaura un vínculo retirado. | `AccountAgendaTests.swift`, `AccountProjectTest.kt` y pruebas de la API. |
+| Abro la reunión y luego decido grabar con el móvil. | Abrir la vista deja el micrófono inactivo. La captura requiere una acción, consentimiento y permiso Android. El usuario puede elegir guardar el archivo en el teléfono o enviarlo a transcripción. | Flujo de Activity y servicio compilados. Pendiente observar el aviso de permiso, la notificación y la captura en un teléfono físico. |
+| Pierdo Internet antes de completar el audio. | Se conserva el AAC local. Tras el reinicio se reintenta con el mismo ID. Tras dos ejecuciones del procesador el proveedor simulado recibe un único envío. | `AccountRecordingTest.kt`, `account-flow.test.mjs` y smoke con AAC, D1 y R2 en workerd. |
+| Consulto resultados en otra pantalla o cierro la sesión. | Ambas sesiones del usuario leen el mismo texto. Otra cuenta carece de acceso. Se rechaza el token revocado y el cambio de usuario oculta la caché anterior. | Smoke en workerd, pruebas Swift, de la API y del procesamiento regional de Speechmatics. |
+| Quiero recuperar el proyecto de una reunión pasada en Mac. | Se puede usar una asignación manual anterior y su ocurrencia, incluso si el evento salió de la agenda y su manifiesto de grabación sigue indexado. La sugerencia incluye su motivo. La confirmación revalida las reglas y guarda el ID estable. | `Tests/HallETests/ProjectAssignmentTests.swift`. |
+| Un título se parece al de dos proyectos, o elegí «Sin proyecto». | Evidencia histórica contradictoria impide recomendar un proyecto por esa señal. La bandeja respeta una elección manual de «Sin proyecto». Un proyecto archivado o una etiqueta parecida no sustituyen una confirmación. | Pruebas del inspector, asignación local, reglas y bandeja. |
+| Cambio el proyecto de una sola reunión recurrente. | La elección de una ocurrencia prevalece. Una regla de serie se aplica desde la fecha elegida. Reuniones diferentes con títulos coincidentes conservan sus identidades. | Pruebas de asignación, reglas, calendario y repositorio de reuniones. |
+| Copio una transcripción local al dispositivo secundario y después la retiro. | Solo se copia el texto seleccionado a la reunión de cuenta confirmada. El borrado y un reintento posterior conservan el original local y evitan restaurar la copia retirada. | `coordinator/test/account-flow.test.mjs`. |
+
+## Reproducir el recorrido
+
+Desde la raíz, `npm test --prefix coordinator` ejecuta las pruebas del coordinador. `node coordinator/scripts/account-workerd-smoke.mjs` usa Miniflare y esbuild locales, indicados en `ACCOUNT_WORKER_TOOLS`. La prueba intercepta las llamadas de red del Worker. En macOS se ejecuta `swift test` con el entorno de fixtures. Para Android, `android/gradlew :app:testDebugUnitTest :app:assembleDebug` compila el APK y ejecuta las pruebas JVM.
+
+El smoke prueba límites de cuenta, persistencia, firmas, sincronización y respuestas de proveedor con dobles en el runtime de Cloudflare. Para validar la experiencia de producción, hay que comprobar el retorno OAuth registrado, entrega de correo, procesamiento con el proveedor configurado y el trayecto Android físico → servicio HTTPS → Mac. Esa comprobación requiere el entorno y un dispositivo conectado.

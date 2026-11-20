@@ -235,6 +235,7 @@ struct ProjectsWorkspaceView: View {
     @State private var editingProject: Project?
     @State private var creatingProject = false
     var body: some View {
+        let meetingIndex = model.projectMeetings
         VStack(spacing: 0) {
             HStack { Text(PublicUICopy.text("Projects bring meetings, source notes, and follow-ups into one place.", "Los proyectos reúnen reuniones, notas de origen y seguimientos.")).font(.caption).foregroundStyle(.secondary); Spacer(); Button { creatingProject = true } label: { Label(PublicUICopy.text("New Project", "Nuevo proyecto"), systemImage: "plus") } }.padding(12)
             Divider()
@@ -261,9 +262,9 @@ struct ProjectsWorkspaceView: View {
                             }
                             HStack(spacing: 8) {
                                 Label(PublicUICopy.text("Follow-ups", "Seguimientos"), systemImage: "checklist")
-                                Label("\(model.appState.agenda.filter { project.matchesReference($0.projectId) }.count)", systemImage: "calendar")
+                                Label("\(meetingIndex.count(for: project))", systemImage: "calendar")
                                 Label("\(model.sources(for: project).count)", systemImage: "externaldrive")
-                                if let latest = model.activity(for: project).first {
+                                if let latest = model.activity(for: project, meetings: meetingIndex).first {
                                     Text("· active \(latest.date.formatted(.relative(presentation: .named)))")
                                 }
                             }.font(.caption2).foregroundStyle(.tertiary)
@@ -327,10 +328,20 @@ struct MeetingsWorkspaceView: View {
         List(filteredEvents) { event in EventRowView(event: event) { model.selection = .meeting($0.dedupKey) } }
     }
     private var recordingsList: some View {
-        List(model.recordings.filter { query.isEmpty || $0.eventTitle.localizedCaseInsensitiveContains(query) }) { session in
+        let names = model.projectMeetings.recordingProjectNames
+        return List(model.recordings.filter { session in
+            query.isEmpty || session.eventTitle.localizedCaseInsensitiveContains(query)
+                || names[session.id]?.localizedCaseInsensitiveContains(query) == true
+        }) { session in
             Button { model.selection = .recording(session.id) } label: {
                 HStack {
-                    VStack(alignment: .leading) { Text(session.eventTitle); Text(session.startedAt, style: .date).font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) {
+                        Text(session.eventTitle)
+                        HStack {
+                            Text(session.startedAt, style: .date)
+                            if let name = names[session.id] { Label(name, systemImage: "folder") }
+                        }.font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer(); HalleStatusBadge(text: session.transcriptStatus.rawValue, tone: session.transcriptStatus == .failed ? .error : session.transcriptStatus == .completed ? .success : .warning)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain)

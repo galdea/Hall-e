@@ -41,11 +41,12 @@ struct AttentionItem: Identifiable, Hashable {
 }
 
 enum ProjectActivityKind: String {
-    case meeting, note, codex, chatGPT, whatsApp, snapshot
+    case meeting, recording, note, codex, chatGPT, whatsApp, snapshot
 
     var symbol: String {
         switch self {
         case .meeting: "calendar"
+        case .recording: "waveform"
         case .note: "doc.text"
         case .codex: "terminal"
         case .chatGPT: "sparkles"
@@ -62,6 +63,53 @@ struct ProjectActivityItem: Identifiable, Hashable {
     var detail: String?
     var date: Date
     var selection: WorkspaceSelection?
+}
+
+/// Local workspace projection. Calendar rows and recording manifests stay unchanged.
+struct WorkspaceProjectMeetings {
+    var events: [String: [UnifiedEvent]] = [:]
+    var archived: [String: [RecordingSession]] = [:]
+    var recordingProjectNames: [UUID: String] = [:]
+
+    init(agenda: [UnifiedEvent], recordings: [String: RecordingSession],
+         decisions: LocalProjectDecisions, projects: [Project]) {
+        func resolve(_ event: UnifiedEvent) -> Project? {
+            let reference: String?
+            switch decisions.decision(for: event) {
+            case .assigned(let id): reference = id
+            case .none: reference = event.projectId
+            }
+            return AliasStore.project(resolving: reference, in: projects)
+        }
+
+        var liveKeys: Set<String> = []
+        var liveProjects: [String: Project] = [:]
+        for var event in agenda where liveKeys.insert(event.dedupKey).inserted {
+            if let project = resolve(event) {
+                liveProjects[event.dedupKey] = project
+                event.projectId = project.name
+                events[project.id, default: []].append(event)
+            }
+        }
+        for (key, session) in recordings where session.eventDedupKey == key {
+            let project: Project?
+            if liveKeys.contains(key) {
+                project = liveProjects[key]
+            } else if let occurrence = decisions.occurrences[key] {
+                // A confirmed "no project" also overrides the archived manifest.
+                project = AliasStore.project(resolving: occurrence.projectId, in: projects)
+            } else if let snapshot = session.eventSnapshot, snapshot.dedupKey == key {
+                project = resolve(snapshot)
+            } else { project = nil }
+            guard let project else { continue }
+            recordingProjectNames[session.id] = project.name
+            if !liveKeys.contains(key), session.isFinished { archived[project.id, default: []].append(session) }
+        }
+    }
+
+    func count(for project: Project) -> Int {
+        (events[project.id]?.count ?? 0) + (archived[project.id]?.count ?? 0)
+    }
 }
 
 @MainActor
@@ -170,11 +218,22 @@ final class WorkspaceViewModel {
         appState.projectAssistantMessages.filter { $0.projectId == project.id }
     }
 
-    func activity(for project: Project) -> [ProjectActivityItem] {
-        var items = appState.agenda.filter { project.matchesReference($0.projectId) }.map {
+    var projectMeetings: WorkspaceProjectMeetings {
+        _ = directoryRevision
+        return WorkspaceProjectMeetings(agenda: appState.agenda, recordings: appState.recordingsByEvent,
+                                        decisions: appState.projectDecisions, projects: AliasStore.shared.projects)
+    }
+
+    func activity(for project: Project, meetings: WorkspaceProjectMeetings? = nil) -> [ProjectActivityItem] {
+        let meetings = meetings ?? projectMeetings
+        var items = (meetings.events[project.id] ?? []).map {
             ProjectActivityItem(id: "meeting-\($0.dedupKey)", kind: .meeting, title: $0.title,
                                 detail: $0.descriptionText, date: $0.startTs,
                                 selection: .meeting($0.dedupKey))
+        }
+        items += (meetings.archived[project.id] ?? []).map {
+            ProjectActivityItem(id: "recording-\($0.id)", kind: .recording, title: $0.eventTitle,
+                                detail: nil, date: $0.eventStartAt ?? $0.startedAt, selection: .recording($0.id))
         }
         items += appState.vaultDocuments.filter { project.matchesReference($0.project) }.map {
             ProjectActivityItem(id: "note-\($0.path)", kind: .note, title: $0.title,
@@ -199,8 +258,16 @@ final class WorkspaceViewModel {
         return items.sorted { $0.date > $1.date }
     }
 
+    func projectSuggestion(for event: UnifiedEvent) -> LocalProjectSuggestion? {
+        _ = directoryRevision
+        guard appState.projectDecisions.needsProject(event) else { return nil }
+        return LocalProjectSuggestion.evaluate(event, history: appState.agenda, decisions: appState.projectDecisions,
+                                               projects: AliasStore.shared.classificationProjects(), now: Date(),
+                                               recordingIndex: appState.recordingsByEvent)
+    }
+
     var attentionItems: [AttentionItem] {
-        var result = appState.agenda.filter { $0.projectId == nil && $0.endTs > Date().addingTimeInterval(-86_400) }.map {
+        var result = appState.agenda.filter { appState.projectDecisions.needsProject($0) && $0.endTs > Date().addingTimeInterval(-86_400) }.map {
             AttentionItem(id: "classify-\($0.dedupKey)", kind: .classification, severity: .warning,
                           title: $0.title, detail: "Assign this meeting to a project.", selection: .meeting($0.dedupKey))
         }

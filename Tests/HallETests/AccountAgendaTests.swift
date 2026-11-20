@@ -21,6 +21,27 @@ private final class CalendarFixtureHTTP: URLProtocol {
 
 @Suite("Private account agenda", .serialized)
 struct AccountAgendaTests {
+    @Test func privateProjectIntentsPreserveOfflineAndLegacyEdits() throws {
+        var cache = AccountCalendarCache()
+        let project = AccountProject(id: UUID().uuidString.lowercased(), name: "Synthetic project")
+        var meeting = AccountMeeting.draft(title: "Synthetic design review")
+        meeting.project = project
+        try cache.enqueue(meeting)
+        var op = try #require(cache.pending.first)
+        #expect((op.body["project"] as? [String: String])?["id"] == project.id)
+        meeting.revision = 1
+        cache.acknowledge(op, result: meeting)
+        meeting.title = "Revised time"
+        try cache.enqueue(meeting)
+        op = try #require(cache.pending.first)
+        #expect(op.body["project"] == nil)
+        meeting.revision = 2
+        cache.acknowledge(op, result: meeting)
+        meeting.project = nil
+        try cache.enqueue(meeting)
+        let reopened = try JSONDecoder().decode(AccountCalendarCache.self, from: JSONEncoder().encode(cache))
+        #expect(reopened.pending.first?.body["project"] is NSNull)
+    }
     @Test func importsKeepTheSameOccurrenceAndPartitionsArePrivate() throws {
         let first = try AccountAPI.origin("https://Calendar.example.invalid:443/account/v1/")
         let same = try AccountAPI.origin("https://calendar.example.invalid")

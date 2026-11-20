@@ -67,7 +67,7 @@ npm test --prefix coordinator
 node coordinator/scripts/account-workerd-smoke.mjs
 ```
 
-La prueba de runtime necesita Node con `node:sqlite`, Miniflare, esbuild y permiso para escuchar en loopback. Genera una clave RSA de prueba y sustituye **todas** las peticiones salientes. No necesita credenciales de cuenta, ni accede a micrófonos o bibliotecas. La suite de Node funciona sin Miniflare. Para preparar una instalación aislada, los seis archivos `coordinator/account-*.sql` se aplican por orden alfabético a su D1 dedicada.
+La prueba de runtime necesita Node con `node:sqlite`, Miniflare, esbuild y permiso para escuchar en loopback. Genera una clave RSA de prueba y sustituye **todas** las peticiones salientes. No necesita credenciales de cuenta, ni accede a micrófonos o bibliotecas. La suite de Node funciona sin Miniflare. Para preparar una instalación aislada, los archivos `coordinator/account-*.sql` se aplican por orden alfabético a su D1 dedicada.
 
 | Recurso relativo a `/account/v1` | Uso |
 | --- | --- |
@@ -84,6 +84,8 @@ La prueba de runtime necesita Node con `node:sqlite`, Miniflare, esbuild y permi
 El proceso de transcripción comprueba `ACCOUNT_ENABLE_TRANSCRIPTION` y la configuración del proveedor. Deepgram usa `ACCOUNT_DEEPGRAM_KEY`. Speechmatics usa `ACCOUNT_SPEECHMATICS_KEY`, una `ACCOUNT_SPEECHMATICS_REGION` que coincida con la consentida y `ACCOUNT_SPEECHMATICS_TRAINING_OPT_OUT` confirmado por el operador. La opción Android de esta versión identifica la región europea. El job queda pendiente si la configuración necesaria no está disponible. El cron procesa como máximo un trabajo por invocación.
 
 ## Revisión independiente y pruebas
+
+La [batería de historias de usuario](historias-cuenta-proyectos.md) cubre también la relación entre reuniones y proyectos en Mac y Android.
 
 Participaron dos modelos internos. **gpt-6.2-astra** revisó la arquitectura, identificó la frontera del coordinador de emparejamiento y comprobó el Worker sobre `workerd`. **gpt-6.2-sol** revisó privacidad y pruebas. Señaló el caso en que la carga incompleta caduca mientras el teléfono conserva un índice de parte antiguo. El cliente vuelve a enviar las partes ante `missing_parts`. Ambas revisiones coincidieron en que la idempotencia de una carga no demuestra que un proveedor externo haya aceptado o rechazado una petición cuya respuesta se perdió. Ese caso termina en revisión.
 

@@ -10,22 +10,18 @@ struct ProjectOverviewDashboard: View {
     @State private var errorMessage: String?
 
     private var snapshot: ProjectSnapshotRecord? { model.snapshot(for: project) }
-    private var meetings: [UnifiedEvent] {
-        model.appState.agenda.filter { $0.projectId == project.name || $0.projectId == project.id }
-    }
     private var actions: [IndexedActionItem] {
         model.actions(for: project).filter { !$0.isCompleted }
     }
     private var notes: [VaultDocument] { model.appState.vaultDocuments.filter { $0.project == project.name } }
-    private var nextMeeting: UnifiedEvent? {
-        meetings.filter { $0.endTs >= Date() }.sorted { $0.startTs < $1.startTs }.first
-    }
 
     var body: some View {
+        let meetingIndex = model.projectMeetings
+        let nextMeeting = (meetingIndex.events[project.id] ?? []).filter { $0.endTs >= Date() }.min { $0.startTs < $1.startTs }
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 8) {
-                    MetricPill(value: "\(meetings.count)", label: "meetings")
+                    MetricPill(value: "\(meetingIndex.count(for: project))", label: "meetings")
                     MetricPill(value: "\(actions.count)", label: "open actions")
                     MetricPill(value: "\(notes.count)", label: "notes")
                     MetricPill(value: "\(model.sources(for: project).count)", label: "sources")
@@ -97,7 +93,7 @@ struct ProjectOverviewDashboard: View {
                 }
 
                 dashboardSection("Recent activity", symbol: "clock.arrow.circlepath") {
-                    let activity = Array(model.activity(for: project).prefix(8))
+                    let activity = Array(model.activity(for: project, meetings: meetingIndex).prefix(8))
                     if activity.isEmpty { Text("No indexed activity").foregroundStyle(.secondary) }
                     ForEach(activity) { item in
                         ProjectActivityRow(item: item) { if let selection = item.selection { model.selection = selection } }

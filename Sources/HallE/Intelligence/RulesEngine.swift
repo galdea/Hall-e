@@ -86,7 +86,8 @@ enum RulesEngine {
                         best = W.attendeeEmailExact; why = "attendee email \(alias.text)"
                     }
                 case .domain:
-                    if domains.contains(where: { $0 == TextNormalizer.fold(alias.text) || $0.hasSuffix(TextNormalizer.fold(alias.text)) }) {
+                    let domain = TextNormalizer.fold(alias.text).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !domain.isEmpty, domains.contains(where: { $0 == domain || $0.hasSuffix("." + domain) }) {
                         best = W.attendeeDomain; why = "attendee domain \(alias.text)"
                     }
                 default:

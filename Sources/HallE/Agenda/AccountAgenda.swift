@@ -1,6 +1,11 @@
 import Foundation
 import CryptoKit
 
+struct AccountProject: Codable, Equatable, Hashable, Identifiable {
+    var id: String
+    var name: String
+}
+
 struct AccountRecording: Codable, Equatable, Identifiable {
     var id: String
     var status: String
@@ -16,6 +21,7 @@ struct AccountMeeting: Codable, Equatable, Identifiable {
     var revision: Int
     var deleted: Bool
     var recordings: [AccountRecording]
+    var project: AccountProject?
 
     static func timestamp(_ date: Date) -> String {
         Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date)
@@ -43,10 +49,16 @@ struct AgendaMutation: Codable, Identifiable {
     var meeting: AccountMeeting
     var mutationId = UUID().uuidString.lowercased()
     var conflict = false
+    var projectChanged: Bool?
     var id: String { mutationId }
     var body: [String: Any] {
-        ["title": meeting.title, "startAt": meeting.startAt, "endAt": meeting.endAt, "deleted": meeting.deleted,
+        var result: [String: Any] = ["title": meeting.title, "startAt": meeting.startAt, "endAt": meeting.endAt, "deleted": meeting.deleted,
          "baseRevision": meeting.revision, "mutationId": mutationId]
+        if projectChanged == true {
+            if let project = meeting.project { result["project"] = ["id": project.id, "name": project.name] }
+            else { result["project"] = NSNull() }
+        }
+        return result
     }
 }
 
@@ -70,7 +82,8 @@ struct AccountCalendarCache: Codable {
                   let start = AccountMeeting.date(meeting.startAt), let end = AccountMeeting.date(meeting.endAt),
                   end > start else { throw AccountAgendaError.invalidMeeting }
         }
-        pending.append(.init(meeting: meeting))
+        let previous = meetings.first { $0.id == meeting.id }
+        pending.append(.init(meeting: meeting, projectChanged: !meeting.deleted && previous?.project != meeting.project))
     }
 
     mutating func reapply(_ edit: AgendaMutation) throws {
@@ -81,14 +94,17 @@ struct AccountCalendarCache: Codable {
         var revised = pending[index].meeting
         revised.revision = current.revision
         revised.recordings = current.recordings
-        pending[index] = .init(meeting: revised)
+        if edit.projectChanged != true { revised.project = current.project }
+        pending[index] = .init(meeting: revised, projectChanged: edit.projectChanged)
     }
 
     mutating func acknowledge(_ mutation: AgendaMutation, result: AccountMeeting) {
         version = nil
         meetings.removeAll { $0.id == result.id }
         meetings.append(result)
-        pending.removeAll { $0.id == mutation.id }
+        if mutation.projectChanged == true && mutation.meeting.project?.id != result.project?.id {
+            if let i = pending.firstIndex(where: { $0.id == mutation.id }) { pending[i].conflict = true }
+        } else { pending.removeAll { $0.id == mutation.id } }
     }
 
     static func partition(_ origin: URL, _ userId: String) -> String {

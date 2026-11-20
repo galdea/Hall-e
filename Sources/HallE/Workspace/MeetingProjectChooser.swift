@@ -80,3 +80,51 @@ struct MeetingProjectChooser: View {
         }
     }
 }
+
+struct MeetingProjectSuggestionRow: View {
+    let event: UnifiedEvent
+    let suggestion: LocalProjectSuggestion
+    @State private var isRecurring = false
+    @State private var rememberFuture = false
+    @State private var saving = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(PublicUICopy.text("Suggested project: " + suggestion.name, "Proyecto sugerido: " + suggestion.name))
+                .font(.callout.weight(.semibold))
+            switch suggestion.evidence {
+            case .confirmedOccurrences(let count):
+                Text(PublicUICopy.text("Previously confirmed occurrences with the same title and calendar context: \(count).",
+                                       "Reuniones anteriores confirmadas con el mismo título y contexto de calendario: \(count)."))
+                    .font(.caption)
+            case .rule(let reason):
+                Text(PublicUICopy.text("Local rule · " + reason, "Regla local · " + reason)).font(.caption)
+            }
+            if isRecurring {
+                Toggle(PublicUICopy.text("Also apply to future occurrences of this series", "Aplicar también a las próximas reuniones de esta serie"),
+                       isOn: $rememberFuture)
+            }
+            Button(PublicUICopy.text("Confirm project", "Confirmar proyecto")) {
+                saving = true
+                error = nil
+                Task {
+                    defer { saving = false }
+                    do {
+                        try await ProjectAssignmentStore.shared.confirm(suggestion, for: event, rememberFuture: rememberFuture,
+                                                                        classificationProjects: AliasStore.shared.classificationProjects(),
+                                                                        recordingIndex: AppState.shared.recordingsByEvent)
+                    } catch {
+                        self.error = error.localizedDescription
+                    }
+                }
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+        }
+        .disabled(saving)
+        .task(id: event.iCalUID) {
+            rememberFuture = false
+            isRecurring = (try? await ProjectAssignmentStore.shared.isRecurring(event)) == true
+        }
+    }
+}

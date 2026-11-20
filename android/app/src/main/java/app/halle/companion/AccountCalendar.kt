@@ -29,12 +29,25 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
     fun recordings(id: String) = media.list().filter { it.sourceEventKey == id }
     fun upload(id: String) = objectFor("audio-$id")
     fun discard(id: String) { save("edit-$id", null) }
-    fun stage(id: String, title: String, start: Instant, end: Instant, base: Int, deleting: Boolean) {
+    fun projects() = accountProjects(cached(), mutationIds().mapNotNull(::pending))
+    fun retryProject(id: String) {
+        val change = pending(id) ?: return
+        check(change.optString("problem") == "unsupported_project")
+        change.remove("problem")
+        save("edit-$id", change)
+    }
+    fun stage(id: String, title: String, start: Instant, end: Instant, base: Int, deleting: Boolean,
+              project: ProjectChange? = null) {
         meetingPath(id)
         require(title.isNotBlank() && title.trim().length <= 512 && end > start)
         check(pending(id) == null) { "Resolve the pending change first." }
-        save("edit-$id", JSONObject().put("title", title.trim()).put("startAt", start.toString()).put("endAt", end.toString())
-            .put("deleted", deleting).put("baseRevision", base).put("mutationId", UUID.randomUUID().toString()))
+        val change = JSONObject().put("title", title.trim()).put("startAt", start.toString()).put("endAt", end.toString())
+            .put("deleted", deleting).put("baseRevision", base).put("mutationId", UUID.randomUUID().toString())
+        if (!deleting) {
+            val previous = cached().firstOrNull { it.getString("id") == id }
+            stageProject(change, project, AccountProject.read(previous?.optJSONObject("project")))
+        }
+        save("edit-$id", change)
     }
     fun visible(): List<JSONObject> {
         val meetings = cached().associateBy { it.getString("id") }.toMutableMap()
@@ -45,6 +58,7 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
             val old = meetings[id]
             meetings[id] = JSONObject(local.toString()).put("id", id).put("revision", local.getInt("baseRevision"))
                 .put("recordings", old?.optJSONArray("recordings") ?: JSONArray())
+                .put("project", pendingProject(local, old)?.json() ?: JSONObject.NULL)
         }
         // Keep pending deletes and conflicts accessible until reconciled.
         return meetings.values.filter { !it.optBoolean("deleted") || pending(it.getString("id")) != null }
@@ -64,7 +78,7 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
             val pending = pending(id) ?: continue
             if (pending.has("problem")) continue
             try {
-                val accepted = request(meetingPath(id), "PUT", pending, null).getJSONObject("meeting")
+                val accepted = request(meetingPath(id), "PUT", meetingRequest(pending), null).getJSONObject("meeting")
                 val previous = cached()
                 if (!accepted.optBoolean("deleted")) {
                     val old = previous.firstOrNull { it.getString("id") == id }
@@ -72,7 +86,21 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
                 }
                 val cached = previous.filter { it.getString("id") != id } + accepted
                 // Persist the accepted revision and clear its outbox entry in one transaction.
-                check(prefs.edit().putString("snapshot", JSONArray(cached).toString()).remove("version").remove("edit-$id").commit())
+                val update = prefs.edit().putString("snapshot", JSONArray(cached).toString()).remove("version")
+                if (projectSelectionAccepted(pending, accepted)) update.remove("edit-$id")
+                else {
+                    // Older servers can acknowledge the meeting while ignoring an explicit assignment.
+                    if (accepted.optBoolean("deleted") || accepted.getInt("revision") != pending.getInt("baseRevision") + 1) {
+                        // A replay can return a newer revision already changed on the other device.
+                        pending.put("problem", 409)
+                    } else {
+                        pending.put("title", accepted.getString("title")).put("startAt", accepted.getString("startAt"))
+                            .put("endAt", accepted.getString("endAt")).put("baseRevision", accepted.getInt("revision"))
+                            .put("mutationId", UUID.randomUUID().toString()).put("problem", "unsupported_project")
+                    }
+                    update.putString("edit-$id", pending.toString())
+                }
+                check(update.commit())
                 sent = true
             } catch (error: AccountHttpError) {
                 if (!permanent(error.status)) throw error
@@ -82,7 +110,8 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
         for (key in keys("audio-")) {
             val id = key.removePrefix("audio-")
             val state = upload(id) ?: continue
-            if (state.has("problem") || pending(state.getString("meeting")) != null) continue
+            val edit = pending(state.getString("meeting"))
+            if (state.has("problem") || (edit != null && edit.optString("problem") != "unsupported_project")) continue
             val file = media.completedAudio(id) ?: continue
             try {
                 sendAccountRecording(id, state, file, request) { save(key, state) }

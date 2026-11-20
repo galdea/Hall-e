@@ -59,3 +59,30 @@ test("unchanged account polls skip transcript reads and only that account's data
   await env.ACCOUNT_DB.prepare("UPDATE account_transcript_imports SET transcript=NULL WHERE user_id=?").bind(owner).run();
   assert.notEqual((await get(owner,imported.version)).version,imported.version);
 });
+
+test("phone and desktop share private project labels, preserve older-client edits and respect a concurrent unlink", async t => {
+  const {env, owner, id, change} = fixture(t);
+  const project = {id: crypto.randomUUID(), name: "Synthetic coastal survey"};
+  const put = (user, mid, body) => putMeeting(body, env, user, mid);
+  const snapshot = async user => (await listMeetings(env,user,async () => [])).json();
+  const tagged = {...change,project};
+  assert.deepEqual((await (await put(owner,id,tagged)).json()).meeting.project,project);
+  assert.deepEqual((await snapshot(owner)).meetings[0].project, project);
+
+  const next = (base, patch) => ({...change,baseRevision:base,mutationId:crypto.randomUUID(),...patch});
+  const legacyEdit = next(1, {title:"Moved from an earlier client"});
+  assert.deepEqual((await (await put(owner,id,legacyEdit)).json()).meeting.project,project);
+  const other = crypto.randomUUID();
+  assert.deepEqual((await snapshot(other)).meetings, []);
+  const privateProject = {...project,name:"Different account, same identifier"};
+  assert.deepEqual((await (await put(other,id,{...change,project:privateProject})).json()).meeting.project,privateProject);
+  const secondId = crypto.randomUUID();
+  await put(owner,secondId,next(0,{project:{...project,name:"Stale spelling"}}));
+  assert.deepEqual((await snapshot(owner)).meetings.map(m => m.project), [project,project]);
+  assert.equal((await put(owner,id,next(1,{project:null}))).status,409);
+  assert.equal((await (await put(owner,id,next(2,{project:null}))).json()).meeting.project,null);
+  assert.equal((await (await put(owner,id,tagged)).json()).meeting.project,null);
+  assert.equal((await put(owner,id,{...tagged,project:null})).status,409);
+  assert.equal((await put(owner,id,next(3,{project:{id:"local-client-name",name:"private"}}))).status,400);
+  assert.deepEqual((await snapshot(other)).meetings[0].project,privateProject);
+});

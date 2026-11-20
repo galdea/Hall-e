@@ -34,6 +34,14 @@ class AccountCalendarActivity : Activity() {
     private var active = false
     private var player: android.media.MediaPlayer? = null
     private var consent: (() -> Unit)? = null
+    private val projectDialogs = mutableMapOf<AlertDialog, String>()
+    private fun AlertDialog.Builder.showFor(cal: AccountCalendar) {
+        if (sessions.current()?.token != cal.session.token) return
+        val dialog = create()
+        projectDialogs[dialog] = cal.session.token
+        dialog.setOnDismissListener { projectDialogs.remove(dialog) }
+        dialog.show()
+    }
     private val tick = object : Runnable {
         override fun run() {
             if (!active) return
@@ -77,6 +85,8 @@ class AccountCalendarActivity : Activity() {
 
     private fun render() {
         if (isFinishing || isDestroyed) return
+        val session = sessions.current()
+        projectDialogs.filterValues { it != session?.token }.keys.toList().forEach { it.dismiss() }
         page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(30, 24, 30, 34) }
         setContentView(ScrollView(this).also { scroll ->
             scroll.setOnApplyWindowInsetsListener { view, insets ->
@@ -86,7 +96,6 @@ class AccountCalendarActivity : Activity() {
             scroll.addView(page)
         })
         line("Hall-e account calendar", 24f)
-        val session = sessions.current()
         if (status.isNotBlank()) line(status, 14f)
         if (sessions.browserPending() != null) {
             action("Enter Google confirmation code") { finishGoogle() }
@@ -125,7 +134,8 @@ class AccountCalendarActivity : Activity() {
                 date.year, date.monthValue-1, date.dayOfMonth).show()
         }
         if (chosenDay != null) action("Show all dates") { day = null; render() }
-        for (row in displayed) action(row.optString("title").ifBlank { "Deleted meeting" } + "\n" + local(row.getString("startAt"))) {
+        for (row in displayed) action(row.optString("title").ifBlank { "Deleted meeting" } + "\n" + local(row.getString("startAt")) +
+            (AccountProject.read(row.optJSONObject("project"))?.let { " · " + it.name } ?: "")) {
             selected = row.getString("id"); render()
         }
         if (displayed.isEmpty()) line("No account meetings for these dates.")
@@ -154,6 +164,7 @@ class AccountCalendarActivity : Activity() {
     private fun showMeeting(cal: AccountCalendar, m: JSONObject) {
         val id = m.getString("id")
         line(m.optString("title"), 21f)
+        line("Account project · " + (AccountProject.read(m.optJSONObject("project"))?.name ?: "None"))
         line(local(m.getString("startAt")) + " – " + local(m.getString("endAt")))
         val pending = cal.pending(id)
         if (pending != null) {
@@ -229,6 +240,30 @@ class AccountCalendarActivity : Activity() {
             render()
         } }
     }
+    private fun chooseProject(cal: AccountCalendar, current: AccountProject?, choose: (AccountProject?) -> Unit) {
+        val options = (cal.projects() + listOfNotNull(current)).distinctBy { it.id }
+        val duplicates = options.groupBy { it.name.lowercase(java.util.Locale.ROOT) }
+        val labels = options.map { p ->
+            if (duplicates.getValue(p.name.lowercase(java.util.Locale.ROOT)).size > 1) "${p.name} · ${p.id.toString().take(8)}"
+            else p.name
+        } + listOf("No project", "New account project…")
+        AlertDialog.Builder(this).setTitle("Choose an account project").setItems(labels.toTypedArray()) { _, i ->
+            when {
+                i < options.size -> choose(options[i])
+                i == options.size -> choose(null)
+                else -> {
+                    val name = input("Project name").apply { filters = arrayOf(android.text.InputFilter.LengthFilter(120)) }
+                    AlertDialog.Builder(this).setTitle("New account project").setView(fields(name)).setNegativeButton("Cancel", null)
+                        .setPositiveButton("Use project") { _, _ ->
+                            val value = name.text.toString().trim()
+                            val project = runCatching { AccountProject(UUID.randomUUID(), value) }.getOrNull()
+                            if (project == null) message("Use a project name of 1–120 characters without control characters.")
+                            else choose(project)
+                        }.showFor(cal)
+                }
+            }
+        }.setNegativeButton("Cancel", null).showFor(cal)
+    }
     private fun edit(cal: AccountCalendar, m: JSONObject?) {
         val zone = ZoneId.systemDefault()
         val now = (day?.atTime(java.time.LocalTime.now(zone))?.atZone(zone)?.toInstant() ?: Instant.now())
@@ -238,9 +273,22 @@ class AccountCalendarActivity : Activity() {
         }
         val start = input("Start", local(m?.getString("startAt") ?: now.toString()))
         val end = input("End", local(m?.getString("endAt") ?: now.plusSeconds(1800).toString()))
+        val initial = AccountProject.read(m?.optJSONObject("project"))
+        var chosen = initial
+        var selection: ProjectChange? = null
+        val project = Button(this).apply {
+            isAllCaps = false
+            text = "Account project · " + (chosen?.name ?: "None")
+            setOnClickListener { chooseProject(cal, chosen) { next ->
+                chosen = next
+                selection = if (initial?.id == next?.id) null else ProjectChange(next)
+                text = "Account project · " + (chosen?.name ?: "None")
+            } }
+        }
         AlertDialog.Builder(this).setTitle("Meeting · local time").setMessage("Format: YYYY-MM-DD HH:mm · " + ZoneId.systemDefault())
-            .setView(fields(title, start, end)).setNegativeButton("Cancel", null)
+            .setView(fields(title, start, end).apply { addView(project) }).setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ -> safely {
+                if (sessions.current()?.token != cal.session.token) return@safely
                 fun instant(field: EditText, previous: String?): Instant {
                     val text = field.text.toString().trim()
                     if (previous != null && text == local(previous)) return Instant.parse(previous)
@@ -252,23 +300,34 @@ class AccountCalendarActivity : Activity() {
                 }
                 val id = m?.getString("id") ?: UUID.randomUUID().toString()
                 cal.stage(id, title.text.toString(), instant(start, m?.getString("startAt")),
-                    instant(end, m?.getString("endAt")), m?.getInt("revision") ?: 0, false)
+                    instant(end, m?.getString("endAt")), m?.getInt("revision") ?: 0, false, selection)
                 selected = id; changed()
-            } }.show()
+            } }.showFor(cal)
     }
     private fun resolve(cal: AccountCalendar, id: String) {
         val local = cal.pending(id) ?: return
         val current = cal.cached().firstOrNull { it.getString("id") == id }
-        val summary = "Phone: ${local.optString("title")} · ${local(local.getString("startAt"))}" +
+        val phoneProject = pendingProject(local, current)
+        val serverProject = AccountProject.read(current?.optJSONObject("project"))
+        if (local.optString("problem") == "unsupported_project") {
+            val assignment = phoneProject?.name ?: "No project"
+            AlertDialog.Builder(this).setTitle("Project assignment pending")
+                .setMessage("The account server saved the meeting without confirming “$assignment”. The phone kept your selection.")
+                .setPositiveButton("Retry assignment") { _, _ -> safely { cal.retryProject(id); changed() } }
+                .setNeutralButton("Discard selection") { _, _ -> cal.discard(id); changed() }
+                .setNegativeButton("Later", null).showFor(cal)
+            return
+        }
+        val summary = "Phone: ${local.optString("title")} · ${local(local.getString("startAt"))} · ${phoneProject?.name ?: "No project"}" +
             "\nAccount: " + if (current == null || current.optBoolean("deleted")) "Deleted or unavailable" else
-                current.getString("title") + " · " + local(current.getString("startAt"))
+                current.getString("title") + " · " + local(current.getString("startAt")) + " · " + (serverProject?.name ?: "No project")
         AlertDialog.Builder(this).setTitle("Resolve pending change").setMessage(summary)
             .setNegativeButton("Later", null).setNeutralButton("Discard phone edit") { _, _ -> cal.discard(id); changed() }
             .setPositiveButton("Save phone version as new") { _, _ -> safely {
                 cal.stage(UUID.randomUUID().toString(), local.getString("title"), Instant.parse(local.getString("startAt")),
-                    Instant.parse(local.getString("endAt")), 0, false)
+                    Instant.parse(local.getString("endAt")), 0, false, phoneProject?.let(::ProjectChange))
                 cal.discard(id); changed()
-            } }.show()
+            } }.showFor(cal)
     }
     private fun importMeeting(cal: AccountCalendar) {
         val local = MobileMeetingStore(this).list()

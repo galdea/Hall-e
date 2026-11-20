@@ -188,10 +188,21 @@ try {
   assert.equal((await finishGoogle(null,200)).userId, desktop.userId);
   const meeting = "/meetings/" + randomUUID();
   const recording = meeting + "/recordings/" + randomUUID();
-  await call("PUT", meeting, desktop.token, {
+  const project = {id: randomUUID(), name: "Synthetic field survey"};
+  const proposalFromDesktop = {
     title:"Synthetic runtime meeting", startAt:"2026-11-20T15:00:00Z", endAt:"2026-11-20T16:00:00Z",
     baseRevision:0, mutationId:randomUUID(),
+  };
+  await call("PUT", meeting, desktop.token, proposalFromDesktop);
+  await call("PUT", meeting, mobile.token, {...proposalFromDesktop,baseRevision:1,mutationId:randomUUID(),project});
+  const desktopSnapshot = await call("GET","/meetings",desktop.token);
+  assert.deepEqual(desktopSnapshot.meetings[0].project,project);
+  assert.deepEqual(desktopSnapshot.meetings[0].recordings,[]);
+  const editedOnLegacyClient = await call("PUT", meeting, desktop.token, {
+    ...proposalFromDesktop,baseRevision:2,mutationId:randomUUID(),title:"Synthetic updated title",
   });
+  assert.deepEqual(editedOnLegacyClient.meeting.project,project);
+  assert.deepEqual((await call("GET","/meetings",stranger.token)).meetings,[]);
   const proposal = {size:audio.length, sha256:createHash("sha256").update(audio).digest("hex"), mimeType:"audio/mp4", consent:true, provider:"deepgram"};
   const {partSize} = await call("PUT", recording, mobile.token, proposal);
   assert.ok(partSize < audio.length && audio.length <= 2 * partSize);

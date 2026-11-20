@@ -39,7 +39,13 @@ struct MeetingInspectorView: View {
                     Button { showProjectChooser = true } label: {
                         Label(AliasStore.shared.projectName(for: event.projectId) ?? event.projectId ?? "Choose project…", systemImage: "folder.badge.gearshape")
                     }
-                    if let confidence = event.projectConfidence { Text("Classification confidence: \(confidence.formatted(.percent.precision(.fractionLength(0))))").font(.caption).foregroundStyle(.secondary) }
+                    if let suggestion = model.projectSuggestion(for: event) {
+                        MeetingProjectSuggestionRow(event: event, suggestion: suggestion)
+                            .id(event.dedupKey + "|" + suggestion.projectID)
+                    } else if appState.projectDecisions.decision(for: event) == .assigned(nil) {
+                        Text(PublicUICopy.text("You chose to keep this meeting without a project.", "Elegiste dejar esta reunión sin proyecto."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if let confidence = event.projectConfidence { Text("Classification confidence: \(confidence.formatted(.percent.precision(.fractionLength(0))))").font(.caption).foregroundStyle(.secondary) }
                 }
 
                 if !event.attendees.isEmpty {
@@ -113,7 +119,6 @@ struct ProjectDetailView: View {
     @State private var showPreview = false
     private var documents: [VaultDocument] { model.appState.vaultDocuments.filter { AliasStore.shared.references($0.project, project: project) } }
     private var actions: [IndexedActionItem] { model.actions(for: project) }
-    private var meetings: [UnifiedEvent] { model.appState.agenda.filter { AliasStore.shared.references($0.projectId, project: project) }.sorted { $0.startTs > $1.startTs } }
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
@@ -164,7 +169,26 @@ struct ProjectDetailView: View {
         case .activity:
             ProjectActivityView(project: project, model: model)
         case .meetings:
-            List(meetings) { event in EventRowView(event: event) { model.selection = .meeting($0.dedupKey) } }
+            let index = model.projectMeetings
+            List {
+                ForEach((index.events[project.id] ?? []).sorted { $0.startTs > $1.startTs }) { event in
+                    EventRowView(event: event) { model.selection = .meeting($0.dedupKey) }
+                }
+                let archived = index.archived[project.id] ?? []
+                if !archived.isEmpty {
+                    Section(PublicUICopy.text("Archived recordings", "Grabaciones archivadas")) {
+                        ForEach(archived.sorted { $0.startedAt > $1.startedAt }) { session in
+                            Button { model.selection = .recording(session.id) } label: {
+                                HStack {
+                                    Label(session.eventTitle, systemImage: "waveform")
+                                    Spacer()
+                                    Text(session.startedAt, style: .date).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
         case .actions:
             followUpsView
         case .notes:

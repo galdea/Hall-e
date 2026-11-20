@@ -12,6 +12,7 @@ final class AppState {
     var accounts: [ConnectedAccount] = []
     var calendarSources: [CalendarSource] = []
     var agenda: [UnifiedEvent] = []
+    var projectDecisions = LocalProjectDecisions()
     private var syncedAgenda: [UnifiedEvent] = []
     private var localCaptureEvents: [LocalCaptureEvent] = []
 
@@ -56,12 +57,13 @@ final class AppState {
                                       onChange: { [weak self] in self?.calendarSources = $0 }))
 
         let agendaObs = ValueObservation.tracking { db in
-            try UnifiedEvent.order(UnifiedEvent.Columns.startTs).fetchAll(db)
+            (try UnifiedEvent.order(UnifiedEvent.Columns.startTs).fetchAll(db), try LocalProjectDecisions.read(db))
         }
         observers.append(agendaObs.start(in: db, scheduling: .async(onQueue: .main),
                                          onError: { Log.db.error("agenda obs: \($0, privacy: .public)") },
                                          onChange: { [weak self] in
-                                            self?.syncedAgenda = $0
+                                            self?.syncedAgenda = $0.0
+                                            self?.projectDecisions = $0.1
                                             self?.publishAgenda()
                                          }))
 

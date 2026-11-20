@@ -3,13 +3,21 @@
 Source-backed preparation for the Android release. This records product behavior
 and the owner's selected Console declarations. It is not a legal attestation.
 
-## App details
+## Release gate for a build with Private Agenda
+
+The Console statements below describe the earlier pairing build. The candidate adds account creation by verified email or Google, private meeting titles and times, optional private project IDs and names, audio uploads, processing records and transcripts. An unchanged version code does not identify a new Play release. No updated Console submission or approval is recorded here.
+
+Before distributing an account-enabled build, update the privacy URL content and the Play disclosures for the actual services used. Review email addresses and account identifiers, meeting and project data, voice or sound recordings, transcript text, purposes, optional collection and retention. Verify the roles and contractual terms of the deployed email service, Cloudflare, Deepgram and Speechmatics before classifying transfers. Provide reviewer access for the sign-in, consent and deletion flows using synthetic data. Record the approved version code and the track when confirmed.
+
+The candidate can delete an individual private meeting. Signing out revokes the device session when online. A complete account-deletion flow and public request route still need verification before an account-enabled Play release. Verify deletion of associated data and disclose any retained information and retention periods. The saved declaration for the internal build does not establish approval for those features.
+
+## Recorded internal-track app and Console settings
 
 - **Release application ID:** `app.halle.companion` (`android/app/build.gradle.kts`,
   `defaultConfig.applicationId`). The debug build uses `app.halle.companion.preview`
   and must not be uploaded.
 - **Existing internal-track release:** `versionName` `0.1.0`, `versionCode` `1`.
-  The current source candidate is `0.2.0`, `versionCode` `3`, per
+  The recorded internal-track binary is `0.2.0`, `versionCode` `3`, per
   `android/app/build.gradle.kts`. The updated recording and shared-workspace
   disclosures apply to that candidate. The signed code 2 AAB was uploaded and
   saved as internal-track draft release 2; it is historical. Signed code 3
@@ -45,7 +53,7 @@ and the owner's selected Console declarations. It is not a legal attestation.
   pairing. Workspace access is invitation-only and revocable; there is no
   public user-generated content.
 
-## Data Safety: saved declaration, changes in review
+## Data Safety declaration recorded for the earlier internal build
 
 The owner authorized and saved the Data Safety form. It declares **Device or
 other IDs** (collected, optional, non-ephemeral; App functionality and Fraud

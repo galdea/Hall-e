@@ -56,6 +56,196 @@ struct ProjectAssignmentTests {
         #expect(!project.matchesReference(nil))
     }
 
+    @Test func suggestionsUseOnlyCompletedConfirmedHistoryWithMatchingContext() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let project = Project(id: "p-1", name: "New project name", aliases: [ProjectAlias("Old project name", .projectName)])
+        var target = event("target", at: 2000, series: nil)
+        target.title = "  REVÍSION   semanal  "
+        target.organizerEmail = "owner@example.invalid"
+        var prior = event("previous", at: 100, series: nil)
+        prior.title = "Revision semanal"
+        prior.organizerEmail = "Owner@example.invalid"
+        let choice = EventProjectAssignment(dedupKey: prior.id, projectId: "Old project name", updatedAt: now)
+        var rules = LocalProjectDecisions(occurrences: [prior.id: choice])
+        func suggest(_ historical: [UnifiedEvent], project candidate: Project? = nil) -> LocalProjectSuggestion? {
+            LocalProjectSuggestion.evaluate(target, history: historical, decisions: rules, projects: [candidate ?? project], now: now)
+        }
+        let suggested = try #require(suggest([prior]))
+        #expect(suggested.projectID == project.id && suggested.name == project.name)
+        #expect(suggested.evidence == .confirmedOccurrences(1))
+        var other = prior
+        other.winnerAccountEmail = "another@example.invalid"
+        #expect(suggest([other]) == nil)
+        other = prior
+        other.organizerEmail = "different@example.invalid"
+        #expect(suggest([other]) == nil)
+        other = prior
+        other.title += " extendida"
+        #expect(suggest([other]) == nil)
+        other = prior
+        other.endTs = now.addingTimeInterval(1)
+        #expect(suggest([other]) == nil)
+        rules.occurrences[prior.id]?.updatedAt = now.addingTimeInterval(1)
+        #expect(suggest([prior]) == nil)
+        rules.occurrences[prior.id] = nil
+        prior.projectId = project.name // A classifier label alone is not manual evidence.
+        #expect(suggest([prior]) == nil)
+        rules.occurrences[prior.id] = choice
+        var archived = project
+        archived.isArchived = true
+        #expect(suggest([prior], project: archived) == nil)
+        target.organizerEmail = nil
+        prior.organizerEmail = nil
+        #expect(suggest([prior, prior]) == nil)
+        other = prior
+        other.dedupKey = "second-occurrence"
+        rules.occurrences[other.id] = .init(dedupKey: other.id, projectId: project.id, updatedAt: now)
+        #expect(suggest([prior, other])?.evidence == .confirmedOccurrences(2))
+    }
+
+    @Test func conflictingHistoryAbstainsAndExplicitUnassignedStaysOutOfInbox() throws {
+        var target = event("target", at: 2000)
+        var prior = event("first", at: 500)
+        var other = event("second", at: 600)
+        let project = Project(id: "p", name: "One", aliases: [])
+        let competing = Project(id: "q", name: "Two", aliases: [.init("meeting", .keyword)])
+        let now = Date(timeIntervalSince1970: 1000)
+        target.organizerEmail = "person@example.invalid"
+        prior.organizerEmail = target.organizerEmail
+        other.organizerEmail = target.organizerEmail
+        var decisions = LocalProjectDecisions()
+        func suggest() -> LocalProjectSuggestion? {
+            LocalProjectSuggestion.evaluate(target, history: [prior, other], decisions: decisions, projects: [project, competing], now: now)
+        }
+        #expect(suggest()?.projectID == competing.id) // Keyword rule, no consulted provider.
+        decisions.occurrences[prior.id] = .init(dedupKey: prior.id, projectId: project.id, updatedAt: now)
+        #expect(suggest() == nil) // History disagrees with the rule.
+        decisions.occurrences[other.id] = .init(dedupKey: other.id, projectId: competing.id, updatedAt: now)
+        let neutral = Project(id: competing.id, name: competing.name, aliases: [])
+        func historyOnly() -> LocalProjectSuggestion? {
+            LocalProjectSuggestion.evaluate(target, history: [prior, other], decisions: decisions, projects: [project, neutral], now: now)
+        }
+        #expect(historyOnly() == nil)
+        decisions.occurrences[other.id]?.projectId = nil
+        #expect(historyOnly() == nil)
+        decisions.occurrences[target.id] = .init(dedupKey: target.id, projectId: nil, updatedAt: now)
+        #expect(!decisions.needsProject(target))
+        #expect(suggest() == nil)
+        decisions.occurrences[target.id] = nil
+        decisions.recurring = [.init(seriesId: "series", effectiveFrom: now, projectId: nil, updatedAt: now)]
+        #expect(!decisions.needsProject(target))
+        decisions.occurrences[prior.id] = nil
+        #expect(decisions.needsProject(prior))
+    }
+
+    @Test func purgedOccurrenceUsesItsOwnVerifiedRecordingSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let aliases = AliasStore(fileURL: directory.appendingPathComponent("aliases.json"), seed: [])
+        let project = try aliases.createProject(named: "Synthetic project")
+        let database = try AppDatabase(inMemory: true)
+        let store = ProjectAssignmentStore(database: database, aliasStore: aliases, didAssign: { Issue.record("Unexpected summary refresh") })
+        var old = event("purged", at: 200, series: nil)
+        var current = event("active", at: 2000, series: nil)
+        old.organizerEmail = "owner@example.invalid"
+        current.organizerEmail = old.organizerEmail
+        let target = current
+        var manifest = RecordingSession(event: old, notePath: nil)
+        let choice = EventProjectAssignment(dedupKey: old.id, projectId: project.id, updatedAt: Date(timeIntervalSince1970: 500))
+        let decisions = LocalProjectDecisions(occurrences: [old.id: choice])
+        func suggestion(live: [UnifiedEvent] = [], index: [String: RecordingSession]) -> LocalProjectSuggestion? {
+            LocalProjectSuggestion.evaluate(target, history: live, decisions: decisions, projects: aliases.projects, now: Date(), recordingIndex: index)
+        }
+        #expect(suggestion(index: [:]) == nil)
+        let candidate = try #require(suggestion(index: [old.id: manifest]))
+        #expect(candidate.evidence == .confirmedOccurrences(1))
+        #expect(suggestion(live: [old], index: [old.id: manifest])?.evidence == .confirmedOccurrences(1))
+        var cancelled = old
+        cancelled.status = "cancelled"
+        #expect(suggestion(live: [cancelled], index: [old.id: manifest]) == nil)
+        try await database.dbQueue.write { db in try choice.insert(db); try target.insert(db) }
+        try await store.confirm(candidate, for: target, rememberFuture: false, classificationProjects: aliases.projects,
+                                recordingIndex: [old.id: manifest])
+        let saved = try await database.dbQueue.read { try LocalProjectDecisions.read($0).decision(for: target) }
+        #expect(saved == .assigned(project.id))
+        manifest.eventSnapshot = target
+        #expect(suggestion(index: [old.id: manifest]) == nil)
+    }
+
+    @Test func localProjectViewsResolveArchivedRecordingsWithoutChangingManifests() {
+        let original = Project(id: "original", name: "Old space", aliases: [])
+        let chosen = Project(id: "stable-id", name: "Renamed space", aliases: [ProjectAlias("Previous name", .projectName)])
+        var prior = event("archived", at: 100, series: nil)
+        prior.projectId = original.name
+        var session = RecordingSession(event: prior, notePath: "fixture/note.md")
+        session.state = .completed
+        var decisions = LocalProjectDecisions()
+        let projects = [original, chosen]
+        func view(agenda: [UnifiedEvent] = []) -> WorkspaceProjectMeetings {
+            WorkspaceProjectMeetings(agenda: agenda, recordings: [prior.id: session], decisions: decisions, projects: projects)
+        }
+        #expect(view().recordingProjectNames[session.id] == original.name)
+        decisions.occurrences[prior.id] = .init(dedupKey: prior.id, projectId: chosen.id, updatedAt: .now)
+        let corrected = view()
+        #expect(corrected.archived[chosen.id]?.map(\.id) == [session.id])
+        #expect(corrected.recordingProjectNames[session.id] == chosen.name)
+        #expect(corrected.count(for: chosen) == 1 && corrected.count(for: original) == 0)
+        let live = view(agenda: [prior])
+        #expect(live.events[chosen.id]?.first?.projectId == chosen.name)
+        #expect(live.count(for: chosen) == 1 && live.archived[chosen.id] == nil)
+        #expect(prior.projectId == original.name && session.eventSnapshot?.projectId == original.name)
+        #expect(session.notePath == "fixture/note.md")
+        decisions.occurrences[prior.id]?.projectId = nil
+        #expect(view().recordingProjectNames[session.id] == nil)
+        #expect(view().archived.isEmpty && view(agenda: [prior]).events.isEmpty)
+        session.eventSnapshot = nil
+        decisions.occurrences[prior.id]?.projectId = "Previous name"
+        #expect(view().recordingProjectNames[session.id] == chosen.name)
+        #expect(view().archived[chosen.id]?.first?.id == session.id)
+    }
+
+    @Test func confirmRechecksDatabaseAndSkipsProviderBackedRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let aliases = AliasStore(fileURL: directory.appendingPathComponent("aliases.json"), seed: [])
+        let project = try aliases.createProject(named: "Synthetic space")
+        let database = try AppDatabase(inMemory: true)
+        let store = ProjectAssignmentStore(database: database, aliasStore: aliases, didAssign: { Issue.record("Unexpected project summary refresh") })
+        var draft = event("standalone", at: 500, series: nil)
+        draft.title = project.name
+        let target = draft
+        try await database.dbQueue.write { db in try target.insert(db) }
+        let suggestion = try #require(LocalProjectSuggestion.evaluate(target, history: [], decisions: .init(), projects: aliases.projects, now: Date()))
+        await #expect(throws: ProjectAssignmentError.self) {
+            try await store.confirm(suggestion, for: target, rememberFuture: true, classificationProjects: aliases.projects)
+        }
+        let rolledBack = try await database.dbQueue.read { try EventProjectAssignment.fetchCount($0) }
+        #expect(rolledBack == 0)
+        try await store.confirm(suggestion, for: target, rememberFuture: false, classificationProjects: aliases.projects)
+        let decision = try await database.dbQueue.read { try LocalProjectDecisions.read($0).decision(for: target) }
+        #expect(decision == .assigned(project.id))
+        try await database.dbQueue.write { db in
+            try EventProjectAssignment(dedupKey: target.id, projectId: nil, updatedAt: Date()).save(db)
+        }
+        await #expect(throws: ProjectAssignmentError.self) {
+            try await store.confirm(suggestion, for: target, rememberFuture: false, classificationProjects: aliases.projects)
+        }
+        let latest = try await database.dbQueue.read { try LocalProjectDecisions.read($0).decision(for: target) }
+        #expect(latest == .assigned(nil))
+    }
+
+    @Test func domainMatchesRequireAnExactDNSLabel() {
+        let project = Project(id: "d", name: "Domain project", aliases: [ProjectAlias("team.example", .domain)])
+        func score(_ email: String) -> Double {
+            RulesEngine.score(.init(title: "Meeting", attendeeEmails: [email]), projects: [project]).first?.value ?? 0
+        }
+        #expect(score("person@sub.team.example") >= RulesEngine.inboxThreshold)
+        #expect(score("person@team.example") >= RulesEngine.inboxThreshold)
+        #expect(score("person@otherteam.example") == 0)
+    }
+
     @Test func persistenceRulesRenameAndSyncResolution() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

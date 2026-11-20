@@ -18,9 +18,14 @@ function instant(value) {
 }
 
 function serialize(row, recordings = []) {
+  const project = row.project_id && !row.deleted ? {id: row.project_id, name: row.project_name} : null;
   return {id: row.id, title: row.title, startAt: row.start_at, endAt: row.end_at,
-    revision: row.revision, deleted: Boolean(row.deleted), recordings: row.deleted ? [] : recordings};
+    revision: row.revision, deleted: Boolean(row.deleted), project, recordings: row.deleted ? [] : recordings};
 }
+
+const meetingWithProject = `SELECT m.*, p.id AS project_id, p.name AS project_name FROM account_meetings m
+  LEFT JOIN account_meeting_projects link ON link.user_id=m.user_id AND link.meeting_id=m.id
+  LEFT JOIN account_projects p ON p.user_id=link.user_id AND p.id=link.project_id`;
 
 export async function listMeetings(env, userId, recordingsFor, since = null) {
   // Read the version first. A concurrent commit remains visible on the next poll.
@@ -28,7 +33,7 @@ export async function listMeetings(env, userId, recordingsFor, since = null) {
     .bind(userId).first("version") ?? "00000000000000000000000000000000";
   if (since === version) return accountJSON({unchanged: true, version});
   const {results} = await env.ACCOUNT_DB.prepare(
-    "SELECT * FROM account_meetings WHERE user_id = ? ORDER BY start_at, id"
+    meetingWithProject + " WHERE m.user_id = ? ORDER BY m.start_at, m.id"
   ).bind(userId).all();
   const byMeeting = new Map();
   for (const {meetingId, ...recording} of await recordingsFor(env, userId)) {
@@ -47,20 +52,48 @@ function mutation(body) {
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const start = instant(body.startAt), end = instant(body.endAt);
   if (!deleted && (!title || title.length > 512 || !start || !end || Date.parse(end) <= Date.parse(start))) return null;
+  let project = body.project;
+  if (project !== undefined && project !== null) {
+    const name = typeof project?.name === "string" ? project.name.trim() : "";
+    if (!isAccountId(project?.id) || !name || name.length > 120 || /[\u0000-\u001f\u007f]/u.test(name)) return null;
+    project = {id: project.id.toLowerCase(), name};
+  }
   return {id: body.mutationId.toLowerCase(), base: body.baseRevision, deleted, title: deleted ? "" : title,
-    start: deleted ? null : start, end: deleted ? null : end};
+    start: deleted ? null : start, end: deleted ? null : end, project};
+}
+
+function projectWrites(db, change, owner, meetingId) {
+  if (!change.deleted && change.project === undefined) return [];
+  // Only a successful new meeting mutation may alter its project. Replays, competing
+  // writes and pre-project clients keep the last explicitly saved association.
+  const accepted = `EXISTS (SELECT 1 FROM account_meetings WHERE user_id=? AND id=? AND last_mutation=?)
+    AND NOT EXISTS (SELECT 1 FROM account_meeting_mutations WHERE user_id=? AND mutation_id=?)`;
+  const guard = [owner, meetingId, change.id, owner, change.id];
+  if (change.deleted || !change.project) {
+    return [db.prepare(`DELETE FROM account_meeting_projects WHERE user_id=? AND meeting_id=? AND ${accepted}`)
+      .bind(owner, meetingId, ...guard)];
+  }
+  const {id, name} = change.project;
+  return [
+    db.prepare(`INSERT INTO account_projects(user_id,id,name) SELECT ?,?,? WHERE ${accepted}
+      ON CONFLICT(user_id,id) DO NOTHING`).bind(owner, id, name, ...guard),
+    db.prepare(`INSERT INTO account_meeting_projects(user_id,meeting_id,project_id) SELECT ?,?,? WHERE ${accepted}
+      ON CONFLICT(user_id,meeting_id) DO UPDATE SET project_id=excluded.project_id`).bind(owner, meetingId, id, ...guard),
+  ];
 }
 
 export async function putMeeting(body, env, userId, meetingId) {
   const change = mutation(body);
   if (!change) return fail("invalid_meeting", 400);
-  const bytes = new TextEncoder().encode(JSON.stringify([meetingId, change.base, change.deleted, change.title, change.start, change.end]));
+  const fields = [meetingId, change.base, change.deleted, change.title, change.start, change.end];
+  if (change.project !== undefined) fields.push(change.project);
+  const bytes = new TextEncoder().encode(JSON.stringify(fields));
   const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
     byte => byte.toString(16).padStart(2, "0")).join("");
   const db = env.ACCOUNT_DB;
   const previous = db.prepare("SELECT fingerprint FROM account_meeting_mutations WHERE user_id=? AND mutation_id=?")
     .bind(userId, change.id);
-  const read = db.prepare("SELECT * FROM account_meetings WHERE user_id=? AND id=?").bind(userId, meetingId);
+  const read = db.prepare(meetingWithProject + " WHERE m.user_id=? AND m.id=?").bind(userId, meetingId);
   // D1 executes a batch as a single transaction. A reused key cannot race a second write.
   const unused = "NOT EXISTS (SELECT 1 FROM account_meeting_mutations WHERE user_id=? AND mutation_id=?)";
   let write;
@@ -77,7 +110,8 @@ export async function putMeeting(body, env, userId, meetingId) {
   const receipt = db.prepare(`INSERT INTO account_meeting_mutations (user_id,mutation_id,meeting_id,fingerprint)
     SELECT user_id,last_mutation,id,? FROM account_meetings WHERE user_id=? AND id=? AND last_mutation=?
     ON CONFLICT(user_id,mutation_id) DO NOTHING`).bind(fingerprint, userId, meetingId, change.id);
-  const [, , key, result] = await db.batch([write, receipt, previous, read]);
+  const batch = await db.batch([write, ...projectWrites(db, change, userId, meetingId), receipt, previous, read]);
+  const [key, result] = batch.slice(-2);
   const row = result.results[0];
   if (key.results.length && key.results[0].fingerprint !== fingerprint) return fail("mutation_key_reused", 409);
   if (!row) return fail("not_found", 404);
