@@ -44,7 +44,7 @@ android {
             from(rootProject.file("../coordinator/test-support/phone-tone.mp4"))
             into(layout.buildDirectory.dir("generated/staging-tone-assets"))
         }
-        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/staging-tone-assets"))
+        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/staging-tone-assets").get().asFile)
         tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(tone) }
     }
 
