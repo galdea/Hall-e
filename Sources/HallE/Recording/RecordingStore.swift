@@ -44,14 +44,33 @@ enum RecordingStore {
         return try? JSONDecoder().decode(RecordingSession.self, from: data)
     }
 
-    /// Latest session per event (by start time).
-    static func latestByEvent() -> [String: RecordingSession] {
-        var map: [String: RecordingSession] = [:]
-        for s in allSessions() {
-            if let existing = map[s.eventDedupKey], existing.startedAt >= s.startedAt { continue }
-            map[s.eventDedupKey] = s
+    struct EventIndex {
+        let latest: [String: RecordingSession]
+        let withSnapshot: [String: RecordingSession]
+        let finishedWithSnapshot: [String: RecordingSession]
+
+        init(_ sessions: [RecordingSession] = []) {
+            latest = Self.latestByEvent(sessions)
+            let verified = sessions.filter { session in
+                guard let event = session.eventSnapshot, event.dedupKey == session.eventDedupKey else { return false }
+                return event.status == "cancelled" || event.isAllDay || event.endTs > event.startTs
+            }
+            withSnapshot = Self.latestByEvent(verified)
+            // A cancellation or all-day change supersedes an older timed snapshot.
+            finishedWithSnapshot = Self.latestByEvent(verified.filter {
+                $0.isFinished || $0.eventSnapshot?.status == "cancelled" || $0.eventSnapshot?.isAllDay == true
+            })
         }
-        return map
+
+        private static func latestByEvent(_ sessions: [RecordingSession]) -> [String: RecordingSession] {
+            var latest: [String: RecordingSession] = [:]
+            for session in sessions {
+                let key = session.eventDedupKey
+                if let current = latest[key], current.startedAt >= session.startedAt { continue }
+                latest[key] = session
+            }
+            return latest
+        }
     }
 
     static func allSessions(for eventDedupKey: String) -> [RecordingSession] {

@@ -263,7 +263,7 @@ final class WorkspaceViewModel {
         guard appState.projectDecisions.needsProject(event) else { return nil }
         return LocalProjectSuggestion.evaluate(event, history: appState.agenda, decisions: appState.projectDecisions,
                                                projects: AliasStore.shared.classificationProjects(), now: Date(),
-                                               recordingIndex: appState.recordingsByEvent)
+                                               recordingIndex: appState.recordingIndex.withSnapshot)
     }
 
     var attentionItems: [AttentionItem] {

@@ -27,7 +27,9 @@ struct WorkspaceRootView: View {
             SharedMeetingsView().frame(minWidth: 760, minHeight: 640)
         }
         .sheet(isPresented: $model.showAccountAgenda) {
-            AccountAgendaView(localEvents: model.appState.agenda, focusedID: model.focusedAccountMeetingID)
+            AccountAgendaView(localEvents: model.appState.agenda, localDecisions: model.appState.projectDecisions,
+                              localProjects: AliasStore.shared.projects, localRecordings: model.appState.recordingIndex.finishedWithSnapshot,
+                              focusedID: model.focusedAccountMeetingID)
         }
         .onReceive(NotificationCenter.default.publisher(for: .halleOpenToday)) { notification in
             let epoch = notification.userInfo?["agendaDate"] as? Double

@@ -2,20 +2,9 @@
 // Miniflare creates only disposable local D1/R2 instances. All Worker egress is intercepted.
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
-import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const root = fileURLToPath(new URL("../", import.meta.url));
-const requireTools = createRequire(resolve(process.env.ACCOUNT_WORKER_TOOLS || resolve(root, "node_modules"), ".local-smoke.cjs"));
-const { Miniflare, convertV4MiniflareOptions } = requireTools("miniflare");
-const { build } = requireTools("esbuild");
-const { outputFiles } = await build({
-  entryPoints: [resolve(root, "src/account-worker.mjs")], bundle: true, write: false,
-  platform: "neutral", format: "esm", external: ["node:crypto"],
-});
+import { coordinatorRoot as root, startAccountRuntime } from "../test-support/local-runtime.mjs";
 const codes = new Map();
 const oauthCodes = new Map();
 const runtimeOrigin = "https://fixture.test";
@@ -45,9 +34,6 @@ audio.write("free", tone.length + 4, "ascii");
 let regionalReference;
 let regionalSubmissions = 0;
 const options = {
-  host: "127.0.0.1", port: 0, modules: true, script: outputFiles[0].text,
-  compatibilityDate: "2026-09-15", compatibilityFlags: ["nodejs_compat"],
-  d1Databases: ["ACCOUNT_DB"], r2Buckets: ["ACCOUNT_AUDIO"],
   bindings: {
     ACCOUNT_AUTH_SECRET: "synthetic-local-runtime-secret-never-for-deployment",
     ACCOUNT_RESEND_KEY: "synthetic-resend-key", ACCOUNT_MAIL_FROM: "Hall-e QA <qa@example.test>",
@@ -116,21 +102,9 @@ const options = {
     });
   },
 };
-const runtime = new Miniflare(convertV4MiniflareOptions ? convertV4MiniflareOptions(options) : options);
+const { runtime, db } = await startAccountRuntime(options);
 
 try {
-  const db = await runtime.getD1Database("ACCOUNT_DB");
-  // Parse complete SQL, including trigger bodies, before applying it to the actual D1 instance.
-  const schema = new DatabaseSync(":memory:");
-  try {
-    for (const name of (await readdir(root)).filter(n => /^account.*\.sql$/.test(n)).sort()) {
-      schema.exec(await readFile(resolve(root, name), "utf8"));
-    }
-    const statements = schema.prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all();
-    await db.batch(statements.map(row => db.prepare(row.sql)));
-  } finally {
-    schema.close();
-  }
   const worker = await runtime.getWorker();
   async function call(method, route, token, payload, expected) {
     const bytes = payload instanceof Uint8Array;

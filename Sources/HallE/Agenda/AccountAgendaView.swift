@@ -4,6 +4,9 @@ import SwiftUI
 struct AccountAgendaView: View {
     @State private var model = AccountAgendaModel.shared
     let localEvents: [UnifiedEvent]
+    let localDecisions: LocalProjectDecisions
+    let localProjects: [Project]
+    let localRecordings: [String: RecordingSession]
     var focusedID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var editing: AccountMeeting?
@@ -41,7 +44,7 @@ struct AccountAgendaView: View {
                 if link { signInControls(linking: true) }
                 HStack {
                     Button(label("New meeting", "Nueva reunión"), systemImage: "plus") { editing = .draft() }
-                    Button(label("Copy from local calendar…", "Copiar desde la agenda local…")) { choosingOccurrence = true }
+                    Button(label("Copy a local meeting…", "Copiar una reunión local…")) { choosingOccurrence = true }
                     Spacer()
                     Button(label("Sync", "Sincronizar"), systemImage: "arrow.clockwise") {
                         Task { await model.run { try await model.synchronize() } }
@@ -110,30 +113,7 @@ struct AccountAgendaView: View {
                 refresh()
             }
         }
-        .sheet(isPresented: $choosingOccurrence) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(label("Copy a timed occurrence", "Copiar una reunión con hora")).font(.headline)
-                Text(label("The selected title and times will be sent to this account. The original remains in its source calendar.",
-                           "Se enviarán a esta cuenta el título y las horas que elijas. El original seguirá en su calendario de origen."))
-                List(localEvents.filter { !$0.isAllDay && $0.status != "cancelled" }) { event in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(event.title)
-                            Text(event.startTs.formatted() + " — " + event.endTs.formatted()).font(.caption)
-                        }
-                        Spacer()
-                        Button(label("Copy to my account", "Copiar a mi cuenta")) {
-                            local {
-                                try model.importOccurrence(event)
-                                choosingOccurrence = false
-                                refresh()
-                            }
-                        }
-                    }
-                }
-                Button(label("Close", "Cerrar")) { choosingOccurrence = false }
-            }.padding().frame(minWidth: 520, minHeight: 330)
-        }
+        .sheet(isPresented: $choosingOccurrence) { localCalendarPicker }
         .alert(label("Delete this account meeting?", "¿Eliminar esta reunión de la cuenta?"),
                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { meeting in
             Button(label("Delete from account", "Eliminar de la cuenta"), role: .destructive) {
@@ -143,6 +123,57 @@ struct AccountAgendaView: View {
             }
             Button(label("Cancel", "Cancelar"), role: .cancel) { }
         } message: { meeting in Text(meeting.title) }
+    }
+
+    private var localCalendarPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(label("Copy a timed occurrence", "Copiar una reunión con hora")).font(.headline)
+            Text(label("Copy a meeting’s title and times. If you confirmed a local project, you can also choose to share its name with this account.",
+                       "Copia el título y el horario de una reunión. Si confirmaste un proyecto local, también puedes elegir compartir su nombre con esta cuenta."))
+            let existing = model.cache.visible.compactMap(\.project)
+            let historical = AccountMeeting.recordedOccurrences(outside: localEvents, recordings: localRecordings)
+            List {
+                Section(label("Local calendar", "Agenda local")) {
+                    ForEach(localEvents.filter { !$0.isAllDay && $0.status != "cancelled" }) { event in
+                        localMeetingRow(event, existing: existing)
+                    }
+                }
+                if !historical.isEmpty {
+                    Section(label("Previously recorded meetings", "Reuniones grabadas anteriormente")) {
+                        ForEach(historical) { event in localMeetingRow(event, existing: existing) }
+                    }
+                }
+            }
+            if !feedback.isEmpty { Text(feedback).foregroundStyle(.red) }
+            Button(label("Close", "Cerrar")) { choosingOccurrence = false }
+        }.padding().frame(minWidth: 520, minHeight: 330)
+    }
+
+    private func localMeetingRow(_ event: UnifiedEvent, existing: [AccountProject]) -> some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(event.title)
+                Text(event.startTs.formatted() + " — " + event.endTs.formatted()).font(.caption)
+            }
+            Spacer()
+            if let account = model.account {
+                if let project = AccountProject.confirmedCopy(for: event, decisions: localDecisions, projects: localProjects,
+                                                             account: account, existing: existing) {
+                    Menu(label("Copy to my account", "Copiar a mi cuenta")) {
+                        Button(label("Copy title and times only", "Copiar solo título y horario")) {
+                            copyOccurrence(event, project: nil, into: account)
+                        }
+                        Button(label("Include project “\(project.name)”", "Incluir el proyecto «\(project.name)»")) {
+                            copyOccurrence(event, project: project, into: account)
+                        }
+                    }.fixedSize()
+                } else {
+                    Button(label("Copy to my account", "Copiar a mi cuenta")) {
+                        copyOccurrence(event, project: nil, into: account)
+                    }
+                }
+            }
+        }
     }
 
     private func signInControls(linking: Bool) -> some View {
@@ -208,6 +239,14 @@ struct AccountAgendaView: View {
 
     private func local(_ operation: () throws -> Void) {
         do { try operation(); feedback = "" } catch { feedback = error.localizedDescription }
+    }
+
+    private func copyOccurrence(_ event: UnifiedEvent, project: AccountProject?, into account: AccountConnection) {
+        local {
+            try model.importOccurrence(event, project: project, into: account)
+            choosingOccurrence = false
+            refresh()
+        }
     }
 
     private func refresh() { Task { await model.run { try await model.synchronize() } } }

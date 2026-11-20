@@ -63,7 +63,7 @@ internal object AccountTransport {
 internal class AccountSessions(context: Context) {
     private val prefs = context.getSharedPreferences("account-sessions-v1", Context.MODE_PRIVATE)
     var lastOrigin: String
-        get() = prefs.getString("origin", "").orEmpty()
+        get() = prefs.getString("origin", null) ?: BuildConfig.ACCOUNT_ORIGIN
         set(value) { check(prefs.edit().putString("origin", accountOrigin(value)).commit()) }
 
     private fun read(key: String) = prefs.getString(key, null)?.let {

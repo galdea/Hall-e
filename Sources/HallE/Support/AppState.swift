@@ -23,7 +23,8 @@ final class AppState {
     var googleClientConfigured = GoogleClientConfig.load() != nil
 
     /// Latest recording session per event dedupKey (for the transcript button).
-    var recordingsByEvent: [String: RecordingSession] = [:]
+    private(set) var recordingIndex = RecordingStore.EventIndex()
+    var recordingsByEvent: [String: RecordingSession] { recordingIndex.latest }
     /// Ordering guards for `refreshRecordings`'s off-main-actor disk reads.
     private var recordingsRefreshToken = 0
     private var appliedRecordingsToken = 0
@@ -138,12 +139,12 @@ final class AppState {
         recordingsRefreshToken += 1
         let token = recordingsRefreshToken
         Task.detached {
-            let map = RecordingStore.latestByEvent()
+            let index = RecordingStore.EventIndex(RecordingStore.allSessions())
             await MainActor.run {
                 let state = AppState.shared
                 guard token > state.appliedRecordingsToken else { return }
                 state.appliedRecordingsToken = token
-                state.recordingsByEvent = map
+                state.recordingIndex = index
             }
         }
     }

@@ -17,6 +17,23 @@ SIGN_ID="${SIGN_ID:--}"
 SIGNING_MODE="${SIGNING_MODE:-adhoc}"
 CONFIG="${CONFIG:-release}"
 ARCH="${ARCH:-$(uname -m)}"
+# This optional public address is embedded in the signed bundle. Validate before building.
+account_origin="${HALLE_ACCOUNT_ORIGIN:-}"
+if [[ -n "$account_origin" ]]; then
+  origin_pattern='^https://(([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+|\[[a-fA-F0-9:]+\])(:([0-9]{1,5}))?(/account/v1)?/?$'
+  if [[ ! "$account_origin" =~ $origin_pattern ]]; then
+    echo 'HALLE_ACCOUNT_ORIGIN must be an HTTPS origin without credentials, query or fragment' >&2
+    exit 1
+  fi
+  host="${BASH_REMATCH[1]}"
+  port="${BASH_REMATCH[4]}"
+  account_origin="https://$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$port" ]]; then
+    port=$((10#$port))
+    (( port > 0 && port <= 65535 )) || { echo 'Invalid port in HALLE_ACCOUNT_ORIGIN' >&2; exit 1; }
+    [[ "$port" == 443 ]] || account_origin+=":$port"
+  fi
+fi
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be X.Y.Z' >&2; exit 1; }
 [[ "$BUILD_NUM" =~ ^[0-9]+$ ]] || { echo 'BUILD_NUM must be numeric' >&2; exit 1; }
 case "$ARCH" in arm64|x86_64) ;; *) echo 'ARCH must be arm64 or x86_64' >&2; exit 1;; esac
@@ -66,6 +83,9 @@ cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 # Notification sounds also resolve from the main bundle.
 cp "$RES/GentleRing.wav" "$APP/Contents/Resources/"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" BundleResources/Info.plist > "$APP/Contents/Info.plist"
+if [[ -n "$account_origin" ]]; then
+  plutil -insert HallEAccountOrigin -string "$account_origin" "$APP/Contents/Info.plist"
+fi
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 if [[ -f BundleResources/AppIcon.icns ]]; then

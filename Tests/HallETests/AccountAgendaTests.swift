@@ -21,6 +21,107 @@ private final class CalendarFixtureHTTP: URLProtocol {
 
 @Suite("Private account agenda", .serialized)
 struct AccountAgendaTests {
+    @Test func verifiedArchivedOccurrencesAreOfferedOnce() throws {
+        let start = Date(timeIntervalSince1970: 1000)
+        func recorded(_ id: String) -> RecordingSession {
+            let event = UnifiedEvent(dedupKey: id, title: "Past review", startTs: start, endTs: start.addingTimeInterval(120),
+                                     isAllDay: false, status: "confirmed", winnerAccountEmail: "host@example.invalid", sourcesJSON: "[]")
+            var session = RecordingSession(event: event, notePath: nil)
+            session.state = .completed
+            return session
+        }
+        let current = recorded("current"), historical = recorded("earlier")
+        var cancelled = try #require(current.eventSnapshot)
+        cancelled.status = "cancelled"
+        var missing = recorded("missing")
+        missing.eventSnapshot = nil
+        var mismatch = recorded("mismatch")
+        mismatch.eventSnapshot = current.eventSnapshot
+        var unfinished = recorded("unfinished")
+        unfinished.state = .recording
+        var newRetry = recorded("earlier")
+        newRetry.startedAt = historical.startedAt.addingTimeInterval(1)
+        newRetry.eventSnapshot?.title = "Retry in progress"
+        newRetry.state = .recording
+        var retryWithoutSnapshot = recorded("earlier")
+        retryWithoutSnapshot.startedAt = newRetry.startedAt.addingTimeInterval(1)
+        retryWithoutSnapshot.eventSnapshot = nil
+
+        let original = recorded("cancelled-after-recording")
+        var changed = recorded("cancelled-after-recording")
+        changed.startedAt = original.startedAt.addingTimeInterval(1)
+        changed.eventSnapshot?.status = "cancelled"
+        changed.state = .recording
+        let sessions = [current, historical, missing, mismatch, unfinished, newRetry, retryWithoutSnapshot, original, changed]
+        let recordingIndex = RecordingStore.EventIndex(sessions)
+        #expect(recordingIndex.latest["earlier"]?.id == retryWithoutSnapshot.id)
+        #expect(recordingIndex.withSnapshot["earlier"]?.id == newRetry.id)
+        #expect(recordingIndex.finishedWithSnapshot["earlier"]?.id == historical.id)
+        let offered = AccountMeeting.recordedOccurrences(outside: [cancelled], recordings: recordingIndex.finishedWithSnapshot)
+        #expect(offered.map(\.id) == ["earlier"])
+        #expect(offered.first?.title == historical.eventSnapshot?.title)
+    }
+
+    @Test func copyConfirmedLocalProjectOnlyWhenSelected() throws {
+        let origin = try AccountAPI.origin("https://calendar.example.invalid")
+        func account(_ id: String) -> AccountConnection {
+            .init(origin: origin, credentials: .init(userId: id, token: "test", expiresAt: 4_102_444_800_000))
+        }
+        let owner = account("A")
+        let now = Date(timeIntervalSince1970: 1_000)
+        let local = Project(id: "synthetic-local", name: "Prototype", aliases: [.init("Former name", .projectName)])
+        let event = UnifiedEvent(dedupKey: "occurrence", title: "Design review", startTs: now, endTs: now.addingTimeInterval(60),
+                                 isAllDay: false, status: "confirmed", iCalUID: "series", winnerAccountEmail: "host@example.invalid",
+                                 projectId: "Inferred label", sourcesJSON: "[]")
+        var decisions = LocalProjectDecisions()
+        func candidate(_ who: AccountConnection, projects: [Project] = [local], existing: [AccountProject] = []) -> AccountProject? {
+            AccountProject.confirmedCopy(for: event, decisions: decisions, projects: projects, account: who, existing: existing)
+        }
+        #expect(candidate(owner) == nil)
+        decisions.recurring = [.init(seriesId: "series", effectiveFrom: now, projectId: local.id, updatedAt: now)]
+        let project = try #require(candidate(owner))
+        #expect(project.name == local.name && UUID(uuidString: project.id) != nil)
+        #expect(candidate(account("B"))?.id != project.id)
+        var renamed = local
+        renamed.name = "Renamed prototype"
+        #expect(candidate(owner, projects: [renamed])?.id == project.id)
+        #expect(candidate(owner, projects: [renamed], existing: [project]) == project)
+        decisions.occurrences[event.id] = .init(dedupKey: event.id, projectId: nil, updatedAt: now)
+        #expect(candidate(owner) == nil)
+        decisions.occurrences[event.id]?.projectId = "Former name"
+        #expect(candidate(owner) == project)
+        var archived = local
+        archived.isArchived = true
+        #expect(candidate(owner, projects: [archived]) == nil)
+        let other = Project(id: "other", name: "Former name", aliases: [])
+        #expect(candidate(owner, projects: [local, other]) == nil)
+
+        var cache = AccountCalendarCache()
+        #expect(try cache.importOccurrence(event, project: nil, into: owner))
+        let first = try #require(cache.pending.first)
+        #expect(first.body["project"] == nil)
+        #expect(throws: AccountAgendaError.self) { try cache.importOccurrence(event, project: project, into: owner) }
+        #expect(cache.pending.first?.mutationId == first.mutationId)
+        var fromPhone = first.meeting
+        fromPhone.title = "Updated on the phone"
+        fromPhone.revision = 2
+        cache.acknowledge(first, result: fromPhone)
+        #expect(try cache.importOccurrence(event, project: project, into: owner))
+        let withProject = try #require(cache.pending.first)
+        #expect(withProject.meeting.id == first.meeting.id && withProject.meeting.title == fromPhone.title)
+        #expect(withProject.body["project"] as? [String: String] == ["id": project.id, "name": project.name])
+        var remote = withProject.meeting
+        remote.revision = 3
+        cache.acknowledge(withProject, result: remote)
+        #expect(try !cache.importOccurrence(event, project: project, into: owner))
+        cache.meetings[0].project = .init(id: UUID().uuidString, name: "Separate mobile choice")
+        #expect(try !cache.importOccurrence(event, project: project, into: owner))
+        cache.meetings[0].project = nil
+        cache.meetings[0].deleted = true
+        #expect(try !cache.importOccurrence(event, project: project, into: owner))
+        #expect(cache.pending.isEmpty)
+    }
+
     @Test func privateProjectIntentsPreserveOfflineAndLegacyEdits() throws {
         var cache = AccountCalendarCache()
         let project = AccountProject(id: UUID().uuidString.lowercased(), name: "Synthetic project")
@@ -107,9 +208,9 @@ struct AccountAgendaTests {
         config.protocolClasses = [CalendarFixtureHTTP.self]
         let transport = URLSession(configuration: config)
         var fakeVault: String?
-        func device() -> AccountAgendaModel {
+        func device(packagedOrigin: String? = "https://Packaged.example.invalid:443/account/v1/") -> AccountAgendaModel {
             AccountAgendaModel(preferences: prefs, cacheRoot: { root }, loadVault: { fakeVault },
-                               saveVault: { fakeVault = $0 }, transport: transport)
+                               saveVault: { fakeVault = $0 }, transport: transport, packagedOrigin: packagedOrigin)
         }
         let origin = try AccountAPI.origin("https://calendar.example.invalid")
         let credentialsA = AccountCredentials(userId: "test-A", token: "fixture-A", expiresAt: 4_102_444_800_000)
@@ -173,7 +274,10 @@ struct AccountAgendaTests {
             client.code = "12345678"
             await client.run { try await client.finishEmail() }
         }
+        #expect(device(packagedOrigin: nil).endpoint.isEmpty)
+        #expect(device(packagedOrigin: "http://invalid.example.invalid").endpoint.isEmpty)
         let first = device()
+        #expect(first.endpoint == "https://packaged.example.invalid")
         await signIn(first, email: "a@example.invalid")
         #expect(first.account?.credentials == credentialsA)
         try first.enqueue(draft)
@@ -199,6 +303,7 @@ struct AccountAgendaTests {
         isOffline = true
         await restarted.run { try await restarted.signOut() }
         #expect(restarted.account == nil && restarted.cache.visible.isEmpty)
+        #expect(device().endpoint == origin.absoluteString)
         isOffline = false
         login = credentialsB
         await signIn(restarted, email: "b@example.invalid")

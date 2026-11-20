@@ -113,7 +113,7 @@ struct MeetingProjectSuggestionRow: View {
                     do {
                         try await ProjectAssignmentStore.shared.confirm(suggestion, for: event, rememberFuture: rememberFuture,
                                                                         classificationProjects: AliasStore.shared.classificationProjects(),
-                                                                        recordingIndex: AppState.shared.recordingsByEvent)
+                                                                        recordingIndex: AppState.shared.recordingIndex.withSnapshot)
                     } catch {
                         self.error = error.localizedDescription
                     }

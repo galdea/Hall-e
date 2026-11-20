@@ -1,4 +1,20 @@
+import java.net.URI
+import java.util.Locale
+
 plugins { id("com.android.application") }
+
+val packagedAccountOrigin = providers.environmentVariable("HALLE_ACCOUNT_ORIGIN").orNull.orEmpty().let { raw ->
+    if (raw.isEmpty()) return@let ""
+    val uri = runCatching { URI(raw) }.getOrNull()
+    require(uri != null && uri.scheme == "https" && uri.host != null && uri.userInfo == null &&
+        uri.rawQuery == null && uri.rawFragment == null &&
+        uri.rawPath in listOf("", "/", "/account/v1", "/account/v1/") &&
+        (uri.port == -1 || uri.port in 1..65535) && !uri.rawAuthority.endsWith(':')) {
+        "HALLE_ACCOUNT_ORIGIN must be an HTTPS origin without credentials, query or fragment"
+    }
+    URI("https", null, uri.host.lowercase(Locale.ROOT), if (uri.port == 443) -1 else uri.port,
+        null, null, null).toASCIIString()
+}
 
 android {
     namespace = "app.halle.companion"
@@ -10,6 +26,7 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "0.2.0"
+        buildConfigField("String", "ACCOUNT_ORIGIN", "\"$packagedAccountOrigin\"")
         testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
     }
 

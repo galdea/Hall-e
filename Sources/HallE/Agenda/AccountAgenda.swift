@@ -4,6 +4,21 @@ import CryptoKit
 struct AccountProject: Codable, Equatable, Hashable, Identifiable {
     var id: String
     var name: String
+
+    static func confirmedCopy(for event: UnifiedEvent, decisions: LocalProjectDecisions, projects: [Project],
+                              account: AccountConnection, existing: [AccountProject]) -> Self? {
+        guard case .assigned(let reference?) = decisions.decision(for: event) else { return nil }
+        // Older decisions can contain a historical display name. Only a unique reference is safe to copy.
+        let matches = projects.filter { $0.matchesReference(reference) }
+        guard let project = projects.first(where: { $0.id == reference }) ?? (matches.count == 1 ? matches.first : nil),
+              !project.isArchived else { return nil }
+        let id = AccountCalendarCache.importID(source: "local-project:" + project.id, origin: account.origin,
+                                              userId: account.credentials.userId)
+        if let known = existing.first(where: { $0.id == id }) { return known }
+        let name = project.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.utf16.count <= 120, name.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        return Self(id: id, name: name)
+    }
 }
 
 struct AccountRecording: Codable, Equatable, Identifiable {
@@ -22,6 +37,16 @@ struct AccountMeeting: Codable, Equatable, Identifiable {
     var deleted: Bool
     var recordings: [AccountRecording]
     var project: AccountProject?
+
+    static func recordedOccurrences(outside agenda: [UnifiedEvent], recordings: [String: RecordingSession]) -> [UnifiedEvent] {
+        let current = Set(agenda.map(\.dedupKey))
+        return recordings.compactMap { key, session -> UnifiedEvent? in
+            guard !current.contains(key), session.isFinished, session.eventDedupKey == key,
+                  let event = session.eventSnapshot, event.dedupKey == key, event.status != "cancelled",
+                  !event.isAllDay, event.endTs > event.startTs else { return nil }
+            return event
+        }.sorted { $0.startTs == $1.startTs ? $0.id < $1.id : $0.startTs > $1.startTs }
+    }
 
     static func timestamp(_ date: Date) -> String {
         Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date)
@@ -84,6 +109,26 @@ struct AccountCalendarCache: Codable {
         }
         let previous = meetings.first { $0.id == meeting.id }
         pending.append(.init(meeting: meeting, projectChanged: !meeting.deleted && previous?.project != meeting.project))
+    }
+
+    mutating func importOccurrence(_ event: UnifiedEvent, project: AccountProject?, into account: AccountConnection) throws -> Bool {
+        guard !event.isAllDay, event.status != "cancelled" else { throw AccountAgendaError.invalidMeeting }
+        let id = Self.importID(source: event.dedupKey, origin: account.origin, userId: account.credentials.userId)
+        if let inFlight = pending.first(where: { $0.meeting.id == id }) {
+            if project != nil && inFlight.meeting.project == nil && !inFlight.meeting.deleted { throw AccountAgendaError.pending }
+            return false
+        }
+        var meeting: AccountMeeting
+        if let previous = meetings.first(where: { $0.id == id }) {
+            // A pre-project copy can gain its confirmed link without overwriting edits from a phone.
+            guard !previous.deleted, previous.project == nil, project != nil else { return false }
+            meeting = previous
+        } else {
+            meeting = .draft(id: id, title: event.title, start: event.startTs, end: event.endTs)
+        }
+        meeting.project = project
+        try enqueue(meeting)
+        return true
     }
 
     mutating func reapply(_ edit: AgendaMutation) throws {

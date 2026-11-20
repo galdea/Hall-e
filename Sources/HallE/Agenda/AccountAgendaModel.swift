@@ -23,6 +23,7 @@ final class AccountAgendaModel {
     static let shared = AccountAgendaModel()
     fileprivate static let vaultKey = "private-agenda-sessions-v1"
     private static let optInKey = "private-agenda-initialized-v1"
+    private static let originKey = "private-agenda-origin-v1"
 
     private let preferences: UserDefaults
     private let cacheRoot: () -> URL
@@ -34,12 +35,15 @@ final class AccountAgendaModel {
          cacheRoot: @escaping () -> URL = { AppPaths.appSupport.appendingPathComponent("PrivateAgenda", isDirectory: true) },
          loadVault: @escaping () async throws -> String? = { try await KeychainStore.getAsync(account: AccountAgendaModel.vaultKey) },
          saveVault: @escaping (String) async throws -> Void = { try await KeychainStore.setAsync($0, account: AccountAgendaModel.vaultKey) },
-         transport: URLSession = AccountAPI.session) {
+         transport: URLSession = AccountAPI.session,
+         packagedOrigin: String? = Bundle.main.object(forInfoDictionaryKey: "HallEAccountOrigin") as? String) {
         self.preferences = preferences
         self.cacheRoot = cacheRoot
         self.loadVault = loadVault
         self.saveVault = saveVault
         self.transport = transport
+        let preferredOrigin = preferences.string(forKey: Self.originKey) ?? packagedOrigin ?? ""
+        self.endpoint = (try? AccountAPI.origin(preferredOrigin))?.absoluteString ?? ""
     }
 
     private func api(_ origin: URL) -> AccountAPI { AccountAPI(origin: origin, session: transport) }
@@ -87,6 +91,7 @@ final class AccountAgendaModel {
         initialized = true
         if let account {
             endpoint = account.origin.absoluteString
+            preferences.set(endpoint, forKey: Self.originKey)
             if account.expired {
                 try await clearActive(queueRevocation: false)
             } else { try openCache(account) }
@@ -123,6 +128,7 @@ final class AccountAgendaModel {
     private func authContext() throws -> (AccountAPI, String?) {
         let origin = try AccountAPI.origin(endpoint)
         guard account == nil || account?.origin == origin else { throw AccountAgendaError.origin }
+        preferences.set(origin.absoluteString, forKey: Self.originKey)
         return (api(origin), account?.credentials.token)
     }
 
@@ -236,14 +242,15 @@ final class AccountAgendaModel {
         message = PublicUICopy.text("Saved on this Mac. Waiting to sync.", "Guardada en este Mac. Pendiente de sincronización.")
     }
 
-    func importOccurrence(_ occurrence: UnifiedEvent) throws {
-        guard let account, !occurrence.isAllDay else { throw AccountAgendaError.invalidMeeting }
-        let id = AccountCalendarCache.importID(source: occurrence.dedupKey, origin: account.origin, userId: account.credentials.userId)
-        if cache.meetings.contains(where: { $0.id == id }) || cache.pending.contains(where: { $0.meeting.id == id }) {
+    func importOccurrence(_ occurrence: UnifiedEvent, project: AccountProject?, into expected: AccountConnection) throws {
+        guard account == expected else { throw AccountAgendaError.session }
+        var next = cache
+        if try next.importOccurrence(occurrence, project: project, into: expected) {
+            try update(next)
+            message = PublicUICopy.text("Saved on this Mac. Waiting to sync.", "Guardada en este Mac. Pendiente de sincronización.")
+        } else {
             message = PublicUICopy.text("This occurrence has already been copied.", "Ya se copió esta reunión.")
-            return
         }
-        try enqueue(.draft(id: id, title: occurrence.title, start: occurrence.startTs, end: occurrence.endTs))
     }
 
     func reapply(_ mutation: AgendaMutation) throws {
