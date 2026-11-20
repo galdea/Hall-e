@@ -2,7 +2,8 @@ import Foundation
 
 /// Well-known on-disk locations for Hall-e, all under Application Support.
 enum AppPaths {
-    static let bundleID = "cl.gabriel.hall-e"
+    static let isStaging = Bundle.main.bundleIdentifier == "cl.gabriel.hall-e.staging"
+    static let bundleID = isStaging ? "cl.gabriel.hall-e.staging" : "cl.gabriel.hall-e"
 
     /// User Application Support/Hall-e (container-resolved by App Sandbox).
     static var appSupport: URL {
@@ -16,7 +17,7 @@ enum AppPaths {
         }
         #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("Hall-e", isDirectory: true)
+        let dir = base.appendingPathComponent(isStaging ? "Hall-e Staging" : "Hall-e", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         return dir

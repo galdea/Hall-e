@@ -1,4 +1,7 @@
 APP_NAME := Hall-e
+ifeq ($(HALLE_STAGING),1)
+APP_NAME := Hall-e Staging
+endif
 DIST := dist/$(APP_NAME).app
 INSTALL_DIR := /Applications/$(APP_NAME).app
 

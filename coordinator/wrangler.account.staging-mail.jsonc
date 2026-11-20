@@ -1,0 +1,23 @@
+{
+  "name": "halle-account-staging-mail",
+  "main": "src/staging-mailbox.mjs",
+  "workers_dev": false,
+  "account_id": "f98cd22e4bc305b68c12a8c383d6a61d",
+  "compatibility_date": "2026-09-15",
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "d1_databases": [
+    {
+      "binding": "ACCOUNT_DB",
+      "database_name": "halle-account-staging",
+      "database_id": "54b41fc8-4239-4a25-a718-a864d1f7eef0"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "7,22,37,52 * * * *"
+    ]
+  }
+}

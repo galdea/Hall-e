@@ -5,7 +5,7 @@ import Testing
 
 private struct NativeFixture: Decodable {
     let origin: String
-    let certificate: String
+    let certificate: String?
     let desktop: AccountCredentials
     let stranger: AccountCredentials
     let meetingId: String
@@ -66,9 +66,17 @@ struct NativeAccountInteropTests {
         let fixtureURL = URL(fileURLWithPath: fixturePath)
         let fixture = try JSONDecoder().decode(NativeFixture.self, from: Data(contentsOf: fixtureURL))
         let origin = try AccountAPI.origin(fixture.origin)
-        try #require(origin.host == "127.0.0.1")
-        let port = try #require(origin.port)
-        let delegate = try NativeLoopbackTrust(port: port, pem: URL(fileURLWithPath: fixture.certificate))
+        let hosted = fixture.certificate == nil
+        let delegate: URLSessionTaskDelegate
+        if let certificate = fixture.certificate {
+            try #require(origin.host == "127.0.0.1")
+            let port = try #require(origin.port)
+            delegate = try NativeLoopbackTrust(port: port, pem: URL(fileURLWithPath: certificate))
+        } else {
+            try #require(origin.absoluteString == "https://halle-account-staging.gabriel-aldea.workers.dev")
+            try #require(env["HALLE_STAGE_ORIGIN"] == origin.absoluteString)
+            delegate = AccountRedirectPolicy()
+        }
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.urlCredentialStorage = nil
@@ -101,7 +109,7 @@ struct NativeAccountInteropTests {
         let account = try #require(desktop.account)
         let start = Date(timeIntervalSince1970: 1_798_221_600)
         let local = Project(id: "synthetic-local-project", name: "Synthetic archive project", aliases: [])
-        let event = UnifiedEvent(dedupKey: "synthetic-local-occurrence", title: "Synthetic imported meeting",
+        let event = UnifiedEvent(dedupKey: "synthetic-local-\(fixture.meetingId)", title: "Synthetic imported meeting",
                                  startTs: start, endTs: start.addingTimeInterval(1_800),
                                  isAllDay: false, status: "confirmed", iCalUID: "synthetic-local-series",
                                  winnerAccountEmail: "host@example.invalid", projectId: nil, sourcesJSON: "[]")
@@ -113,6 +121,9 @@ struct NativeAccountInteropTests {
                                                       userId: fixture.desktop.userId)
         if phase == "create" {
             let draft = AccountMeeting.draft(id: fixture.meetingId, title: "Synthetic native meeting")
+            // Record both IDs before writing remotely so a failed synchronization can be cleaned up.
+            let cleanup = fixtureURL.deletingLastPathComponent().appendingPathComponent("swift-cleanup.json")
+            try JSONEncoder().encode([draft.id, importedID]).write(to: cleanup, options: .withoutOverwriting)
             try desktop.enqueue(draft)
             try desktop.importOccurrence(event, project: confirmed, into: account)
             try await desktop.synchronize()
@@ -136,15 +147,17 @@ struct NativeAccountInteropTests {
             let recordings = meetings[0].recordings
             try #require(recordings.count == 1)
             try #require(recordings[0].status == "completed")
-            try #require(recordings[0].transcript?.contains("Synthetic native transcript.") == true)
+            let expected = hosted ? "[STAGING SYNTHETIC]" : "Synthetic native transcript."
+            try #require(recordings[0].transcript?.contains(expected) == true)
             let imported = try #require(desktop.cache.visible.first { $0.id == importedID })
             try #require(imported.project == confirmed && imported.recordings.isEmpty)
         }
 
         let other = try await device(fixture.stranger)
-        try #require(other.cache.visible.isEmpty)
+        let privateIDs = [fixture.meetingId, importedID]
+        try #require(!other.cache.visible.contains { privateIDs.contains($0.id) })
         try await other.synchronize()
-        try #require(other.cache.visible.isEmpty)
+        try #require(!other.cache.visible.contains { privateIDs.contains($0.id) })
         if phase == "verify" {
             let receipt = fixtureURL.deletingLastPathComponent().appendingPathComponent("swift-verified")
             try Data(fixture.meetingId.utf8).write(to: receipt, options: .withoutOverwriting)

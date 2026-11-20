@@ -113,8 +113,9 @@ enum ChromeNativeHostInstaller {
     @discardableResult
     static func prepareExtension(destination: URL = AppPaths.browserExtensionDirectory) throws -> URL {
         #if MAC_APP_STORE
-        throw InstallError.unavailableInStoreEdition
+        throw InstallError.unavailableInEdition
         #else
+        guard !AppPaths.isStaging else { throw InstallError.unavailableInEdition }
         guard let bundled = AppResources.bundle.url(forResource: "CallCaptureExtension", withExtension: nil) else {
             throw InstallError.extensionNotBundled
         }
@@ -133,8 +134,9 @@ enum ChromeNativeHostInstaller {
 
     static func install(extensionID: String) throws {
         #if MAC_APP_STORE
-        throw InstallError.unavailableInStoreEdition
+        throw InstallError.unavailableInEdition
         #else
+        guard !AppPaths.isStaging else { throw InstallError.unavailableInEdition }
         let id = extensionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard id.range(of: "^[a-p]{32}$", options: .regularExpression) != nil else {
             throw InstallError.invalidExtensionID
@@ -170,13 +172,13 @@ enum ChromeNativeHostInstaller {
     }
 
     enum InstallError: LocalizedError {
-        case invalidExtensionID, hostNotBundled, extensionNotBundled, unavailableInStoreEdition
+        case invalidExtensionID, hostNotBundled, extensionNotBundled, unavailableInEdition
         var errorDescription: String? {
             switch self {
             case .invalidExtensionID: "Enter the 32-character ID Chrome shows for the Hall-e extension."
             case .hostNotBundled: "The native helper is not present in this Hall-e build."
             case .extensionNotBundled: "The Chrome extension is not present in this Hall-e build."
-            case .unavailableInStoreEdition: "Chrome native messaging is unavailable in the Mac App Store edition."
+            case .unavailableInEdition: "Chrome native messaging is unavailable in this edition."
             }
         }
     }

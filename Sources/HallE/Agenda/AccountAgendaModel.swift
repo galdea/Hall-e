@@ -30,6 +30,7 @@ final class AccountAgendaModel {
     private let loadVault: () async throws -> String?
     private let saveVault: (String) async throws -> Void
     private let transport: URLSession
+    private let stagingOrigin: URL?
 
     init(preferences: UserDefaults = .standard,
          cacheRoot: @escaping () -> URL = { AppPaths.appSupport.appendingPathComponent("PrivateAgenda", isDirectory: true) },
@@ -42,11 +43,17 @@ final class AccountAgendaModel {
         self.loadVault = loadVault
         self.saveVault = saveVault
         self.transport = transport
+        self.stagingOrigin = AppPaths.isStaging ? (try? AccountAPI.origin(packagedOrigin ?? "")) : nil
         let preferredOrigin = preferences.string(forKey: Self.originKey) ?? packagedOrigin ?? ""
         self.endpoint = (try? AccountAPI.origin(preferredOrigin))?.absoluteString ?? ""
     }
 
     private func api(_ origin: URL) -> AccountAPI { AccountAPI(origin: origin, session: transport) }
+
+    var usesStagingMailbox: Bool {
+        guard let stagingOrigin else { return false }
+        return (try? AccountAPI.origin(endpoint)) == stagingOrigin
+    }
 
     var endpoint = ""
     var email = ""
@@ -140,7 +147,10 @@ final class AccountAgendaModel {
                                         body: ["email": email, "link": token != nil])
         challenge = result.challengeId
         challengeOrigin = api.origin
-        message = PublicUICopy.text("Enter the code sent to your email.", "Introduce el código enviado a tu correo.")
+        message = usesStagingMailbox
+            ? PublicUICopy.text("Open Hall-e Staging Code.command on the Mac to get the eight digits for this sign-in.",
+                                "Abre Hall-e Staging Code.command en el Mac para obtener los ocho dígitos de este inicio de sesión.")
+            : PublicUICopy.text("Enter the code sent to your email.", "Introduce el código enviado a tu correo.")
     }
 
     func finishEmail() async throws {

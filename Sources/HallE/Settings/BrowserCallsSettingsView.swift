@@ -62,7 +62,7 @@ struct BrowserCallsSettingsView: View {
             Text("The native host accepts messages only from this exact extension ID and queues them locally for Hall-e. It has no network access and never receives audio.")
                 .font(.caption).foregroundStyle(.secondary)
             } else {
-                Text("Chrome extension and native messaging setup are unavailable in the Mac App Store edition. The direct-download edition supports this integration.")
+                Text("Chrome extension and native messaging setup are available in the standard direct-download edition.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }

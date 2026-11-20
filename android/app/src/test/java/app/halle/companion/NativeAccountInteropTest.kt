@@ -20,7 +20,7 @@ import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 
-/** The native QA runner supplies a loopback Worker, ephemeral certificate and synthetic sessions. */
+/** Runs against a pinned loopback fixture or the dedicated staging hostname with platform TLS. */
 class NativeAccountInteropTest {
     @get:Rule val tmp = TemporaryFolder()
 
@@ -31,6 +31,12 @@ class NativeAccountInteropTest {
         val fixture = JSONObject(fixtureFile.readText())
         val imported = JSONObject(File(fixtureFile.parentFile, "swift-import.json").readText())
         val origin = accountOrigin(fixture.getString("origin"))
+        if (!fixture.has("certificate")) {
+            require(origin == "https://halle-account-staging.gabriel-aldea.workers.dev")
+            require(System.getenv("HALLE_STAGE_ORIGIN") == origin)
+            runAccountStory(fixture, origin, imported)
+            return
+        }
         require(URI(origin).host == "127.0.0.1")
         val certificate = File(fixture.getString("certificate")).inputStream().use {
             CertificateFactory.getInstance("X.509").generateCertificate(it)
@@ -108,7 +114,8 @@ class NativeAccountInteropTest {
         val edited = changed.single { it.getString("id") == meetingId }
         assertEquals(project, AccountProject.read(edited.getJSONObject("project")))
         val stored = edited.getJSONArray("recordings").objects().single { it.getString("id") == recordingId }
-        assertEquals("queued", stored.getString("status"))
+        val validStates = if (fixture.has("certificate")) setOf("queued") else setOf("queued", "completed", "submitting")
+        assertTrue(stored.getString("status") in validStates)
         val other = AccountTransport.request(origin, "/meetings", token = stranger.token)
         assertFalse(other.getJSONArray("meetings").objects().any { it.getString("id") in setOf(meetingId, importedId) })
         val denied = assertThrows(AccountHttpError::class.java) {

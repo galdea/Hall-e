@@ -497,7 +497,7 @@ async function disposeOne(env, now) {
 // A scheduled invocation consumes at most one job. Calls can overlap: the conditional claim is persisted before POST.
 export async function processPending(
   env,
-  { fetch: send = globalThis.fetch.bind(globalThis), now: clock = Date.now } = {},
+  { fetch: send = globalThis.fetch.bind(globalThis), now: clock = Date.now, selectLocalProcessor } = {},
 ) {
   const now = clock();
   const db = env.ACCOUNT_DB;
@@ -517,7 +517,8 @@ export async function processPending(
     .bind(now)
     .first();
   if (!row) return;
-  if (!ready(env, row)) {
+  const localProcessor = row.status === "queued" ? selectLocalProcessor?.(row) : undefined;
+  if (!localProcessor && !ready(env, row)) {
     await db
       .prepare(
         `UPDATE account_recordings SET detail='provider_unconfigured',next_at=?
@@ -539,7 +540,8 @@ export async function processPending(
   if (!leased.meta.changes) return;
   let result;
   try {
-    result = polling ? await pollSpeechmatics(env, row, send) : await submit(env, row, send);
+    if (localProcessor) result = await localProcessor(audioParts(env.ACCOUNT_AUDIO, row));
+    else result = polling ? await pollSpeechmatics(env, row, send) : await submit(env, row, send);
   } catch {
     // A network failure after POST cannot distinguish a rejected connection from a paid, accepted job.
     result = polling

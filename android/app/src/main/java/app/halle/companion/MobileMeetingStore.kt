@@ -292,6 +292,36 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         return uri
     }
 
+    /** Keep a single recoverable staging sample per account meeting and use the normal upload outbox. */
+    internal fun installStagingTone(event: String, bytes: ByteArray): String = synchronized(lock) {
+        check(BuildConfig.STAGING && accountScope != null)
+        val id = UUID.nameUUIDFromBytes(("staging-test-tone:" + UUID.fromString(event)).toByteArray()).toString()
+        val values = readAll().toMutableList()
+        val directory = recordingDirectory()
+        check(directory.isDirectory || directory.mkdirs())
+        val name = "$id.m4a"
+        val output = android.util.AtomicFile(File(directory, name))
+        val written = output.startWrite()
+        try {
+            written.write(bytes)
+            output.finishWrite(written)
+        } catch (error: java.io.IOException) {
+            output.failWrite(written)
+            throw error
+        }
+        if (values.none { it.meeting.id == id }) {
+            val meeting = MobileMeeting(
+                id = id, title = "440 Hz test tone", projectName = null, createdAtMs = System.currentTimeMillis(),
+                scheduledStartAtMs = null, scheduledEndAtMs = null, sourceEventKey = event, sharedSessionId = null,
+                status = MobileMeetingStatus.RECORDED, audioFileName = name, recordingStartedAtMs = null,
+                recordingStartedElapsedMs = null, durationMs = 200, error = null,
+            )
+            values.add(0, StoredMeeting(meeting, null))
+            check(writeAll(values)) { "Could not save the staging sample." }
+        }
+        id
+    }
+
     internal fun completedAudio(id: String): File? {
         val meeting = find(id) ?: return null
         if (meeting.status !in setOf(MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED) ||

@@ -33,10 +33,12 @@ struct AccountAgendaView: View {
                             .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                     Spacer()
-                    Button(label("Link a sign-in method", "Vincular otro método")) {
-                        link.toggle()
-                        model.resetChallenge()
-                    }.disabled(model.busy)
+                    if !model.usesStagingMailbox {
+                        Button(label("Link a sign-in method", "Vincular otro método")) {
+                            link.toggle()
+                            model.resetChallenge()
+                        }.disabled(model.busy)
+                    }
                     Button(label("Sign out", "Cerrar sesión")) {
                         Task { await model.run { try await model.signOut() } }
                     }.disabled(model.busy)
@@ -192,10 +194,17 @@ struct AccountAgendaView: View {
                     Button(linking ? label("Link email", "Vincular correo") : label("Send code", "Enviar código")) {
                         Task { await model.run { try await model.startEmail() } }
                     }.disabled(model.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button(linking ? label("Link Google", "Vincular Google") : label("Continue with Google", "Continuar con Google")) {
-                        Task { await model.run { try await model.google() } }
+                    if !model.usesStagingMailbox {
+                        Button(linking ? label("Link Google", "Vincular Google") : label("Continue with Google", "Continuar con Google")) {
+                            Task { await model.run { try await model.google() } }
+                        }
                     }
                 }.disabled(model.busy)
+                if model.usesStagingMailbox {
+                    Text(label("Request one code per device. Open Hall-e Staging Code.command on the Mac to read it.",
+                               "Solicita un código por dispositivo. Abre Hall-e Staging Code.command en el Mac para verlo."))
+                        .font(.callout)
+                }
             } else {
                 HStack {
                     SecureField(label("Email code", "Código del correo"), text: $model.code)
@@ -205,6 +214,11 @@ struct AccountAgendaView: View {
                     Button(label("Cancel", "Cancelar")) { model.resetChallenge() }
                 }.disabled(model.busy)
             }
+        }
+        .onChange(of: model.usesStagingMailbox, initial: true) { _, staging in
+            let tester = "halle-owner@example.test"
+            if staging && !linking && model.email.isEmpty { model.email = tester }
+            else if !staging && AppPaths.isStaging && model.email == tester { model.email = "" }
         }
     }
 

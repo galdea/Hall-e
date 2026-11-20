@@ -4,7 +4,7 @@ This is the optional, cross-network pairing and lease service for Hall E shared 
 
 Read [PROTOCOL.md](./PROTOCOL.md) before implementing a client. A protocol change must be coordinated with both clients.
 
-The opt-in private **account** calendar has a separate entry point at `src/account-worker.mjs`, its own database and its own private audio bucket. Its API and local configuration are described in the [private agenda guide](../docs/agenda-privada.md). The pairing worker above continues to use `src/worker.mjs` and `wrangler.jsonc`.
+The opt-in private **account** calendar has a separate entry point at `src/account-worker.mjs`, its own database and its own private audio bucket. Its API and local configuration are described in the [private agenda guide](../docs/agenda-privada.md). The pairing worker above continues to use `src/worker.mjs` and `wrangler.jsonc`. Dedicated private builds and the synthetic staging sign-in instructions are in the [staging guide](staging/README.md).
 
 ## Local checks
 

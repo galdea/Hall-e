@@ -12,7 +12,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/hall_e"
-        android:label="Hall-e"
+        android:label="${appLabel}"
         android:theme="@style/AppTheme">
         <service
             android:name=".MeetingRecordingService"
@@ -35,7 +35,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".SharedSessionActivity" android:exported="true" android:launchMode="singleTop">
+        <activity android:name=".SharedSessionActivity" android:exported="${exportPairing}" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

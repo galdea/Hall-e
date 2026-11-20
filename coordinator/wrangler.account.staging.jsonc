@@ -1,0 +1,43 @@
+{
+  "name": "halle-account-staging",
+  "main": "src/account-staging-worker.mjs",
+  "workers_dev": true,
+  "account_id": "f98cd22e4bc305b68c12a8c383d6a61d",
+  "compatibility_date": "2026-09-15",
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "d1_databases": [
+    {
+      "binding": "ACCOUNT_DB",
+      "database_name": "halle-account-staging",
+      "database_id": "54b41fc8-4239-4a25-a718-a864d1f7eef0"
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ACCOUNT_AUDIO",
+      "bucket_name": "halle-account-audio-staging"
+    }
+  ],
+  "services": [
+    {
+      "binding": "ACCOUNT_MAILER",
+      "service": "halle-account-staging-mail"
+    }
+  ],
+  "vars": {
+    "ACCOUNT_PUBLIC_ORIGIN": "https://halle-account-staging.gabriel-aldea.workers.dev",
+    "ACCOUNT_STAGING_TESTER_EMAILS": "halle-owner@example.test,halle-other@example.test",
+    "ACCOUNT_STAGING_FIXTURE": "yes"
+  },
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  }
+}

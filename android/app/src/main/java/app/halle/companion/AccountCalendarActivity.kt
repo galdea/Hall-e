@@ -83,6 +83,9 @@ class AccountCalendarActivity : Activity() {
         orientation = LinearLayout.VERTICAL; setPadding(32, 14, 32, 14); fields.forEach(::addView)
     }
 
+    private fun usesStagingMailbox(origin: String): Boolean = BuildConfig.STAGING && BuildConfig.ACCOUNT_ORIGIN.isNotEmpty() &&
+        runCatching { accountOrigin(origin) }.getOrNull() == BuildConfig.ACCOUNT_ORIGIN
+
     private fun render() {
         if (isFinishing || isDestroyed) return
         val session = sessions.current()
@@ -105,7 +108,16 @@ class AccountCalendarActivity : Activity() {
             selected = null
             line("Sign in to the same account server as your computer. Meetings created here are private to your account.")
             action("Sign in with email") { beginAuth(false, null) }
-            action("Sign in with Google") { beginAuth(true, null) }
+            if (usesStagingMailbox(sessions.lastOrigin)) {
+                line("Request one code per device. Open Hall-e Staging Code.command on the Mac to read it.", 14f)
+                action("Change account server…") {
+                    val server = input("HTTPS account server", sessions.lastOrigin)
+                    AlertDialog.Builder(this).setTitle("Account server").setView(fields(server))
+                        .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ -> safely {
+                            sessions.lastOrigin = accountOrigin(server.text.toString()); render()
+                        } }.show()
+                }
+            } else action("Sign in with Google") { beginAuth(true, null) }
             return
         }
         val cal = AccountCalendar(this, session)
@@ -144,7 +156,7 @@ class AccountCalendarActivity : Activity() {
             if (pending.has("problem")) action("Resolve change · " + pending.getString("title")) { resolve(cal, id) }
         }
         action("Copy a local meeting…") { importMeeting(cal) }
-        action("Link another sign-in method…") {
+        if (!usesStagingMailbox(session.origin)) action("Link another sign-in method…") {
             AlertDialog.Builder(this).setTitle("Link to this Hall-e account")
                 .setItems(arrayOf("Email code", "Google")) { _, i -> beginAuth(i == 1, session) }.show()
         }
@@ -182,6 +194,23 @@ class AccountCalendarActivity : Activity() {
         }
         if (!m.optBoolean("deleted")) action("Record phone microphone…") { chooseRecording(cal, m) }
         val remote = (m.optJSONArray("recordings") ?: JSONArray()).objects()
+        if (!m.optBoolean("deleted") && usesStagingMailbox(cal.session.origin)) {
+            val spanish = resources.configuration.locales[0].language == "es"
+            action(if (spanish) "Enviar tono de prueba" else "Send test tone") {
+                if (sessions.current()?.token == cal.session.token) {
+                    try {
+                        val bytes = assets.open("phone-tone.mp4").use { it.readBytes() }
+                        val sampleId = cal.media.installStagingTone(id, bytes)
+                        if (remote.none { it.optString("id") == sampleId } && cal.upload(sampleId) == null) {
+                            cal.enqueueAudio(id, sampleId, "deepgram")
+                        }
+                        changed()
+                    } catch (_: java.io.IOException) {
+                        message(if (spanish) "No se pudo guardar el tono de prueba." else "Could not save the test tone.")
+                    }
+                }
+            }
+        }
         for (r in remote) {
             line("Recording · " + r.getString("status") + (r.optNullableString("detail")?.let { " · $it" } ?: ""))
             r.optNullableString("transcript")?.let { line(it) }
@@ -191,6 +220,7 @@ class AccountCalendarActivity : Activity() {
             val shared = remote.any { it.getString("id") == draft.id }
             line("Phone recording · " + draft.status.name.lowercase() + when {
                 queue?.has("problem") == true -> " · upload needs attention (HTTP ${queue.getInt("problem")})"
+                queue != null && usesStagingMailbox(cal.session.origin) -> " · queued for staging"
                 queue != null -> " · queued for " + queue.getString("provider")
                 shared -> " · uploaded"
                 else -> " · local only"
@@ -218,8 +248,10 @@ class AccountCalendarActivity : Activity() {
             if (draft.status in setOf(MobileMeetingStatus.STARTING, MobileMeetingStatus.RECORDING)) {
                 action("Stop recording") { MeetingRecordingService.requestStop(this, draft.id, "user"); timer.postDelayed({ render() }, 650) }
             } else if (cal.media.completedAudio(draft.id) != null && queue == null && !shared) {
-                action("Send this recording for transcription…") {
-                    provider(false) { p -> cal.enqueueAudio(id, draft.id, p!!); changed() }
+                if (usesStagingMailbox(cal.session.origin)) {
+                    line("This recording stays on your phone. Use Send test tone to test staging sync.", 14f)
+                } else action("Send this recording for transcription…") {
+                    provider(cal, false) { p -> cal.enqueueAudio(id, draft.id, p!!); changed() }
                 }
             }
         }
@@ -348,7 +380,14 @@ class AccountCalendarActivity : Activity() {
         }.show()
     }
 
-    private fun provider(localOption: Boolean, chosen: (String?) -> Unit) {
+    private fun provider(cal: AccountCalendar, localOption: Boolean, chosen: (String?) -> Unit) {
+        if (usesStagingMailbox(cal.session.origin)) {
+            AlertDialog.Builder(this).setTitle("Record on this phone")
+                .setMessage("Speech transcription is unavailable on this server. Use Send test tone to verify a synthetic recording on both devices.")
+                .setPositiveButton("Keep on phone") { _, _ -> chosen(null) }
+                .setNegativeButton("Cancel", null).showFor(cal)
+            return
+        }
         val providers = mutableListOf("Deepgram" to "deepgram", "Speechmatics · EU" to "speechmatics")
         val labels = providers.map { "Upload to my account and transcribe with " + it.first }.toMutableList()
         if (localOption) labels += "Keep audio only on this phone"
@@ -359,7 +398,7 @@ class AccountCalendarActivity : Activity() {
     private fun chooseRecording(cal: AccountCalendar, m: JSONObject) {
         AlertDialog.Builder(this).setTitle("Start the phone microphone?")
             .setMessage("Confirm that everyone consents. Android records sound at the microphone. Remote meeting audio may be missing.")
-            .setPositiveButton("I have consent") { _, _ -> provider(true) { p ->
+            .setPositiveButton("I have consent") { _, _ -> provider(cal, true) { p ->
                 if (cal.media.activeRecording() != null || MobileMeetingStore(this).activeRecording() != null) {
                     message("Stop the active recording first."); return@provider
                 }
@@ -388,9 +427,10 @@ class AccountCalendarActivity : Activity() {
     private fun beginAuth(google: Boolean, linked: AccountSession?) {
         if (signing) return
         val server = input("https://your-account-server", linked?.origin ?: sessions.lastOrigin)
-        val email = input("Email address")
+        val staging = usesStagingMailbox(server.text.toString())
+        val email = input("Email address", if (staging && linked == null) "halle-owner@example.test" else "")
         val form = if (google) fields(server) else fields(server, email)
-        server.isEnabled = linked == null
+        server.isEnabled = linked == null && !staging
         AlertDialog.Builder(this).setTitle(if (linked == null) "Sign in to Hall-e" else "Link to this account")
             .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Continue") { _, _ -> safely {
                 val origin = accountOrigin(server.text.toString())
@@ -411,7 +451,9 @@ class AccountCalendarActivity : Activity() {
     private fun code(origin: String, challenge: String, linked: AccountSession?) {
         val value = input("One-time code")
         value.inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        AlertDialog.Builder(this).setTitle("Enter the code from your email").setView(fields(value))
+        val prompt = if (usesStagingMailbox(origin)) "Open Hall-e Staging Code.command on the Mac and enter the eight digits here."
+            else "Enter the code from your email"
+        AlertDialog.Builder(this).setTitle(prompt).setView(fields(value))
             .setNegativeButton("Cancel", null).setPositiveButton("Verify") { _, _ ->
                 authRequest(origin, "/auth/email/verify", JSONObject().put("challengeId", challenge)
                     .put("code", value.text.toString().trim()), linked) { complete(origin, it, linked) }

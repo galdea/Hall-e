@@ -24,6 +24,12 @@ function normalizedEmail(value) {
       !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(parts[1])) reject(400, 'invalid_email');
   return email;
 }
+// Omission keeps the ordinary account service open. A configured, empty roster admits nobody.
+function stagingTesters(env) {
+  if (env.ACCOUNT_STAGING_TESTER_EMAILS === undefined) return null;
+  const value = env.ACCOUNT_STAGING_TESTER_EMAILS;
+  return typeof value === 'string' ? value.split(',').map(email => email.trim().toLowerCase()).filter(Boolean) : [];
+}
 function fromBase64url(value) {
   if (!/^[\w-]+$/.test(value)) throw new Error('invalid encoding');
   return Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0));
@@ -74,11 +80,15 @@ async function limit(db, bucket, max, now) {
   if (!row) reject(429, 'rate_limited');
 }
 
-async function sessionFor(request, env, now) {
+async function sessionFor(request, env, now, testers = stagingTesters(env)) {
   const match = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(request.headers.get('Authorization') || '');
   if (!match || !env.ACCOUNT_DB) return null;
+  const eligibility = testers === null ? '' : ` AND EXISTS (
+    SELECT 1 FROM json_each(?) AS tester JOIN account_emails AS e ON e.email = tester.value
+    WHERE e.user_id = account_sessions.user_id)`;
   return statement(env.ACCOUNT_DB, `SELECT user_id AS userId, session_id AS sessionId, expires_at AS expiresAt
-    FROM account_sessions WHERE token_digest = ? AND expires_at > ?`, await digest(match[1]), now).first();
+    FROM account_sessions WHERE token_digest = ? AND expires_at > ?${eligibility}`, await digest(match[1]), now,
+    ...(testers === null ? [] : [JSON.stringify(testers)])).first();
 }
 
 export function authenticate(request, env) { return sessionFor(request, env, Date.now()); }
@@ -190,9 +200,11 @@ export function createAccountAuth({ fetchImpl = (...args) => globalThis.fetch(..
     const db = env.ACCOUNT_DB;
     if (!db) reject(503, 'auth_unavailable');
     const now = clock();
+    const testers = stagingTesters(env);
     if (action === 'session' || action === 'logout') {
       if (request.method !== (action === 'session' ? 'GET' : 'POST')) reject(405, 'method_not_allowed');
-      const session = await sessionFor(request, env, now);
+      // A removed tester can still revoke their own bearer.
+      const session = await sessionFor(request, env, now, action === 'logout' ? null : testers);
       if (!session) reject(401, 'unauthorized');
       if (action === 'session') return json({ userId: session.userId, expiresAt: session.expiresAt });
       await statement(db, 'DELETE FROM account_sessions WHERE session_id = ?', session.sessionId).run();
@@ -204,11 +216,15 @@ export function createAccountAuth({ fetchImpl = (...args) => globalThis.fetch(..
     const [, provider, phase] = match;
     const body = await bodyOf(request);
     if (provider === 'google' && !env.ACCOUNT_GOOGLE_CLIENT_ID) reject(503, 'google_unavailable');
-    const session = request.headers.has('Authorization') ? await sessionFor(request, env, now) : null;
+    const session = request.headers.has('Authorization') ? await sessionFor(request, env, now, testers) : null;
     if (request.headers.has('Authorization') && !session) reject(401, 'unauthorized');
     if (phase === 'start') {
       if (body.link === true && !session) reject(401, 'unauthorized');
       if (session && body.link !== true) reject(400, 'explicit_link_required');
+      // Match the normal challenge response without sending mail or persisting an outsider's address.
+      if (provider === 'email' && testers !== null && !testers.includes(normalizedEmail(body.email))) {
+        return json({ challengeId: crypto.randomUUID() });
+      }
       const key = await hmacKey(env);
       const fingerprint = async value => base64url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value))));
       await limit(db, await fingerprint('ip:' + (request.headers.get('CF-Connecting-IP') || 'local')), 30, now);
@@ -242,6 +258,8 @@ export function createAccountAuth({ fetchImpl = (...args) => globalThis.fetch(..
     // Single-use for concurrent requests, independent of the client's retry timing.
     const consumed = await statement(db, 'DELETE FROM account_auth_challenges WHERE challenge_id = ? AND expires_at > ? RETURNING challenge_id', body.challengeId, clock()).first();
     if (!consumed) reject(401, 'invalid_proof');
+    // Both native and browser Google sign-in reach this point after verifying the signed email claim.
+    if (testers !== null && !testers.includes(email)) reject(403, 'tester_required');
     return json(await establishSession(db, provider, subject, email, session, clock()));
   }
   return async function handleAuth(request, env) {

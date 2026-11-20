@@ -183,3 +183,47 @@ test('missing email delivery or HMAC configuration fails closed', async t => {
   delete f.env.ACCOUNT_AUTH_SECRET;
   assert.equal((await f.call('google/start', {})).status, 503);
 });
+
+test('staging admits exact tester addresses and rechecks challenges and existing account sessions', async t => {
+  const f = setup(t);
+  f.env.ACCOUNT_STAGING_TESTER_EMAILS = ' Ana@Example.TEST, bet@example.test ';
+  const outside = await f.call('email/start', { email: 'ana+other@example.test' });
+  assert.equal(outside.status, 200);
+  assert.deepEqual(Object.keys(outside.result), ['challengeId']);
+  assert.equal(f.mail.length, 0);
+  assert.equal(await f.db.prepare('SELECT COUNT(*) AS n FROM account_auth_challenges').first('n'), 0);
+  assert.equal((await f.call('email/verify', { ...outside.result, code: '12345678' })).status, 401);
+
+  const ana = (await f.emailLogin(' ana@example.test ')).result;
+  const bet = (await f.emailLogin('BET@example.test')).result;
+  assert.notEqual(ana.userId, bet.userId);
+  const pending = await f.emailStart('ana@example.test');
+  f.env.ACCOUNT_STAGING_TESTER_EMAILS = 'bet@example.test';
+  assert.equal((await f.call('email/verify', pending)).status, 403);
+  assert.equal((await f.call('session', undefined, ana.token)).status, 401);
+  assert.equal((await f.call('session', undefined, bet.token)).result.userId, bet.userId);
+  const request = new Request('https://synthetic.invalid/account/v1/meetings', { headers: { authorization: 'Bearer ' + ana.token } });
+  assert.equal(await authenticate(request, f.env), null);
+  assert.equal((await f.call('logout', {}, ana.token)).status, 204);
+  f.env.ACCOUNT_STAGING_TESTER_EMAILS = '';
+  const mailCount = f.mail.length;
+  assert.equal((await f.call('email/start', { email: 'bet@example.test' })).status, 200);
+  assert.equal(f.mail.length, mailCount);
+  assert.equal((await f.call('session', undefined, bet.token)).status, 401);
+});
+
+test('staging Google proof and explicit linking require the signed, verified tester email', async t => {
+  const f = setup(t);
+  f.env.ACCOUNT_STAGING_TESTER_EMAILS = 'ana@example.test';
+  const a = (await f.emailLogin('ana@example.test')).result;
+  const { challengeId, nonce } = await f.googleStart(a.token);
+  const unlisted = await f.signedGoogle(nonce, { email: 'other@example.test' });
+  const denied = await f.call('google/verify', { challengeId, idToken: unlisted, email: 'ana@example.test' }, a.token);
+  assert.deepEqual(denied, { status: 403, result: { error: 'tester_required' } });
+  assert.equal((await f.googleLogin({ email_verified: false }, a.token)).status, 401);
+  assert.equal((await f.googleLogin({ email: 'another@example.test' })).status, 403);
+  assert.equal(await f.db.prepare('SELECT count(*) AS n FROM account_identities').first('n'), 1);
+  assert.equal((await f.googleLogin({ email: 'ANA@example.test' }, a.token)).result.userId, a.userId);
+  assert.equal((await f.googleLogin({ email: 'new-address@example.test' })).status, 403);
+  assert.equal((await f.googleLogin()).result.userId, a.userId);
+});

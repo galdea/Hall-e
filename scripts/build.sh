@@ -17,6 +17,14 @@ SIGN_ID="${SIGN_ID:--}"
 SIGNING_MODE="${SIGNING_MODE:-adhoc}"
 CONFIG="${CONFIG:-release}"
 ARCH="${ARCH:-$(uname -m)}"
+staging="${HALLE_STAGING:-0}"
+case "$staging" in 0|1) ;; *) echo 'HALLE_STAGING must be 0 or 1' >&2; exit 1 ;; esac
+bundle_id="cl.gabriel.hall-e"
+app_name="Hall-e"
+if [[ "$staging" == 1 ]]; then
+  bundle_id="cl.gabriel.hall-e.staging"
+  app_name="Hall-e Staging"
+fi
 # This optional public address is embedded in the signed bundle. Validate before building.
 account_origin="${HALLE_ACCOUNT_ORIGIN:-}"
 if [[ -n "$account_origin" ]]; then
@@ -57,17 +65,19 @@ case "$EDITION" in
   mac-app-store) args+=(-Xswiftc -D -Xswiftc MAC_APP_STORE) ;;
   *) echo 'EDITION must be direct or mac-app-store' >&2; exit 1 ;;
 esac
+include_native_host=0
+if [[ "$EDITION" == direct && "$staging" == 0 ]]; then include_native_host=1; fi
 swift build "${args[@]}" --product HallE
-if [[ "$EDITION" == direct ]]; then
+if [[ "$include_native_host" == 1 ]]; then
   swift build "${args[@]}" --product CallCaptureNativeHost
 fi
 BIN_DIR="$(swift build "${args[@]}" --show-bin-path)"
 
-APP="dist/Hall-e.app"
+APP="dist/$app_name.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/HallE" "$APP/Contents/MacOS/Hall-e"
-if [[ "$EDITION" == direct ]]; then
+if [[ "$include_native_host" == 1 ]]; then
   cp "$BIN_DIR/CallCaptureNativeHost" "$APP/Contents/MacOS/CallCaptureNativeHost"
 fi
 # Include all SwiftPM bundles, including dependency privacy/resources bundles.
@@ -83,6 +93,12 @@ cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 # Notification sounds also resolve from the main bundle.
 cp "$RES/GentleRing.wav" "$APP/Contents/Resources/"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUM/" BundleResources/Info.plist > "$APP/Contents/Info.plist"
+if [[ "$staging" == 1 ]]; then
+  plutil -replace CFBundleIdentifier -string "$bundle_id" "$APP/Contents/Info.plist"
+  plutil -replace CFBundleName -string "$app_name" "$APP/Contents/Info.plist"
+  plutil -replace CFBundleDisplayName -string "$app_name" "$APP/Contents/Info.plist"
+  plutil -remove CFBundleURLTypes "$APP/Contents/Info.plist"
+fi
 if [[ -n "$account_origin" ]]; then
   plutil -insert HallEAccountOrigin -string "$account_origin" "$APP/Contents/Info.plist"
 fi
@@ -96,13 +112,13 @@ sign_args=(--force --sign "$SIGN_ID")
 if [[ "$SIGNING_MODE" == developer-id ]]; then
   sign_args+=(--options runtime --timestamp)
 fi
-if [[ "$EDITION" == direct ]]; then
+if [[ "$include_native_host" == 1 ]]; then
   codesign "${sign_args[@]}" --identifier cl.gabriel.hall-e.callcapture "$APP/Contents/MacOS/CallCaptureNativeHost"
 fi
-codesign "${sign_args[@]}" --entitlements BundleResources/Release.entitlements --identifier cl.gabriel.hall-e "$APP"
+codesign "${sign_args[@]}" --entitlements BundleResources/Release.entitlements --identifier "$bundle_id" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 binaries=(Hall-e)
-[[ "$EDITION" != direct ]] || binaries+=(CallCaptureNativeHost)
+[[ "$include_native_host" != 1 ]] || binaries+=(CallCaptureNativeHost)
 for binary in "${binaries[@]}"; do
   [[ "$(lipo -archs "$APP/Contents/MacOS/$binary")" == "$ARCH" ]] || { echo 'Unexpected binary architecture' >&2; exit 1; }
 done

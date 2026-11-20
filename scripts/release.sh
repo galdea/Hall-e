@@ -2,6 +2,10 @@
 # Build and package locally; never publishes a GitHub release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if [[ "${HALLE_STAGING:-0}" != 0 ]]; then
+  echo 'Use scripts/build.sh to package the private staging app.' >&2
+  exit 1
+fi
 export VERSION="${VERSION:-0.5.0}"
 export ARCH="${ARCH:-$(uname -m)}"
 export SIGNING_MODE="${SIGNING_MODE:-adhoc}"

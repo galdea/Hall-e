@@ -9,7 +9,7 @@ enum DistributionCapabilities {
     #endif
 
     static var usesSecurityScopedVaultAccess: Bool { isMacAppStore }
-    static var supportsChromeNativeMessaging: Bool { !isMacAppStore }
+    static var supportsChromeNativeMessaging: Bool { !isMacAppStore && !AppPaths.isStaging }
     static var supportsCodexHomeImport: Bool { !isMacAppStore }
     static var supportsExternalArchiveProcess: Bool { !isMacAppStore }
     /// Process-tap capture has not passed sandboxed installed-package QA.

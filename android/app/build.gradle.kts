@@ -3,6 +3,12 @@ import java.util.Locale
 
 plugins { id("com.android.application") }
 
+val staging = when (providers.environmentVariable("HALLE_STAGING").orNull ?: "0") {
+    "0" -> false
+    "1" -> true
+    else -> error("HALLE_STAGING must be 0 or 1")
+}
+
 val packagedAccountOrigin = providers.environmentVariable("HALLE_ACCOUNT_ORIGIN").orNull.orEmpty().let { raw ->
     if (raw.isEmpty()) return@let ""
     val uri = runCatching { URI(raw) }.getOrNull()
@@ -21,13 +27,25 @@ android {
     compileSdk = 36
     buildFeatures { buildConfig = true }
     defaultConfig {
-        applicationId = "app.halle.companion"
+        applicationId = if (staging) "app.halle.companion.staging" else "app.halle.companion"
+        manifestPlaceholders["appLabel"] = if (staging) "Hall-e Staging" else "Hall-e"
+        manifestPlaceholders["exportPairing"] = (!staging).toString()
         minSdk = 31
         targetSdk = 36
         versionCode = 3
         versionName = "0.2.0"
+        buildConfigField("boolean", "STAGING", staging.toString())
         buildConfigField("String", "ACCOUNT_ORIGIN", "\"$packagedAccountOrigin\"")
         testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
+    }
+
+    if (staging) {
+        val tone = tasks.register<Sync>("prepareStagingTestTone") {
+            from(rootProject.file("../coordinator/test-support/phone-tone.mp4"))
+            into(layout.buildDirectory.dir("generated/staging-tone-assets"))
+        }
+        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/staging-tone-assets"))
+        tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(tone) }
     }
 
     val releaseStorePath = System.getenv("ANDROID_KEYSTORE")
@@ -50,7 +68,7 @@ android {
         }
     }
     buildTypes {
-        debug { applicationIdSuffix = ".preview" }
+        debug { if (!staging) applicationIdSuffix = ".preview" }
         release {
             isMinifyEnabled = false
             if (signingConfigs.names.contains("release")) signingConfig = signingConfigs.getByName("release")

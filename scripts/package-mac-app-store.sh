@@ -2,6 +2,10 @@
 # Build a local sandbox QA app or a Mac App Store upload package. This script never uploads.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if [[ "${HALLE_STAGING:-0}" != 0 ]]; then
+  echo 'Use scripts/build.sh to package the private staging app.' >&2
+  exit 1
+fi
 
 fail() { echo "Mac App Store package: $*" >&2; exit 1; }
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "Required tool not found: $1"; }
