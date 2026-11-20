@@ -30,7 +30,9 @@ data class MobileMeeting(
 )
 
 /** Local-only meeting metadata and app-private recording files. */
-class MobileMeetingStore(private val context: Context) {
+class MobileMeetingStore(private val context: Context, private val accountScope: String? = null) {
+    init { require(accountScope == null || accountScope.matches(Regex("[0-9a-f]{64}"))) }
+    private val preferencesName = accountScope?.let { "account-meetings-$it" } ?: PREFERENCES
     private var writableMetadata = true
     var loadError: String? = null
         private set
@@ -44,7 +46,7 @@ class MobileMeetingStore(private val context: Context) {
         scheduledEndAtMs: Long? = null,
         sharedSessionId: String? = null,
     ): MobileMeeting {
-        val cleanTitle = title.trim().take(MAX_TITLE_LENGTH)
+        val cleanTitle = title.trim().take(if (accountScope == null) MAX_TITLE_LENGTH else 512)
         require(cleanTitle.isNotEmpty()) { "A meeting title is required." }
         require(scheduledStartAtMs == null || scheduledEndAtMs == null || scheduledEndAtMs >= scheduledStartAtMs) {
             "The meeting end must be after its start."
@@ -118,14 +120,10 @@ class MobileMeetingStore(private val context: Context) {
     fun recoverInterrupted(): Int = synchronized(lock) {
         var changed = 0
         val values = readAll().map { stored ->
-            if ((stored.meeting.status == MobileMeetingStatus.STARTING || stored.meeting.status == MobileMeetingStatus.RECORDING)
-                && stored.ownerToken != processToken) {
+            recoverRecording(stored.meeting, stored.ownerToken, processToken, recordingDirectory())?.let { recovered ->
                 changed++
-                stored.copy(meeting = stored.meeting.copy(
-                    status = MobileMeetingStatus.INTERRUPTED,
-                    error = "Recording was interrupted. The audio file may be incomplete.",
-                ), ownerToken = null)
-            } else stored
+                stored.copy(meeting = recovered, ownerToken = null)
+            } ?: stored
         }
         if (changed > 0) writeAll(values)
         changed
@@ -294,7 +292,15 @@ class MobileMeetingStore(private val context: Context) {
         return uri
     }
 
-    private fun recordingDirectory() = File(context.filesDir, RECORDINGS_DIRECTORY)
+    internal fun completedAudio(id: String): File? {
+        val meeting = find(id) ?: return null
+        if (meeting.status !in setOf(MobileMeetingStatus.RECORDED, MobileMeetingStatus.INTERRUPTED) ||
+            meeting.audioFileName != "$id.m4a") return null
+        return File(recordingDirectory(), "$id.m4a").takeIf { it.isFile && it.length() > 0 }
+    }
+
+    private fun recordingDirectory() = accountScope?.let { File(context.noBackupFilesDir, "account-audio/$it") }
+        ?: File(context.filesDir, RECORDINGS_DIRECTORY)
 
     private fun update(id: String, transform: (StoredMeeting) -> StoredMeeting): Boolean = synchronized(lock) {
         updateLocked(id, transform)
@@ -313,7 +319,7 @@ class MobileMeetingStore(private val context: Context) {
     private fun readAll(): List<StoredMeeting> {
         writableMetadata = true
         loadError = null
-        val raw = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY_MEETINGS, null) ?: return emptyList()
+        val raw = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE).getString(KEY_MEETINGS, null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             buildList {
@@ -362,7 +368,7 @@ class MobileMeetingStore(private val context: Context) {
                 putNullable("ownerToken", stored.ownerToken)
             })
         }
-        return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+        return context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE).edit()
             .putString(KEY_MEETINGS, array.toString()).commit()
     }
 
@@ -384,4 +390,15 @@ class MobileMeetingStore(private val context: Context) {
         private val lock = Any()
         internal val processToken: String = UUID.randomUUID().toString()
     }
+}
+
+
+// A crash may happen after the AAC file has been finalized but before its metadata is committed.
+internal fun recoverRecording(meeting: MobileMeeting, owner: String?, currentProcess: String, directory: File): MobileMeeting? {
+    if (owner == currentProcess || meeting.status !in setOf(MobileMeetingStatus.STARTING, MobileMeetingStatus.RECORDING)) return null
+    val finalName = meeting.id + ".m4a"
+    val finalized = File(directory, finalName).let { it.isFile && it.length() > 0 }
+    return meeting.copy(status = MobileMeetingStatus.INTERRUPTED,
+        audioFileName = if (finalized) finalName else meeting.audioFileName,
+        error = "Recording was interrupted. The audio file may be incomplete.")
 }

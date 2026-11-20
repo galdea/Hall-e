@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap
 class MeetingRecordingService : Service() {
     private var recorder: MediaRecorder? = null
     private var meetingId: String? = null
+    private var accountScope: String? = null
     private var partialFile: File? = null
     private var startedElapsedMs: Long = 0
     private var audioCallback: android.media.AudioManager.AudioRecordingCallback? = null
@@ -62,13 +63,13 @@ class MeetingRecordingService : Service() {
             }
             ACTION_START -> {
                 val id = intent.getStringExtra(EXTRA_MEETING_ID)
-                if (id == null || !startRecording(id)) stopSelf(startId)
+                if (id == null || !startRecording(id, intent.getStringExtra(EXTRA_ACCOUNT_SCOPE))) stopSelf(startId)
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startRecording(id: String): Boolean {
+    private fun startRecording(id: String, scope: String?): Boolean {
         if (recorder != null || meetingId != null) {
             pendingLeaseGuards.remove(id)
             pendingSharedLeases.remove(id)?.let(::finalizeUnstartedLease)
@@ -79,7 +80,8 @@ class MeetingRecordingService : Service() {
             pendingSharedLeases.remove(id)?.let(::finalizeUnstartedLease)
             return false
         }
-        val store = MobileMeetingStore(this)
+        if (scope != null && AccountSessions(this).current()?.scope != scope) return false
+        val store = MobileMeetingStore(this, scope)
         store.recoverInterrupted()
         val suppliedGuard = pendingLeaseGuards.remove(id)
         val assignedLease = pendingSharedLeases.remove(id)
@@ -96,6 +98,7 @@ class MeetingRecordingService : Service() {
             assignedLease?.let(::finalizeUnstartedLease)
             return false
         }
+        accountScope = scope
         meetingId = id
         partialFile = output
         startedElapsedMs = SystemClock.elapsedRealtime()
@@ -229,7 +232,7 @@ class MeetingRecordingService : Service() {
                 releaseRecorder()
             }
         }
-        val store = MobileMeetingStore(this)
+        val store = MobileMeetingStore(this, accountScope)
         val saved = if (output != null && finalized) {
             if (interruption == null) store.completeRecording(id, output, elapsed)
             else store.finalizeInterruptedRecording(id, output, interruption, elapsed)
@@ -239,6 +242,8 @@ class MeetingRecordingService : Service() {
         } else if (!saved) {
             store.interruptRecording(id, "The audio file could not be finalized. The saved file may be incomplete.", elapsed)
         }
+        if (accountScope != null) AccountSyncJob.schedule(this)
+        accountScope = null
         sharedLease?.let { lease ->
             val client = sharedLeaseClient
             if (client != null) sharedLeaseExecutor.execute {
@@ -317,6 +322,7 @@ class MeetingRecordingService : Service() {
         private const val ACTION_START = "app.halle.companion.action.START_RECORDING"
         private const val ACTION_STOP = "app.halle.companion.action.STOP_RECORDING"
         private const val EXTRA_MEETING_ID = "meetingId"
+        private const val EXTRA_ACCOUNT_SCOPE = "accountScope"
         private const val CHANNEL_ID = "meeting-recording"
         private const val NOTIFICATION_ID = 0x4842
         private const val AUDIO_BIT_RATE = 128_000
@@ -334,16 +340,17 @@ class MeetingRecordingService : Service() {
             meetingId: String,
             leaseGuard: (() -> Boolean)? = null,
             sharedLease: SharedRecordingLease? = null,
+            accountScope: String? = null,
         ): Boolean {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
-            val store = MobileMeetingStore(context)
+            val store = MobileMeetingStore(context, accountScope)
             store.recoverInterrupted()
             val draft = store.find(meetingId) ?: return false
             if (draft.status != MobileMeetingStatus.DRAFT) return false
             if (leaseGuard != null) pendingLeaseGuards[meetingId] = leaseGuard
             if (sharedLease != null) pendingSharedLeases[meetingId] = sharedLease
             val intent = Intent(context, MeetingRecordingService::class.java)
-                .setAction(ACTION_START).putExtra(EXTRA_MEETING_ID, meetingId)
+                .setAction(ACTION_START).putExtra(EXTRA_MEETING_ID, meetingId).putExtra(EXTRA_ACCOUNT_SCOPE, accountScope)
             return try {
                 ContextCompat.startForegroundService(context, intent)
                 true

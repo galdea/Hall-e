@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -26,6 +27,8 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/recording_file_paths" />
         </provider>
+        <activity android:name=".AccountCalendarActivity" android:exported="false" />
+        <service android:name=".AccountSyncJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -4,6 +4,8 @@ This is the optional, cross-network pairing and lease service for Hall E shared 
 
 Read [PROTOCOL.md](./PROTOCOL.md) before implementing a client. A protocol change must be coordinated with both clients.
 
+The opt-in private **account** calendar has a separate entry point at `src/account-worker.mjs`, its own database and its own private audio bucket. Its API and local configuration are described in the [private agenda guide](../docs/agenda-privada.md). The pairing worker above continues to use `src/worker.mjs` and `wrangler.jsonc`.
+
 ## Local checks
 
 From this directory, run `npm test` (Node's built-in test runner; no dependencies are needed). The Worker targets Cloudflare Workers and one SQLite-backed Durable Object per workspace. `wrangler.jsonc` defines the local/deployment shape but does not deploy or create any remote resources.

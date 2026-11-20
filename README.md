@@ -69,6 +69,8 @@ The default **$25 monthly guard** estimates combined transcription spending in H
 
 ## Add more when you need it
 
+The development branch adds an optional private account calendar for macOS and Android. It uses a separate HTTPS service, which must be configured before either app can sign in. The [Spanish implementation and QA guide](docs/agenda-privada.md) covers sign-in, offline recording, shared transcripts, local verification and the scope of this preview.
+
 - **Calendars & invitations:** connect Google, Outlook/Microsoft 365 (Exchange), and other calendars available in Apple Calendar from Settings when ready. Choose which calendars Hall-e reads, including Teams meeting links. No mailbox or Teams-chat access. No developer credentials needed for the macOS route; [setup and compatibility details](docs/calendar-setup.md).
 - **Call capture:** choose a running app when starting a recording, without an extension. Hall-e captures that app's audio, potentially including other playing tabs or windows, never silently all system audio. If capture fails, a visible warning explains that only the microphone is being recorded; join the call, check permissions, and retry meeting audio. The optional bundled Chrome extension and **Settings → Calls** provide additional workflows.
 - **Notes folders:** optionally connect an ordinary notes folder. Obsidian can open it too, but isn't required.

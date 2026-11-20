@@ -1,0 +1,408 @@
+package app.halle.companion
+
+import android.Manifest
+import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.WindowManager
+import android.widget.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.UUID
+import java.util.concurrent.Executors
+
+class AccountCalendarActivity : Activity() {
+    private lateinit var sessions: AccountSessions
+    private lateinit var page: LinearLayout
+    private val auth = Executors.newSingleThreadExecutor()
+    private val timer = Handler(Looper.getMainLooper())
+    private var selected: String? = null
+    private var day: LocalDate? = null
+    private var status = ""
+    private var syncing = false
+    private var signing = false
+    private var active = false
+    private var player: android.media.MediaPlayer? = null
+    private var consent: (() -> Unit)? = null
+    private val tick = object : Runnable {
+        override fun run() {
+            if (!active) return
+            if (sessions.current() != null && sessions.browserPending() == null) sync()
+            timer.postDelayed(this, 12000)
+        }
+    }
+
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        sessions = AccountSessions(this)
+        selected = state?.getString("meeting")
+        val dayString = if (state == null) intent.getStringExtra(EXTRA_DAY) else state.getString("day")
+        day = dayString?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        AccountSyncJob.periodic(this, sessions.current() != null)
+    }
+    override fun onResume() { super.onResume(); active = true; render(); timer.post(tick) }
+    override fun onPause() { player?.release(); player = null; active = false; timer.removeCallbacks(tick); super.onPause() }
+    override fun onDestroy() { auth.shutdownNow(); super.onDestroy() }
+    override fun onSaveInstanceState(out: Bundle) { super.onSaveInstanceState(out); out.putString("meeting", selected); out.putString("day", day?.toString()) }
+    private fun line(value: String, size: Float = 16f) {
+        page.addView(TextView(this).apply { text = value; textSize = size; setPadding(0, 10, 0, 10) })
+    }
+    private fun action(label: String, block: () -> Unit) {
+        page.addView(Button(this).apply {
+            text = label; isAllCaps = false; setOnClickListener { safely(block) }
+        })
+    }
+    private fun safely(block: () -> Unit) {
+        try { block() } catch (_: IllegalArgumentException) { message("Check the server address, meeting title and dates.") }
+        catch (_: IllegalStateException) { message("Could not save this change. Check available storage and the pending changes.") }
+    }
+    private fun message(value: String) { Toast.makeText(this, value, Toast.LENGTH_LONG).show() }
+    private fun input(hintText: String, value: String = "") = EditText(this).apply {
+        hint = hintText; setSingleLine(); setText(value)
+    }
+    private fun fields(vararg fields: EditText) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(32, 14, 32, 14); fields.forEach(::addView)
+    }
+
+    private fun render() {
+        if (isFinishing || isDestroyed) return
+        page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(30, 24, 30, 34) }
+        setContentView(ScrollView(this).also { scroll ->
+            scroll.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets
+            }
+            scroll.addView(page)
+        })
+        line("Hall-e account calendar", 24f)
+        val session = sessions.current()
+        if (status.isNotBlank()) line(status, 14f)
+        if (sessions.browserPending() != null) {
+            action("Enter Google confirmation code") { finishGoogle() }
+            action("Cancel Google sign-in") { sessions.browserPending(null); render() }
+        }
+        if (session == null) {
+            selected = null
+            line("Sign in to the same account server as your computer. Meetings created here are private to your account.")
+            action("Sign in with email") { beginAuth(false, null) }
+            action("Sign in with Google") { beginAuth(true, null) }
+            return
+        }
+        val cal = AccountCalendar(this, session)
+        cal.media.recoverInterrupted()
+        val rows = cal.visible()
+        val meeting = rows.firstOrNull { it.getString("id") == selected }
+        if (meeting != null) {
+            action("Back to calendar") { selected = null; render() }
+            showMeeting(cal, meeting)
+            return
+        }
+        selected = null
+        line(session.origin, 14f)
+        action("New meeting") { edit(cal, null) }
+        action("Sync now") { sync() }
+        val chosenDay = day
+        val displayed = if (chosenDay == null) rows else {
+            val zone = ZoneId.systemDefault()
+            val begin = chosenDay.atStartOfDay(zone).toInstant()
+            val end = chosenDay.plusDays(1).atStartOfDay(zone).toInstant()
+            rows.filter { Instant.parse(it.getString("startAt")) < end && Instant.parse(it.getString("endAt")) > begin }
+        }
+        action(chosenDay?.let { "Date · " + it } ?: "Choose a date") {
+            val date = day ?: LocalDate.now()
+            android.app.DatePickerDialog(this, { _, y, month, d -> day = LocalDate.of(y, month+1, d); render() },
+                date.year, date.monthValue-1, date.dayOfMonth).show()
+        }
+        if (chosenDay != null) action("Show all dates") { day = null; render() }
+        for (row in displayed) action(row.optString("title").ifBlank { "Deleted meeting" } + "\n" + local(row.getString("startAt"))) {
+            selected = row.getString("id"); render()
+        }
+        if (displayed.isEmpty()) line("No account meetings for these dates.")
+        for (id in cal.mutationIds()) {
+            val pending = cal.pending(id) ?: continue
+            if (pending.has("problem")) action("Resolve change · " + pending.getString("title")) { resolve(cal, id) }
+        }
+        action("Copy a local meeting…") { importMeeting(cal) }
+        action("Link another sign-in method…") {
+            AlertDialog.Builder(this).setTitle("Link to this Hall-e account")
+                .setItems(arrayOf("Email code", "Google")) { _, i -> beginAuth(i == 1, session) }.show()
+        }
+        action("Sign out") {
+            player?.release(); player = null
+            cal.media.activeRecording()?.let { MeetingRecordingService.requestStop(this, it.id, "user") }
+            sessions.logout(session, true)
+            AccountSyncJob.periodic(this, false)
+            AccountSyncJob.schedule(this)
+            selected = null; status = "Signed out. Pending changes stay on this phone for the same account."
+            render()
+        }
+    }
+
+    private fun local(raw: String): String = Instant.parse(raw).atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    private fun showMeeting(cal: AccountCalendar, m: JSONObject) {
+        val id = m.getString("id")
+        line(m.optString("title"), 21f)
+        line(local(m.getString("startAt")) + " – " + local(m.getString("endAt")))
+        val pending = cal.pending(id)
+        if (pending != null) {
+            line(if (pending.has("problem")) "This change needs your attention." else "Change queued on this phone.")
+            if (pending.has("problem")) action("Review conflict") { resolve(cal, id) }
+        } else {
+            action("Edit meeting") { edit(cal, m) }
+            action("Delete from account…") {
+                AlertDialog.Builder(this).setTitle("Delete this meeting and its shared recordings on all devices?")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ ->
+                        safely { cal.stage(id, m.getString("title"), Instant.parse(m.getString("startAt")),
+                            Instant.parse(m.getString("endAt")), m.getInt("revision"), true); changed() }
+                    }.show()
+            }
+        }
+        if (!m.optBoolean("deleted")) action("Record phone microphone…") { chooseRecording(cal, m) }
+        val remote = (m.optJSONArray("recordings") ?: JSONArray()).objects()
+        for (r in remote) {
+            line("Recording · " + r.getString("status") + (r.optNullableString("detail")?.let { " · $it" } ?: ""))
+            r.optNullableString("transcript")?.let { line(it) }
+        }
+        for (draft in cal.recordings(id)) {
+            val queue = cal.upload(draft.id)
+            val shared = remote.any { it.getString("id") == draft.id }
+            line("Phone recording · " + draft.status.name.lowercase() + when {
+                queue?.has("problem") == true -> " · upload needs attention (HTTP ${queue.getInt("problem")})"
+                queue != null -> " · queued for " + queue.getString("provider")
+                shared -> " · uploaded"
+                else -> " · local only"
+            })
+            draft.error?.let { line(it) }
+            cal.media.completedAudio(draft.id)?.let { file ->
+                action("Play phone copy") {
+                    if (sessions.current()?.token == cal.session.token) {
+                        player?.release()
+                        val audio = android.media.MediaPlayer()
+                        player = audio
+                        runCatching {
+                            audio.setDataSource(file.absolutePath)
+                            audio.setOnPreparedListener { if (active && player === it) it.start() }
+                            audio.setOnCompletionListener { it.release(); if (player === it) player = null }
+                            audio.setOnErrorListener { failed, _, _ ->
+                                failed.release(); if (player === failed) player = null
+                                message("The phone copy could not be played."); true
+                            }
+                            audio.prepareAsync()
+                        }.onFailure { audio.release(); player = null; message("The phone copy could not be played.") }
+                    }
+                }
+            }
+            if (draft.status in setOf(MobileMeetingStatus.STARTING, MobileMeetingStatus.RECORDING)) {
+                action("Stop recording") { MeetingRecordingService.requestStop(this, draft.id, "user"); timer.postDelayed({ render() }, 650) }
+            } else if (cal.media.completedAudio(draft.id) != null && queue == null && !shared) {
+                action("Send this recording for transcription…") {
+                    provider(false) { p -> cal.enqueueAudio(id, draft.id, p!!); changed() }
+                }
+            }
+        }
+    }
+
+    private fun changed() { AccountSyncJob.schedule(this); render(); sync() }
+    private fun sync() {
+        if (syncing) return
+        syncing = true
+        AccountSync.run(applicationContext) { error -> runOnUiThread {
+            syncing = false
+            if (!active) return@runOnUiThread
+            status = when (error) {
+                null -> if (sessions.current() != null) "Last synced at " + java.time.LocalTime.now().withNano(0) else ""
+                is AccountHttpError -> if (error.status == 401) { player?.release(); player = null; "Session expired. Sign in to continue." } else "Sync paused (HTTP ${error.status}). Changes stay on this phone."
+                else -> "Sync paused. Queued changes will retry when connected."
+            }
+            render()
+        } }
+    }
+    private fun edit(cal: AccountCalendar, m: JSONObject?) {
+        val zone = ZoneId.systemDefault()
+        val now = (day?.atTime(java.time.LocalTime.now(zone))?.atZone(zone)?.toInstant() ?: Instant.now())
+            .truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
+        val title = input("Meeting title", m?.getString("title").orEmpty()).apply {
+            filters = arrayOf(android.text.InputFilter.LengthFilter(512))
+        }
+        val start = input("Start", local(m?.getString("startAt") ?: now.toString()))
+        val end = input("End", local(m?.getString("endAt") ?: now.plusSeconds(1800).toString()))
+        AlertDialog.Builder(this).setTitle("Meeting · local time").setMessage("Format: YYYY-MM-DD HH:mm · " + ZoneId.systemDefault())
+            .setView(fields(title, start, end)).setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ -> safely {
+                fun instant(field: EditText, previous: String?): Instant {
+                    val text = field.text.toString().trim()
+                    if (previous != null && text == local(previous)) return Instant.parse(previous)
+                    val time = runCatching { LocalDateTime.parse(text, DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm")
+                        .withResolverStyle(java.time.format.ResolverStyle.STRICT)) }.getOrElse { throw IllegalArgumentException() }
+                    val offsets = ZoneId.systemDefault().rules.getValidOffsets(time)
+                    require(offsets.size == 1) { "Ambiguous or missing local time" }
+                    return time.toInstant(offsets.first())
+                }
+                val id = m?.getString("id") ?: UUID.randomUUID().toString()
+                cal.stage(id, title.text.toString(), instant(start, m?.getString("startAt")),
+                    instant(end, m?.getString("endAt")), m?.getInt("revision") ?: 0, false)
+                selected = id; changed()
+            } }.show()
+    }
+    private fun resolve(cal: AccountCalendar, id: String) {
+        val local = cal.pending(id) ?: return
+        val current = cal.cached().firstOrNull { it.getString("id") == id }
+        val summary = "Phone: ${local.optString("title")} · ${local(local.getString("startAt"))}" +
+            "\nAccount: " + if (current == null || current.optBoolean("deleted")) "Deleted or unavailable" else
+                current.getString("title") + " · " + local(current.getString("startAt"))
+        AlertDialog.Builder(this).setTitle("Resolve pending change").setMessage(summary)
+            .setNegativeButton("Later", null).setNeutralButton("Discard phone edit") { _, _ -> cal.discard(id); changed() }
+            .setPositiveButton("Save phone version as new") { _, _ -> safely {
+                cal.stage(UUID.randomUUID().toString(), local.getString("title"), Instant.parse(local.getString("startAt")),
+                    Instant.parse(local.getString("endAt")), 0, false)
+                cal.discard(id); changed()
+            } }.show()
+    }
+    private fun importMeeting(cal: AccountCalendar) {
+        val local = MobileMeetingStore(this).list()
+        if (local.isEmpty()) { message("No local meetings on this phone."); return }
+        AlertDialog.Builder(this).setTitle("Choose a local meeting to copy").setItems(local.map { it.title }.toTypedArray()) { _, i ->
+            val source = local[i]
+            AlertDialog.Builder(this).setTitle("Copy “${source.title}” to this account?")
+                .setMessage("Only its title and dates are copied. The original, audio, notes and projects stay on this phone.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Copy meeting") { _, _ -> safely {
+                    val id = UUID.nameUUIDFromBytes(("local-meeting:" + source.id).toByteArray()).toString()
+                    if (cal.cached().any { it.getString("id") == id } || cal.pending(id) != null) {
+                        message("This meeting was already copied."); return@safely
+                    }
+                    val start = Instant.ofEpochMilli(source.scheduledStartAtMs ?: source.createdAtMs)
+                    val end = source.scheduledEndAtMs?.let(Instant::ofEpochMilli)?.takeIf { it > start } ?: start.plusSeconds(1800)
+                    cal.stage(id, source.title, start, end, 0, false); selected = id; changed()
+                } }.show()
+        }.show()
+    }
+
+    private fun provider(localOption: Boolean, chosen: (String?) -> Unit) {
+        val providers = mutableListOf("Deepgram" to "deepgram", "Speechmatics · EU" to "speechmatics")
+        val labels = providers.map { "Upload to my account and transcribe with " + it.first }.toMutableList()
+        if (localOption) labels += "Keep audio only on this phone"
+        AlertDialog.Builder(this).setTitle("Where should this recording go?")
+            .setItems(labels.toTypedArray()) { _, i -> chosen(providers.getOrNull(i)?.second) }
+            .setNegativeButton("Cancel", null).show()
+    }
+    private fun chooseRecording(cal: AccountCalendar, m: JSONObject) {
+        AlertDialog.Builder(this).setTitle("Start the phone microphone?")
+            .setMessage("Confirm that everyone consents. Android records sound at the microphone. Remote meeting audio may be missing.")
+            .setPositiveButton("I have consent") { _, _ -> provider(true) { p ->
+                if (cal.media.activeRecording() != null || MobileMeetingStore(this).activeRecording() != null) {
+                    message("Stop the active recording first."); return@provider
+                }
+                consent = {
+                    if (sessions.current()?.token == cal.session.token && active) {
+                        val draft = cal.media.createDraft(m.getString("title"), sourceEventKey = m.getString("id"))
+                        if (p != null) cal.enqueueAudio(m.getString("id"), draft.id, p)
+                        if (!MeetingRecordingService.start(this, draft.id, accountScope = cal.session.scope)) message("Microphone could not start.")
+                        render()
+                        timer.postDelayed({ if (active) render() }, 800)
+                    }
+                }
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startConsented()
+                else requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 22)
+            } }.setNegativeButton("Cancel", null).show()
+    }
+    private fun startConsented() { val start = consent; consent = null; safely { start?.invoke() } }
+    override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
+        super.onRequestPermissionsResult(code, permissions, grants)
+        if (code == 22 && grants.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            // The permission result can precede onResume. Starting still requires a foreground activity.
+            timer.post { if (hasWindowFocus() || active) startConsented() else { consent = null; message("Tap Record again to start.") } }
+        } else { consent = null; message("Microphone access was not granted.") }
+    }
+
+    private fun beginAuth(google: Boolean, linked: AccountSession?) {
+        if (signing) return
+        val server = input("https://your-account-server", linked?.origin ?: sessions.lastOrigin)
+        val email = input("Email address")
+        val form = if (google) fields(server) else fields(server, email)
+        server.isEnabled = linked == null
+        AlertDialog.Builder(this).setTitle(if (linked == null) "Sign in to Hall-e" else "Link to this account")
+            .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Continue") { _, _ -> safely {
+                val origin = accountOrigin(server.text.toString())
+                sessions.lastOrigin = origin
+                val body = JSONObject().put("link", linked != null)
+                if (!google) body.put("email", email.text.toString().trim())
+                authRequest(origin, if (google) "/auth/browser/start" else "/auth/email/start", body, linked) { result ->
+                    if (google) {
+                        val url = Uri.parse(result.getString("url"))
+                        require(url.scheme == "https" && url.host == "accounts.google.com")
+                        sessions.browserPending(JSONObject().put("origin", origin).put("pollToken", result.getString("pollToken"))
+                            .put("linkedUser", linked?.userId ?: ""))
+                        startActivity(Intent(Intent.ACTION_VIEW, url))
+                    } else code(origin, result.getString("challengeId"), linked)
+                }
+            } }.show()
+    }
+    private fun code(origin: String, challenge: String, linked: AccountSession?) {
+        val value = input("One-time code")
+        value.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        AlertDialog.Builder(this).setTitle("Enter the code from your email").setView(fields(value))
+            .setNegativeButton("Cancel", null).setPositiveButton("Verify") { _, _ ->
+                authRequest(origin, "/auth/email/verify", JSONObject().put("challengeId", challenge)
+                    .put("code", value.text.toString().trim()), linked) { complete(origin, it, linked) }
+            }.show()
+    }
+    private fun finishGoogle() {
+        if (signing) return
+        val pending = sessions.browserPending() ?: return
+        val linked = sessions.current()
+        if (pending.getString("linkedUser") != (linked?.userId ?: "")) { sessions.browserPending(null); return }
+        val origin = pending.getString("origin")
+        val field = input("8-digit confirmation code").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        AlertDialog.Builder(this).setTitle("Confirm Google sign-in")
+            .setMessage("Enter the code displayed by your account server in the browser.")
+            .setView(fields(field)).setNegativeButton("Cancel", null).setPositiveButton("Verify") { _, _ ->
+                val code = field.text.toString().trim()
+                if (!code.matches(Regex("[0-9]{8}"))) { message("Enter the eight digits shown in the browser."); return@setPositiveButton }
+                val body = JSONObject().put("pollToken", pending.getString("pollToken")).put("confirmationCode", code)
+                authRequest(origin, "/auth/browser/finish", body, linked) {
+                    if (it.has("status")) message("Finish signing in with Google in your browser.")
+                    else { sessions.browserPending(null); complete(origin, it, linked) }
+                }
+            }.show()
+    }
+    private fun complete(origin: String, result: JSONObject, linked: AccountSession?) {
+        val session = AccountSession.from(origin, result)
+        if (linked != null && linked.userId != session.userId) throw IllegalStateException()
+        if (linked != null && linked.token != session.token) sessions.logout(linked, true)
+        sessions.save(session); AccountSyncJob.periodic(this, true); status = "Signed in."; selected = null; changed()
+    }
+    private fun authRequest(origin: String, path: String, body: JSONObject, linked: AccountSession?, success: (JSONObject) -> Unit) {
+        if (signing) return
+        signing = true
+        auth.execute {
+            val result = runCatching { AccountTransport.request(origin, path, "POST", linked?.token, body) }
+            runOnUiThread {
+                signing = false
+                if (isDestroyed || isFinishing || linked?.token != sessions.current()?.token) return@runOnUiThread
+                result.onSuccess { safely { success(it) } }.onFailure { e ->
+                    if (e is AccountHttpError && path.endsWith("browser/finish") && e.status in listOf(403, 409, 410)) sessions.browserPending(null)
+                    status = when {
+                        e is AccountHttpError && e.reason == "invalid_confirmation" -> "Incorrect Google confirmation code. Try again."
+                        e is AccountHttpError && e.status == 409 -> "Sign in with your existing method and link this method explicitly."
+                        e is AccountHttpError -> "Sign-in request failed (HTTP ${e.status})."
+                        else -> "Cannot reach the account server."
+                    }
+                    render()
+                }
+            }
+        }
+    }
+    companion object { const val EXTRA_DAY = "accountCalendarDay" }
+}

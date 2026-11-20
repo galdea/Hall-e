@@ -6,6 +6,7 @@ struct MonthGridView: View {
     let events: [UnifiedEvent]
     let anchor: Date                 // any date within the month to display
     @Binding var selectedDay: Date
+    var accountMeetings: [AccountMeeting] = []
 
     private var cal: Calendar {
         var c = Calendar.current; c.timeZone = .current; return c
@@ -32,7 +33,7 @@ struct MonthGridView: View {
             if e.isAllDay { return cal.isDate(e.startTs, inSameDayAs: day) }
             let dayEnd = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: day))!
             return e.startTs < dayEnd && e.endTs > cal.startOfDay(for: day)
-        }.count
+        }.count + accountMeetings.filter { $0.occurs(on: day, calendar: cal) }.count
     }
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 7)

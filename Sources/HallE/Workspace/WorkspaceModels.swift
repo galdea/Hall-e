@@ -71,6 +71,8 @@ final class WorkspaceViewModel {
     var route: WorkspaceRoute = .today {
         didSet { if route != oldValue { selection = nil } }
     }
+    var showAccountAgenda = false
+    var focusedAccountMeetingID: String?
     var agendaDay: Date?
     var selection: WorkspaceSelection?
     var requestedMeeting: UnifiedEvent?

@@ -513,9 +513,7 @@ private class SharedSessionVault(private val context: Context) {
             .put("deviceId", credentials.deviceId).put("token", credentials.token)
             .put("workspaceKey", Base64.getEncoder().encodeToString(credentials.workspaceKey))
             .toString().toByteArray(StandardCharsets.UTF_8)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val encoded = Base64.getEncoder().encodeToString(cipher.iv + cipher.doFinal(raw))
+        val encoded = AndroidVault.seal(KEY_ALIAS, raw)
         check(context.getSharedPreferences(VAULT_PREFS, Context.MODE_PRIVATE).edit().putString(VAULT_KEY, encoded).commit()) {
             "Could not protect the shared workspace credentials."
         }
@@ -524,11 +522,7 @@ private class SharedSessionVault(private val context: Context) {
     fun load(): Credentials? {
         val encoded = context.getSharedPreferences(VAULT_PREFS, Context.MODE_PRIVATE).getString(VAULT_KEY, null) ?: return null
         return runCatching {
-            val packed = Base64.getDecoder().decode(encoded)
-            require(packed.size > IV_BYTES + 16)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, packed.copyOfRange(0, IV_BYTES)))
-            val json = JSONObject(String(cipher.doFinal(packed.copyOfRange(IV_BYTES, packed.size)), StandardCharsets.UTF_8))
+            val json = JSONObject(String(AndroidVault.open(KEY_ALIAS, encoded), StandardCharsets.UTF_8))
             val endpoint = SharedSessionClient.validateStoredEndpoint(json.getString("endpoint"))
             Credentials(endpoint, json.getString("workspaceId"), json.getString("deviceId"), json.getString("token"),
                 Base64.getDecoder().decode(json.getString("workspaceKey")).also { require(it.size == 32) })
@@ -537,21 +531,37 @@ private class SharedSessionVault(private val context: Context) {
 
     fun clear() { context.getSharedPreferences(VAULT_PREFS, Context.MODE_PRIVATE).edit().remove(VAULT_KEY).commit() }
 
-    private fun key(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256).setRandomizedEncryptionRequired(true).build())
-        return generator.generateKey()
-    }
-
     companion object {
         private const val VAULT_PREFS = "shared-session-credentials"
         private const val VAULT_KEY = "credentials"
         private const val KEY_ALIAS = "halle.shared.session.credentials.v1"
-        private const val IV_BYTES = 12
+
+    }
+}
+
+internal object AndroidVault {
+    @Synchronized fun seal(alias: String, raw: ByteArray): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key(alias))
+        return Base64.getEncoder().encodeToString(cipher.iv + cipher.doFinal(raw))
+    }
+
+    fun open(alias: String, encoded: String): ByteArray {
+        val bytes = Base64.getDecoder().decode(encoded)
+        require(bytes.size > 28)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key(alias), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
+        return cipher.doFinal(bytes, 12, bytes.size - 12)
+    }
+
+    private fun key(alias: String): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256).setRandomizedEncryptionRequired(true).build())
+        return generator.generateKey()
     }
 }
 

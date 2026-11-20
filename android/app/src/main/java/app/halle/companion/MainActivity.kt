@@ -182,6 +182,8 @@ class MainActivity : Activity() {
 
         root.addView(space(16))
         if (!previewMode) {
+            root.addView(button("Account calendar") { startActivity(Intent(this, AccountCalendarActivity::class.java)
+                .putExtra(AccountCalendarActivity.EXTRA_DAY, selectedDate.toString())) })
             meetingWorkspace()
             root.addView(space(12))
         }
@@ -213,7 +215,7 @@ class MainActivity : Activity() {
         readinessCard()
         root.addView(space(10))
         TextView(this).apply {
-            text = "Calendar stays on this device. Pair Hall-e to share selected meeting details and switch the recording device. Audio stays where it was recorded."
+            text = "Device calendars and local recordings stay on this phone. Open Account calendar to sync private meetings and choose which new recordings to transcribe."
             textSize = 12f; setTextColor(Color.rgb(108, 122, 115)); gravity = Gravity.CENTER
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }.also { root.addView(it) }

@@ -7,6 +7,12 @@ final class WorkspaceWindowController {
     private var window: NSWindow?
     private let model = WorkspaceViewModel()
 
+    func showAccountAgenda(meetingID: String? = nil) {
+        model.focusedAccountMeetingID = meetingID
+        model.showAccountAgenda = true
+        show()
+    }
+
     func showRecording(id: UUID) {
         model.route = .meetings
         model.selection = .recording(id)

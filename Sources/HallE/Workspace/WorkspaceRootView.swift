@@ -26,6 +26,9 @@ struct WorkspaceRootView: View {
         .sheet(isPresented: $showSharedMeetings) {
             SharedMeetingsView().frame(minWidth: 760, minHeight: 640)
         }
+        .sheet(isPresented: $model.showAccountAgenda) {
+            AccountAgendaView(localEvents: model.appState.agenda, focusedID: model.focusedAccountMeetingID)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .halleOpenToday)) { notification in
             let epoch = notification.userInfo?["agendaDate"] as? Double
             model.openToday(date: epoch.map(Date.init(timeIntervalSince1970:)))
@@ -40,6 +43,11 @@ struct WorkspaceRootView: View {
                 } else {
                     Button { WorkspaceNavigation.startRecording() } label: {
                         Label(PublicUICopy.text("Start recording", "Iniciar grabación"), systemImage: "record.circle")
+                    }
+                }
+                if model.route == .today {
+                    Button { model.focusedAccountMeetingID = nil; model.showAccountAgenda = true } label: {
+                        Label(PublicUICopy.text("Account calendar", "Calendario de la cuenta"), systemImage: "calendar.badge.person.crop")
                     }
                 }
                 if !model.appState.accounts.isEmpty { SyncHealthButton() }

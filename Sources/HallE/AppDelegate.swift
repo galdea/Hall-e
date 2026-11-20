@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var accountSyncTask: Task<Void, Never>?
     private var statusItemController: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -101,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await ProjectSourceImportCoordinator.shared.refreshLinkedCodexSources() }
         #endif
         statusItemController = StatusItemController()
+        accountSyncTask = Task { await AccountAgendaModel.shared.periodicSync() }
 
         if !AppPreferences.onboardingCompleted,
            ProcessInfo.processInfo.environment["HALLE_DEBUG_FIXTURES"] != "1" {
@@ -171,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        accountSyncTask?.cancel()
         VaultAccess.stopAccessingVault()
     }
 

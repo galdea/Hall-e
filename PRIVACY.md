@@ -8,7 +8,17 @@ The sandboxed Mac App Store edition stores recordings, notes, projects, and its 
 
 Hall-e retired its OpenClaw/Gemini structured meeting-report integration on 2026-10-20 because it was unavailable and unreliable. Current Hall-e releases do not automatically create or retry these reports and provide no OpenClaw activation setting. Previously created report files remain local. This does not remove separately configured generic AI-provider features, which continue to use their own provider settings and consent; some transcript processing can run automatically when enabled.
 
-Hall-e data remains local unless you explicitly enable an optional cloud transcription or AI provider, connect an online calendar as described below, or pair devices for shared meetings. Each integration sends only the data needed for the feature you chose and enabled. The [Android privacy notice](https://hall-e.pages.dev/android-privacy.html) describes the separate Android app.
+Hall-e stores its ordinary library locally. Optional features can send data when you enable cloud transcription or AI, connect an online calendar, pair devices, or choose the private account calendar in a development build. The [Android privacy notice](https://hall-e.pages.dev/android-privacy.html) describes the released Android app.
+
+## Private account calendar in development builds
+
+Choose the HTTPS service you trust on both devices. That service receives your verified email, sign-in method and an opaque account identifier. Google sign-in requests identity and email. Email sign-in sends a temporary code through the service operator's mail provider. The operator stores hashed session credentials. Linking another sign-in method requires an active session and proof of the new method.
+
+Creating a meeting here shares its title and scheduled times with the account service. Connected devices cache these fields and the available transcripts. Copying a local calendar occurrence requires selecting it explicitly. A separate action can copy the text of a selected finished Mac transcript into an account meeting. The original local files are retained. The account service can read shared data to present meetings and process recordings.
+
+Android recording requires a user action and microphone permission. Before a private recording is uploaded or sent for transcription the app identifies the provider and asks for consent. Private object storage holds the audio and the service stores its digest, processing state and resulting transcript. Provider keys stay on the server. An interrupted local recording can require manual recovery. Signing out hides the account on the device and revokes its session when online. Files pending synchronization remain in storage scoped to that account. Revocation takes effect on the server and cannot erase a copy that was already received.
+
+Deleting an account meeting removes it from the shared calendar. A deletion marker lets disconnected clients learn about the removal. The service hides the associated recording immediately and its scheduled worker cleans up the stored audio and transcript. Provider-side copies and local originals have their own retention. This feature uses separate storage and credentials from paired workspaces. See the [implementation and QA guide](docs/agenda-privada.md) for the scope and limits of this branch.
 
 ## Local setup and recording
 

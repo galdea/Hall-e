@@ -45,6 +45,7 @@ struct PopoverPeriodSelection: Equatable {
 /// Root of the menu-bar popover: header, a Day / Week / Month switcher, and the
 /// matching agenda content — all in one component.
 struct PopoverRootView: View {
+    @State private var accountAgenda = AccountAgendaModel.shared
     @State private var appState = AppState.shared
     @State private var recorder = RecordingService.shared
     @State private var mode: PopoverMode = {
@@ -198,7 +199,15 @@ struct PopoverRootView: View {
     private var content: some View {
         switch mode {
         case .day:
-            AgendaView(events: appState.agenda, hasAccounts: !appState.accounts.isEmpty, onSelect: openMeeting)
+            VStack(alignment: .leading, spacing: 4) {
+                let own = accountMeetings(on: .now)
+                if !own.isEmpty {
+                    ScrollView { accountRows(own) }.frame(maxHeight: appState.agenda.isEmpty ? .infinity : 110)
+                }
+                if own.isEmpty || !appState.agenda.isEmpty {
+                    AgendaView(events: appState.agenda, hasAccounts: !appState.accounts.isEmpty, onSelect: openMeeting)
+                }
+            }
         case .week:
             weekView
         case .month:
@@ -220,7 +229,9 @@ struct PopoverRootView: View {
                             Spacer()
                         }
                         .padding(.horizontal, 12)
-                        if timeline.isEmpty {
+                        let own = accountMeetings(on: day)
+                        accountRows(own)
+                        if timeline.isEmpty && own.isEmpty {
                             Text("—").font(.caption).foregroundStyle(.tertiary).padding(.horizontal, 14)
                         } else {
                             ForEach(timeline.allDay + timeline.hourGroups.flatMap(\.events)) {
@@ -238,7 +249,7 @@ struct PopoverRootView: View {
         let selectedDay = selection.selectedDay
         let dayTimeline = TimelineBuilder.build(events: appState.agenda, day: selectedDay)
         return VStack(spacing: 0) {
-            MonthGridView(events: appState.agenda, anchor: anchor, selectedDay: $selection.selectedDay)
+            MonthGridView(events: appState.agenda, anchor: anchor, selectedDay: $selection.selectedDay, accountMeetings: accountAgenda.cache.visible)
                 .padding(.vertical, 8)
             Divider()
             HStack {
@@ -247,12 +258,14 @@ struct PopoverRootView: View {
                 Spacer()
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
-            if dayTimeline.isEmpty {
+            let own = accountMeetings(on: selectedDay)
+            if dayTimeline.isEmpty && own.isEmpty {
                 Text(L10n.text("popover.noMeetings")).font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
+                        accountRows(own)
                         ForEach(dayTimeline.allDay + dayTimeline.hourGroups.flatMap(\.events)) {
                             EventRowView(event: $0, onSelect: openMeeting)
                         }
@@ -263,12 +276,34 @@ struct PopoverRootView: View {
         }
     }
 
+    private func accountMeetings(on day: Date) -> [AccountMeeting] {
+        accountAgenda.cache.visible.filter { $0.occurs(on: day, calendar: cal) }
+    }
+
+    private func accountRows(_ meetings: [AccountMeeting]) -> some View {
+        ForEach(meetings) { meeting in
+            Button { WorkspaceWindowController.shared.showAccountAgenda(meetingID: meeting.id) } label: {
+                HStack {
+                    Image(systemName: "calendar.badge.person.crop")
+                    if let start = AccountMeeting.date(meeting.startAt) {
+                        Text(start, format: .dateTime.hour().minute()).font(.caption.monospacedDigit())
+                    }
+                    Text(meeting.title).lineLimit(1)
+                    Spacer()
+                }.padding(.horizontal, 12).padding(.vertical, 3)
+            }.buttonStyle(.plain)
+        }
+    }
+
     // MARK: - Footer
 
     private var footer: some View {
         HStack {
             Text(L10n.text("app.name")).font(.caption2).foregroundStyle(.tertiary)
             Spacer()
+            Button(PublicUICopy.text("Account calendar", "Calendario de la cuenta")) {
+                WorkspaceWindowController.shared.showAccountAgenda()
+            }.buttonStyle(.borderless).font(.caption)
             Button(L10n.text("common.workspace")) { WorkspaceWindowController.shared.show() }.buttonStyle(.borderless).font(.caption)
             Button(L10n.text("common.quit")) { NSApp.terminate(nil) }.buttonStyle(.borderless).font(.caption)
         }
