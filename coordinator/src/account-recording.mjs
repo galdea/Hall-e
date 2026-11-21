@@ -50,6 +50,18 @@ async function find(db, ids) {
     .first();
 }
 
+async function isDisposing(db, ids) {
+  return Boolean(
+    await db
+      .prepare(
+        `SELECT 1 FROM account_recordings WHERE user_id=? AND meeting_id=? AND id=?
+      AND status='disposing' AND ${liveMeeting}`,
+      )
+      .bind(...ids)
+      .first(),
+  );
+}
+
 // Keep input bounded even when the sender omits or understates Content-Length.
 async function bytesAtMost(body, limit) {
   if (!body) return new Uint8Array(0);
@@ -127,7 +139,7 @@ async function initialize(request, db, ids) {
     )
     .run();
   const row = await find(db, ids);
-  if (!row) return error("not_found", 404);
+  if (!row) return (await isDisposing(db, ids)) ? error("upload_disposing", 503) : error("not_found", 404);
   if (
     row.size !== spec.size ||
     row.sha256 !== spec.sha256 ||
@@ -226,9 +238,12 @@ export async function handleRecording(request, env, userId, meetingId, recording
   const ids = [userId, meetingId, recordingId];
   if (!tail && request.method === "PUT") return initialize(request, env.ACCOUNT_DB, ids);
   const row = await find(env.ACCOUNT_DB, ids);
-  if (!row) return error("not_found", 404);
-  if (!tail && request.method === "GET") return json(view(row));
   const part = /^parts\/(0|[1-9]\d{0,3})$/.exec(tail);
+  if (!row) {
+    const write = (part && request.method === "PUT") || (tail === "complete" && request.method === "POST");
+    return write && (await isDisposing(env.ACCOUNT_DB, ids)) ? error("upload_disposing", 503) : error("not_found", 404);
+  }
+  if (!tail && request.method === "GET") return json(view(row));
   if (part && request.method === "PUT") return putPart(request, env, row, Number(part[1]));
   if (tail === "complete" && request.method === "POST") return complete(env, row, ids);
   return error("not_found", 404);
@@ -353,10 +368,13 @@ function speechmaticsText(data) {
       .map((item) => {
         const first = item.alternatives?.[0];
         const punctuation = item.type === "punctuation";
-        if (!punctuation && (!first?.speaker || first.speaker === "UU")) throw new Error("missing_speaker");
+        const speaker =
+          typeof first?.speaker === "string" && first.speaker && first.speaker !== "UU"
+            ? first.speaker
+            : undefined;
         return {
           text: first?.content,
-          speaker: first?.speaker,
+          speaker,
           start: item.start_time,
           end: item.end_time,
           punctuation,
@@ -509,25 +527,32 @@ export async function processPending(
     )
     .bind(now)
     .run();
-  const row = await db
-    .prepare(
-      `SELECT * FROM account_recordings WHERE status IN ('queued','processing')
-    AND next_at<=? AND ${liveMeeting} ORDER BY next_at,updated_at,blob_id LIMIT 1`,
-    )
-    .bind(now)
-    .first();
-  if (!row) return;
-  const localProcessor = row.status === "queued" ? selectLocalProcessor?.(row) : undefined;
-  if (!localProcessor && !ready(env, row)) {
+  let row = null;
+  let localProcessor;
+  for (let skipped = 0; skipped < 16; skipped++) {
+    const candidate = await db
+      .prepare(
+        `SELECT * FROM account_recordings WHERE status IN ('queued','processing')
+      AND next_at<=? AND ${liveMeeting} ORDER BY next_at,updated_at,blob_id LIMIT 1`,
+      )
+      .bind(now)
+      .first();
+    if (!candidate) return;
+    const local = candidate.status === "queued" ? selectLocalProcessor?.(candidate) : undefined;
+    if (local || ready(env, candidate)) {
+      row = candidate;
+      localProcessor = local;
+      break;
+    }
     await db
       .prepare(
         `UPDATE account_recordings SET detail='provider_unconfigured',next_at=?
       WHERE blob_id=? AND status=? AND next_at=?`,
       )
-      .bind(now + MINUTE, row.blob_id, row.status, row.next_at)
+      .bind(now + MINUTE, candidate.blob_id, candidate.status, candidate.next_at)
       .run();
-    return;
   }
+  if (!row) return;
   const polling = row.status === "processing";
   const claim = crypto.randomUUID();
   const leased = await db

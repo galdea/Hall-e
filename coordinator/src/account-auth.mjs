@@ -221,18 +221,18 @@ export function createAccountAuth({ fetchImpl = (...args) => globalThis.fetch(..
     if (phase === 'start') {
       if (body.link === true && !session) reject(401, 'unauthorized');
       if (session && body.link !== true) reject(400, 'explicit_link_required');
-      // Match the normal challenge response without sending mail or persisting an outsider's address.
-      if (provider === 'email' && testers !== null && !testers.includes(normalizedEmail(body.email))) {
-        return json({ challengeId: crypto.randomUUID() });
-      }
+      const email = provider === 'email' ? normalizedEmail(body.email) : null;
       const key = await hmacKey(env);
       const fingerprint = async value => base64url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value))));
       await limit(db, await fingerprint('ip:' + (request.headers.get('CF-Connecting-IP') || 'local')), 30, now);
       await db.batch(['account_auth_challenges', 'account_auth_limits', 'account_sessions'].map(table =>
         statement(db, `DELETE FROM ${table} WHERE expires_at <= ?`, now)));
-      const challengeId = crypto.randomUUID();
-      const email = provider === 'email' ? normalizedEmail(body.email) : null;
       if (email) await limit(db, await fingerprint(`email:${email}`), 5, now);
+      // Match the normal challenge response without sending mail or persisting an outsider's address.
+      if (provider === 'email' && testers !== null && !testers.includes(email)) {
+        return json({ challengeId: crypto.randomUUID() });
+      }
+      const challengeId = crypto.randomUUID();
       const code = email ? newNumericCode() : null;
       const proof = email ? await fingerprint(`otp:${challengeId}:${code}`) : randomToken();
       await statement(db, `INSERT INTO account_auth_challenges (challenge_id, provider, link_session, email, proof, expires_at)

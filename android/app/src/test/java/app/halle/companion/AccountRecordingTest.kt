@@ -106,4 +106,99 @@ class AccountRecordingTest {
         }) {}
         assertEquals(setOf(0,1), parts)
     }
+
+    private class MemoryCalendarStorage : CalendarStorage {
+        private val data = mutableMapOf<String, String>()
+        override fun getString(key: String, default: String?): String? = data[key] ?: default
+        override fun keys(prefix: String): List<String> = data.keys.filter { it.startsWith(prefix) }.sorted()
+        override fun commit(edits: Map<String, String?>): Boolean {
+            for ((k, v) in edits) {
+                if (v == null) data.remove(k) else data[k] = v
+            }
+            return true
+        }
+    }
+
+    @Test fun syncReconcilesRemoteDeleteBeforeUploadAndSupportsRetryAndDiscard() {
+        val session = AccountSession("https://account.invalid", "user-1", "tok", Long.MAX_VALUE)
+        val storage = MemoryCalendarStorage()
+        val audioFile = tmp.newFile("sample.m4a").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val cal = AccountCalendar(session, storage, null, recoverAudio = {}, completedAudioFile = { if (it == rid) audioFile else null })
+        cal.enqueueAudio(mid, rid, "deepgram")
+        val calls = mutableListOf<String>()
+        cal.sync { path, method, _, _ ->
+            calls += "$method $path"
+            assertEquals("GET", method)
+            val deleted = JSONObject().put("id", mid).put("title", "").put("startAt", "2026-11-20T10:00:00Z")
+                .put("endAt", "2026-11-20T10:30:00Z").put("revision", 2).put("deleted", true)
+                .put("recordings", org.json.JSONArray())
+            JSONObject().put("version", "0123456789abcdef0123456789abcdef").put("meetings", org.json.JSONArray().put(deleted))
+        }
+        assertEquals(listOf("GET /meetings"), calls)
+        assertNull(cal.upload(rid))
+        assertTrue(audioFile.isFile)
+
+        // Permanent 409 marks problem; retryUpload clears problem; discardUpload removes outbox entry.
+        val liveId = UUID.randomUUID().toString()
+        cal.enqueueAudio(liveId, rid, "deepgram")
+        cal.sync { path, method, _, _ ->
+            if (method == "GET") {
+                val live = JSONObject().put("id", liveId).put("title", "Live").put("startAt", "2026-11-20T10:00:00Z")
+                    .put("endAt", "2026-11-20T10:30:00Z").put("revision", 1).put("deleted", false)
+                    .put("recordings", org.json.JSONArray())
+                JSONObject().put("version", "fedcba9876543210fedcba9876543210").put("meetings", org.json.JSONArray().put(live))
+            } else throw AccountHttpError(409, "manifest_conflict")
+        }
+        assertEquals(409, cal.upload(rid)!!.getInt("problem"))
+        cal.retryUpload(rid)
+        assertFalse(cal.upload(rid)!!.has("problem"))
+        cal.discardUpload(rid)
+        assertNull(cal.upload(rid))
+    }
+
+    @Test fun reapplyRebasesConflictedEditOntoLatestServerRevisionAndRejectsDeletedTarget() {
+        val session = AccountSession("https://account.invalid", "user-1", "tok", Long.MAX_VALUE)
+        val storage = MemoryCalendarStorage()
+        val cal = AccountCalendar(session, storage, null, recoverAudio = {}, completedAudioFile = { null })
+        val start = java.time.Instant.parse("2026-11-20T12:00:00Z")
+        val end = java.time.Instant.parse("2026-11-20T12:30:00Z")
+        cal.stage(mid, "Phone title", start, end, base = 1, deleting = false)
+        val originalMutation = cal.pending(mid)!!.getString("mutationId")
+        var serverRev = 2
+        var serverDeleted = false
+        cal.sync { _, method, _, _ ->
+            if (method == "PUT") throw AccountHttpError(409, "revision_conflict")
+            val row = JSONObject().put("id", mid).put("title", "Mac title").put("startAt", start.toString())
+                .put("endAt", end.toString()).put("revision", serverRev).put("deleted", serverDeleted)
+                .put("recordings", org.json.JSONArray())
+            JSONObject().put("version", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").put("meetings", org.json.JSONArray().put(row))
+        }
+        assertEquals(409, cal.pending(mid)!!.getInt("problem"))
+        cal.reapply(mid)
+        val rebased = cal.pending(mid)!!
+        assertFalse(rebased.has("problem"))
+        assertEquals(2, rebased.getInt("baseRevision"))
+        assertNotEquals(originalMutation, rebased.getString("mutationId"))
+
+        // If server later deletes the meeting and another conflict occurs, reapply refuses to resurrect it.
+        serverRev = 3
+        serverDeleted = true
+        cal.sync { _, method, _, _ ->
+            if (method == "PUT") throw AccountHttpError(409, "revision_conflict")
+            val row = JSONObject().put("id", mid).put("title", "").put("startAt", start.toString())
+                .put("endAt", end.toString()).put("revision", serverRev).put("deleted", true)
+                .put("recordings", org.json.JSONArray())
+            JSONObject().put("version", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").put("meetings", org.json.JSONArray().put(row))
+        }
+        assertThrows(IllegalStateException::class.java) { cal.reapply(mid) }
+    }
+
+    @Test fun googleAuthUrlValidationRequiresExactHostNoPortNoUserInfoAndExactPath() {
+        assertTrue(isApprovedGoogleAuthUrl("https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&state=xyz"))
+        assertFalse(isApprovedGoogleAuthUrl("http://accounts.google.com/o/oauth2/v2/auth"))
+        assertFalse(isApprovedGoogleAuthUrl("https://accounts.google.com:443/o/oauth2/v2/auth"))
+        assertFalse(isApprovedGoogleAuthUrl("https://user@accounts.google.com/o/oauth2/v2/auth"))
+        assertFalse(isApprovedGoogleAuthUrl("https://accounts.google.com/other"))
+        assertFalse(isApprovedGoogleAuthUrl("https://evil.example/o/oauth2/v2/auth"))
+    }
 }

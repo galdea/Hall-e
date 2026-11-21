@@ -315,4 +315,123 @@ struct AccountAgendaTests {
         await restarted.run { try await restarted.synchronize() }
         #expect(restarted.account == nil && restarted.cache.visible.isEmpty)
     }
+
+    @MainActor @Test func permanent4xxParksConflictWithoutBlockingSyncAndRunSerializesUserActions() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "test.halle.account.resilience." + UUID().uuidString
+        let prefs = UserDefaults(suiteName: suite)!
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            prefs.removePersistentDomain(forName: suite)
+            CalendarFixtureHTTP.reply = nil
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CalendarFixtureHTTP.self]
+        let transport = URLSession(configuration: config)
+        var fakeVault: String?
+        let model = AccountAgendaModel(preferences: prefs, cacheRoot: { root }, loadVault: { fakeVault },
+                                       saveVault: { fakeVault = $0 }, transport: transport, openURL: { _ in true })
+        let origin = try AccountAPI.origin("https://calendar.example.invalid")
+        let credentials = AccountCredentials(userId: "test-A", token: "fixture-A", expiresAt: 4_102_444_800_000)
+        let badDraft = AccountMeeting.draft(title: "Rejected by server")
+        let goodDraft = AccountMeeting.draft(title: "Accepted by server")
+        var serverMeetings: [AccountMeeting] = []
+        var importedCalls: [String] = []
+        var googleFinishStatus = 401
+        func json(_ object: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: object) }
+        CalendarFixtureHTTP.reply = { req in
+            let path = req.url!.path
+            if path.hasSuffix("/auth/email/start") { return (200, try json(["challengeId": "c1"])) }
+            if path.hasSuffix("/auth/email/verify") { return (200, try JSONEncoder().encode(credentials)) }
+            if path.hasSuffix("/auth/browser/start") {
+                return (200, try json(["url": "https://accounts.google.com/o/oauth2/v2/auth?state=s", "pollToken": "poll-1"]))
+            }
+            if path.hasSuffix("/auth/browser/finish") {
+                return (googleFinishStatus, try json(["error": googleFinishStatus == 401 ? "invalid_confirmation" : "attempt_expired"]))
+            }
+            if req.httpMethod == "PUT", path.hasSuffix("/" + badDraft.id) {
+                return (400, try json(["error": "invalid_meeting"]))
+            }
+            if req.httpMethod == "PUT", path.hasSuffix("/" + goodDraft.id) {
+                var saved = goodDraft
+                saved.revision = 1
+                serverMeetings = [saved]
+                return (200, try JSONEncoder().encode(["meeting": saved]))
+            }
+            if path.contains("/imports/") {
+                importedCalls.append("\(req.httpMethod ?? "") \(path)")
+                if req.httpMethod == "PUT" {
+                    return (200, try json(["recording": ["id": "imp", "status": "completed", "transcript": "hi", "source": "local-import"]]))
+                }
+                if req.httpMethod == "DELETE" { return (204, Data()) }
+            }
+            if path.hasSuffix("/meetings"), req.httpMethod == "GET" {
+                return (200, try JSONEncoder().encode(["meetings": serverMeetings]))
+            }
+            return (404, Data())
+        }
+
+        // Terminal Google browser errors clear browserToken; 401 keeps it for retry.
+        model.endpoint = origin.absoluteString
+        await model.run { try await model.google() }
+        #expect(model.waitingForBrowser)
+        model.confirmationCode = "12345678"
+        googleFinishStatus = 401
+        await model.run { try await model.finishGoogle() }
+        #expect(model.waitingForBrowser)
+        googleFinishStatus = 410
+        await model.run { try await model.finishGoogle() }
+        #expect(!model.waitingForBrowser)
+
+        // Sign in and verify permanent 400 parks as conflict without blocking goodDraft or GET /meetings.
+        model.email = "a@example.invalid"
+        await model.run { try await model.startEmail() }
+        model.code = "12345678"
+        await model.run { try await model.finishEmail() }
+        try model.enqueue(badDraft)
+        try model.enqueue(goodDraft)
+        await model.run { try await model.synchronize() }
+        #expect(model.cache.pending.count == 1)
+        #expect(model.cache.pending.first?.meeting.id == badDraft.id)
+        #expect(model.cache.pending.first?.conflict == true)
+        #expect(model.cache.visible.contains { $0.id == goodDraft.id && $0.revision == 1 })
+
+        // Transcript import uses injected transport and meeting-scoped import IDs.
+        let account = try #require(model.account)
+        let sessionId = UUID()
+        let idA = AccountAgendaModel.transcriptImportID(meetingId: goodDraft.id, sessionId: sessionId, account: account)
+        let idB = AccountAgendaModel.transcriptImportID(meetingId: badDraft.id, sessionId: sessionId, account: account)
+        #expect(idA != idB)
+        await model.run { try await model.importTranscript(meetingId: goodDraft.id, importId: idA, text: "Synthetic", into: account) }
+        await model.run { try await model.removeImportedTranscript(meetingId: goodDraft.id, importId: idA, from: account) }
+        #expect(importedCalls.count == 2)
+        #expect(importedCalls[0].hasPrefix("PUT "))
+        #expect(importedCalls[1].hasPrefix("DELETE "))
+
+        // Concurrent user run serializes behind background run instead of dropping; extra background run skips.
+        var order: [String] = []
+        let bg = Task { @MainActor in
+            await model.run(background: true) {
+                order.append("bg-start")
+                try await Task.sleep(for: .milliseconds(40))
+                order.append("bg-end")
+            }
+        }
+        await Task.yield()
+        let bgDropped = Task { @MainActor in
+            await model.run(background: true) { order.append("bg-dropped") }
+        }
+        let user = Task { @MainActor in
+            await model.run { order.append("user") }
+        }
+        await bg.value
+        await bgDropped.value
+        await user.value
+        #expect(order == ["bg-start", "bg-end", "user"])
+
+        // Debug fixture mode isolates shared instance from real Keychain/defaults.
+        let fixtureShared = AccountAgendaModel.makeShared(environment: ["HALLE_DEBUG_FIXTURES": "1"])
+        await fixtureShared.run {}
+        #expect(fixtureShared.account == nil)
+    }
 }

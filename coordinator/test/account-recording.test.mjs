@@ -227,3 +227,52 @@ test("a provider redirect stops locally and cannot forward audio or the authoriz
   assert.equal((await read()).status, "failed");
   assert.equal(calls, 1);
 });
+
+test("Speechmatics accepts UU or missing speaker tokens without discarding the transcript", async (t) => {
+  const { env, queue, read } = await setup(t);
+  await queue({ ...manifest, provider: "speechmatics", region: "eu1" });
+  let at = Date.now(),
+    reference;
+  const options = {
+    now: () => at,
+    fetch: async (url, init) => {
+      const address = new URL(url);
+      if (init.method === "POST") {
+        const payload = await new Response(init.body).text();
+        reference = /"reference":"([^"]+)"/.exec(payload)[1];
+        return Response.json({ id: "remote_uu" }, { status: 201 });
+      }
+      if (address.pathname.endsWith("/transcript")) {
+        return Response.json({
+          results: [
+            { type: "word", start_time: 1.0, end_time: 1.4, alternatives: [{ content: "Hola", speaker: "UU" }] },
+            { type: "punctuation", attaches_to: "previous", is_eos: true, alternatives: [{ content: "." }] },
+            { type: "word", start_time: 1.6, end_time: 2.0, alternatives: [{ content: "Mundo", speaker: "S1" }] },
+            { type: "punctuation", attaches_to: "previous", is_eos: true, alternatives: [{ content: "." }] },
+          ],
+        });
+      }
+      return Response.json({ job: { id: "remote_uu", status: "done", tracking: { reference } } });
+    },
+  };
+  await processPending(env, options);
+  at += 61_000;
+  await processPending(env, options);
+  const done = await read();
+  assert.equal(done.status, "completed");
+  assert.equal(done.transcript, "[0:00:01.000–0:00:01.400] Hola.\n[0:00:01.600–0:00:02.000 · S1] Mundo.");
+});
+
+test("uploading while a stale recording is disposing on a live meeting returns retryable 503", async (t) => {
+  const { env, db, call } = await setup(t);
+  assert.equal((await call("PUT", "", manifest)).status, 200);
+  await db.prepare("UPDATE account_recordings SET status='disposing' WHERE user_id='one'").run();
+  const initRes = await call("PUT", "", manifest);
+  assert.equal(initRes.status, 503);
+  assert.equal((await initRes.json()).error, "upload_disposing");
+  assert.equal((await call("PUT", "parts/0", body)).status, 503);
+  assert.equal((await call("POST", "complete", {})).status, 503);
+  assert.equal((await call("GET", "")).status, 404);
+  await db.prepare("UPDATE account_meetings SET deleted=1 WHERE user_id='one'").run();
+  assert.equal((await call("PUT", "", manifest)).status, 404);
+});

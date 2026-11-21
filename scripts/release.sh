@@ -6,6 +6,17 @@ if [[ "${HALLE_STAGING:-0}" != 0 ]]; then
   echo 'Use scripts/build.sh to package the private staging app.' >&2
   exit 1
 fi
+if [[ -n "${HALLE_ACCOUNT_ORIGIN:-}" ]]; then
+  account_origin_lower="$(printf '%s' "$HALLE_ACCOUNT_ORIGIN" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$account_origin_lower" == *staging* ]]; then
+    echo 'Refusing to embed a staging HALLE_ACCOUNT_ORIGIN in a release package.' >&2
+    exit 1
+  fi
+  if [[ "${ALLOW_PACKAGED_ACCOUNT_ORIGIN:-0}" != 1 ]]; then
+    echo 'Refusing to embed HALLE_ACCOUNT_ORIGIN in a release package without ALLOW_PACKAGED_ACCOUNT_ORIGIN=1.' >&2
+    exit 1
+  fi
+fi
 export VERSION="${VERSION:-0.5.0}"
 export ARCH="${ARCH:-$(uname -m)}"
 export SIGNING_MODE="${SIGNING_MODE:-adhoc}"

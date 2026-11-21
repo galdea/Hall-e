@@ -48,12 +48,7 @@ struct AccountTranscriptImportControls: View {
                 Button(text("Remove account copy", "Eliminar copia de la cuenta"), role: .destructive) {
                     Task {
                         await model.run {
-                            guard model.account == proposed.account else { throw AccountAgendaError.session }
-                            let token = proposed.account.credentials.token
-                            _ = try await AccountAPI(origin: proposed.account.origin).request(
-                                "DELETE", "meetings/\(meeting.id)/imports/\(proposed.recording.id)", token: token
-                            )
-                            try await model.synchronize(force: true)
+                            try await model.removeImportedTranscript(meetingId: meeting.id, importId: proposed.recording.id, from: proposed.account)
                         }
                     }
                 }
@@ -140,9 +135,7 @@ private struct TranscriptImportSheet: View {
             else { throw TranscriptImportFailure.unavailable }
             let copy = transcript.speakerLabeledText
             guard copy.utf8.count <= 512 * 1024 else { throw TranscriptImportFailure.tooLarge }
-            let id = AccountCalendarCache.importID(source: "local-transcript:" + session.id.uuidString,
-                                                    origin: selection.account.origin,
-                                                    userId: selection.account.credentials.userId)
+            let id = AccountAgendaModel.transcriptImportID(meetingId: selection.meeting.id, sessionId: session.id, account: selection.account)
             draft = Draft(id: id, title: session.eventTitle, text: copy)
         } catch {
             self.error = error.localizedDescription
@@ -153,13 +146,9 @@ private struct TranscriptImportSheet: View {
         Task {
             await model.run {
                 do {
-                    guard model.account == selection.account else { throw AccountAgendaError.session }
-                    _ = try await AccountAPI(origin: selection.account.origin).request(
-                        "PUT", "meetings/\(selection.meeting.id)/imports/\(proposed.id)",
-                        token: selection.account.credentials.token, body: ["consent": true, "transcript": proposed.text]
-                    )
+                    try await model.importTranscript(meetingId: selection.meeting.id, importId: proposed.id,
+                                                     text: proposed.text, into: selection.account)
                     dismiss()
-                    try await model.synchronize(force: true)
                 } catch AccountAgendaError.response(410, "import_removed") {
                     self.error = text("This account copy was removed.", "Esta copia se eliminó de la cuenta.")
                 } catch AccountAgendaError.response(409, "import_conflict") {

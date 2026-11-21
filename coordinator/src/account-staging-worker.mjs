@@ -30,7 +30,7 @@ export default {
     const response = await accountWorker.fetch(request, env, ctx);
     if (request.method === "POST" && response.ok &&
         /^\/account\/v1\/meetings\/[\da-f-]{36}\/recordings\/[\da-f-]{36}\/complete$/i.test(new URL(request.url).pathname)) {
-      ctx.waitUntil(runStagingProcessor(env));
+      ctx.waitUntil(runStagingProcessor(env).catch(() => {}));
     }
     return response;
   },

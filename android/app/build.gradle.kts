@@ -21,6 +21,11 @@ val packagedAccountOrigin = providers.environmentVariable("HALLE_ACCOUNT_ORIGIN"
     URI("https", null, uri.host.lowercase(Locale.ROOT), if (uri.port == 443) -1 else uri.port,
         null, null, null).toASCIIString()
 }
+if (staging) {
+    require(packagedAccountOrigin.isNotEmpty()) {
+        "HALLE_STAGING=1 requires HALLE_ACCOUNT_ORIGIN to be set to the staging HTTPS origin."
+    }
+}
 
 android {
     namespace = "app.halle.companion"

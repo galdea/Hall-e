@@ -16,25 +16,80 @@ internal fun meetingPath(id: String): String {
     return "/meetings/$id"
 }
 
-internal class AccountCalendar(context: Context, val session: AccountSession) {
-    val media = MobileMeetingStore(context, session.scope)
-    private val prefs = context.getSharedPreferences("private-calendar-" + session.scope, Context.MODE_PRIVATE)
-    private fun objectFor(key: String) = prefs.getString(key, null)?.let(::JSONObject)
-    private fun save(key: String, value: JSONObject?) {
-        check(prefs.edit().putString(key, value?.toString()).commit()) { "Phone storage is unavailable." }
+internal interface CalendarStorage {
+    fun getString(key: String, default: String? = null): String?
+    fun keys(prefix: String): List<String>
+    fun commit(edits: Map<String, String?>): Boolean
+}
+
+private class PrefsCalendarStorage(context: Context, scope: String) : CalendarStorage {
+    private val prefs = context.getSharedPreferences("private-calendar-$scope", Context.MODE_PRIVATE)
+    override fun getString(key: String, default: String?): String? = prefs.getString(key, default)
+    override fun keys(prefix: String): List<String> = prefs.all.keys.filter { it.startsWith(prefix) }.sorted()
+    override fun commit(edits: Map<String, String?>): Boolean {
+        val editor = prefs.edit()
+        for ((k, v) in edits) {
+            if (v == null) editor.remove(k) else editor.putString(k, v)
+        }
+        return editor.commit()
     }
-    private fun keys(prefix: String) = prefs.all.keys.filter { it.startsWith(prefix) }.sorted()
-    fun cached() = JSONArray(prefs.getString("snapshot", "[]")).objects()
+}
+
+internal class AccountCalendar internal constructor(
+    val session: AccountSession,
+    private val storage: CalendarStorage,
+    private val mediaStore: MobileMeetingStore?,
+    private val recoverAudio: () -> Unit = { mediaStore?.recoverInterrupted() },
+    private val completedAudioFile: (String) -> File? = { mediaStore?.completedAudio(it) },
+) {
+    constructor(context: Context, session: AccountSession) : this(
+        session = session,
+        storage = PrefsCalendarStorage(context, session.scope),
+        mediaStore = MobileMeetingStore(context, session.scope),
+    )
+
+    val media: MobileMeetingStore get() = requireNotNull(mediaStore)
+    private fun objectFor(key: String) = storage.getString(key, null)?.let(::JSONObject)
+    private fun save(key: String, value: JSONObject?) {
+        check(storage.commit(mapOf(key to value?.toString()))) { "Phone storage is unavailable." }
+    }
+    private fun keys(prefix: String) = storage.keys(prefix)
+    fun cached() = JSONArray(storage.getString("snapshot", "[]") ?: "[]").objects()
     fun pending(id: String) = objectFor("edit-$id")
     fun recordings(id: String) = media.list().filter { it.sourceEventKey == id }
+    fun orphanedRecordings(): List<MobileMeeting> {
+        val visibleIds = visible().mapTo(mutableSetOf()) { it.getString("id") }
+        return media.list().filter { it.sourceEventKey != null && it.sourceEventKey !in visibleIds }
+    }
+    fun deleteOrphanedRecording(recordingId: String) {
+        discardUpload(recordingId)
+        media.deleteRecording(recordingId)
+    }
     fun upload(id: String) = objectFor("audio-$id")
     fun discard(id: String) { save("edit-$id", null) }
+    fun retryUpload(recordingId: String) {
+        val state = upload(recordingId) ?: return
+        state.remove("problem")
+        save("audio-$recordingId", state)
+    }
+    fun discardUpload(recordingId: String) { save("audio-$recordingId", null) }
     fun projects() = accountProjects(cached(), mutationIds().mapNotNull(::pending))
     fun retryProject(id: String) {
         val change = pending(id) ?: return
         check(change.optString("problem") == "unsupported_project")
         change.remove("problem")
         save("edit-$id", change)
+    }
+    fun reapply(id: String) {
+        val local = pending(id) ?: throw IllegalStateException("No pending change.")
+        check(local.has("problem")) { "Change is not in conflict." }
+        val current = cached().firstOrNull { it.getString("id") == id && !it.optBoolean("deleted") }
+            ?: throw IllegalStateException("Meeting no longer exists.")
+        val revised = JSONObject(local.toString())
+            .put("baseRevision", current.getInt("revision"))
+            .put("mutationId", UUID.randomUUID().toString())
+        revised.remove("problem")
+        save("edit-$id", revised)
     }
     fun stage(id: String, title: String, start: Instant, end: Instant, base: Int, deleting: Boolean,
               project: ProjectChange? = null) {
@@ -70,9 +125,22 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
         save("audio-$recording", JSONObject().put("meeting", meeting).put("provider", provider).put("nextPart", 0))
     }
 
+    private fun pullSnapshot(request: (String, String, JSONObject?, ByteArray?) -> JSONObject, force: Boolean) {
+        val prior = if (force) null else storage.getString("version", null)
+        val path = snapshotPath(prior)
+        val reply = request(path, "GET", null, null)
+        if (reply.optBoolean("unchanged") && path != "/meetings" && reply.optString("version") == prior) return
+        val list = reply.getJSONArray("meetings")
+        val version = reply.optNullableString("version")?.takeIf { it.matches(versionFormat) }
+        check(storage.commit(mapOf("snapshot" to list.toString(), "version" to version)))
+    }
+
+    private fun isRemotelyDeleted(meetingId: String): Boolean =
+        pending(meetingId) == null && cached().any { it.getString("id") == meetingId && it.optBoolean("deleted") }
+
     // One sync runs per process. The caller supplies the live-session check for every outbound request.
     fun sync(request: (String, String, JSONObject?, ByteArray?) -> JSONObject) {
-        media.recoverInterrupted()
+        recoverAudio()
         var sent = false
         for (id in mutationIds()) {
             val pending = pending(id) ?: continue
@@ -86,8 +154,8 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
                 }
                 val cached = previous.filter { it.getString("id") != id } + accepted
                 // Persist the accepted revision and clear its outbox entry in one transaction.
-                val update = prefs.edit().putString("snapshot", JSONArray(cached).toString()).remove("version")
-                if (projectSelectionAccepted(pending, accepted)) update.remove("edit-$id")
+                val edits = mutableMapOf<String, String?>("snapshot" to JSONArray(cached).toString(), "version" to null)
+                if (projectSelectionAccepted(pending, accepted)) edits["edit-$id"] = null
                 else {
                     // Older servers can acknowledge the meeting while ignoring an explicit assignment.
                     if (accepted.optBoolean("deleted") || accepted.getInt("revision") != pending.getInt("baseRevision") + 1) {
@@ -98,37 +166,53 @@ internal class AccountCalendar(context: Context, val session: AccountSession) {
                             .put("endAt", accepted.getString("endAt")).put("baseRevision", accepted.getInt("revision"))
                             .put("mutationId", UUID.randomUUID().toString()).put("problem", "unsupported_project")
                     }
-                    update.putString("edit-$id", pending.toString())
+                    edits["edit-$id"] = pending.toString()
                 }
-                check(update.commit())
+                check(storage.commit(edits))
                 sent = true
             } catch (error: AccountHttpError) {
                 if (!permanent(error.status)) throw error
                 save("edit-$id", pending.put("problem", error.status))
             }
         }
-        for (key in keys("audio-")) {
+        val audioKeys = keys("audio-")
+        var pulled = false
+        if (audioKeys.any { upload(it.removePrefix("audio-"))?.has("problem") != true }) {
+            pullSnapshot(request, force = sent)
+            pulled = true
+        }
+        var uploadedAudio = false
+        for (key in audioKeys) {
             val id = key.removePrefix("audio-")
             val state = upload(id) ?: continue
-            val edit = pending(state.getString("meeting"))
+            val meetingId = state.getString("meeting")
+            val edit = pending(meetingId)
             if (state.has("problem") || (edit != null && edit.optString("problem") != "unsupported_project")) continue
-            val file = media.completedAudio(id) ?: continue
+            if (isRemotelyDeleted(meetingId)) {
+                discardUpload(id)
+                continue
+            }
+            val file = completedAudioFile(id) ?: continue
             try {
                 sendAccountRecording(id, state, file, request) { save(key, state) }
-                check(prefs.edit().remove(key).remove("version").commit())
-                sent = true
+                check(storage.commit(mapOf(key to null, "version" to null)))
+                uploadedAudio = true
             } catch (error: AccountHttpError) {
+                if (error.status == 404) {
+                    pullSnapshot(request, force = true)
+                    pulled = true
+                    if (isRemotelyDeleted(meetingId)) {
+                        discardUpload(id)
+                        continue
+                    }
+                }
                 if (!permanent(error.status)) throw error
                 save(key, state.put("problem", error.status))
             }
         }
-        val prior = if (sent) null else prefs.getString("version", null)
-        val path = snapshotPath(prior)
-        val reply = request(path, "GET", null, null)
-        if (reply.optBoolean("unchanged") && path != "/meetings" && reply.optString("version") == prior) return
-        val list = reply.getJSONArray("meetings")
-        val version = reply.optNullableString("version")?.takeIf { it.matches(versionFormat) }
-        check(prefs.edit().putString("snapshot", list.toString()).putString("version", version).commit())
+        if (!pulled || uploadedAudio) {
+            pullSnapshot(request, force = sent || uploadedAudio)
+        }
     }
 
     private fun permanent(status: Int) = status in 400..499 && status !in listOf(401, 408, 425, 429)

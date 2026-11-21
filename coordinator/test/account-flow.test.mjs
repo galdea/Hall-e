@@ -322,6 +322,9 @@ test("an explicitly copied local transcript is private, immutable, and removable
   assert.equal((await request("DELETE", route, { token: phone.token })).status, 204);
   assert.equal((await request("DELETE", route, { token: phone.token })).status, 204);
   assert.equal((await request("PUT", route, { token: mac.token, body: fixture })).status, 410);
+  assert.equal((await request("PUT", otherMeeting, { token: mac.token, body: fixture })).status, 409);
+  const movedImport = `${second}/imports/${randomUUID()}`;
+  expectSuccess(await request("PUT", movedImport, { token: mac.token, body: fixture }));
   assert.deepEqual(expectSuccess(await request("GET", "/meetings", { token: mac.token }))
     .meetings.find(({id}) => id === sourceMeeting.id).recordings, []);
 
