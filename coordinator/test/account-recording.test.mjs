@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { openAccountDatabase, memoryRecordingBucket } from "../test-support/account.mjs";
-import { handleRecording, processPending, recordingsFor } from "../src/account-recording.mjs";
+import {
+  disposeRemoved,
+  handleRecording,
+  processPending,
+  recordingTranscript,
+  recordingsFor,
+} from "../src/account-recording.mjs";
 
 const body = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 1, 2, 3]);
 const manifest = {
@@ -313,10 +319,10 @@ test("a stored part missing from R2 or of the wrong size is requested again, kee
   assert.equal((await read()).status, "queued");
 });
 
-test("an oversize transcript keeps its audio and provider reference until the owner discards the recording", async (t) => {
+test("a transcript over 8 MiB keeps its audio and provider reference until the owner discards the recording", async (t) => {
   const { env, db, bucket, queue, call, read } = await setup(t);
   await queue();
-  const turn = { speaker: 0, start: 0, end: 1, transcript: "x".repeat(600 * 1024) };
+  const turn = { speaker: 0, start: 0, end: 1, transcript: "x".repeat(8 * 1024 * 1024) };
   await processPending(env, {
     fetch: async () =>
       Response.json({
@@ -361,4 +367,90 @@ test("a provider response over 12 MiB keeps Deepgram's request header, and activ
   const job = await db.prepare("SELECT provider_job FROM account_recordings WHERE user_id='one'").first("provider_job");
   assert.equal(job, "dg-header-request");
   assert.equal((await call("DELETE", "")).status, 204);
+});
+
+const MiB = 1024 * 1024;
+const deepgramTurn = (transcript) => async () =>
+  Response.json({
+    metadata: { request_id: "dg-large-request" },
+    results: { channels: [{ alternatives: [{ transcript: "x" }] }], utterances: [{ speaker: 0, start: 0, end: 1, transcript }] },
+  });
+
+test("a transcript over 512 KiB and up to 8 MiB completes, is kept in R2 under the recording and served on request", async (t) => {
+  const { env, db, bucket, queue, read } = await setup(t);
+  await queue();
+  const words = "é".repeat(4 * MiB - 64);
+  await processPending(env, { fetch: deepgramTurn(words) });
+  const expected = `[0:00:00.000–0:00:01.000 · S0] ${words}`;
+  const bytes = new TextEncoder().encode(expected).length;
+  assert.ok(bytes > 512 * 1024 && bytes <= 8 * MiB);
+  const done = await read();
+  assert.equal(done.status, "completed");
+  assert.equal(done.detail, null);
+  assert.equal(done.transcript, null);
+  assert.equal(done.transcriptStoredSeparately, true);
+  const blob = await db.prepare("SELECT blob_id, transcript, provider_job FROM account_recordings").first();
+  assert.equal(blob.transcript, null);
+  assert.equal(blob.provider_job, "dg-large-request");
+  const stored = bucket.objects.get(`recordings/${blob.blob_id}/transcript`);
+  assert.equal(stored.size, bytes);
+  assert.equal(stored.httpMetadata.contentType, "text/plain; charset=utf-8");
+  assert.equal(await recordingTranscript(env, ["one", "meeting", "recording"]), expected);
+  assert.equal(await recordingTranscript(env, ["two", "meeting", "recording"]), null);
+  const [lazy] = await recordingsFor(env, "one", { lazy: true });
+  assert.deepEqual(
+    { transcript: lazy.transcript, available: lazy.transcriptAvailable, bytes: lazy.transcriptBytes },
+    { transcript: null, available: true, bytes },
+  );
+  assert.equal("transcriptStoredSeparately" in lazy, false);
+
+  // Deleting the meeting disposes of the audio and the stored text together.
+  await db.prepare("UPDATE account_meetings SET deleted=1 WHERE user_id='one'").run();
+  await disposeRemoved(env);
+  assert.equal(bucket.objects.size, 0);
+  assert.equal(await db.prepare("SELECT COUNT(*) n FROM account_recording_transcripts").first("n"), 0);
+});
+
+test("a stored transcript published after its meeting was removed is not left behind in R2", async (t) => {
+  const { env, db, bucket, queue } = await setup(t);
+  await queue();
+  const provider = deepgramTurn("x".repeat(600 * 1024));
+  await processPending(env, {
+    fetch: async (...args) => {
+      // The owner deletes the meeting and disposal finishes while the provider is still answering.
+      await db.prepare("UPDATE account_meetings SET deleted=1 WHERE user_id='one'").run();
+      await disposeRemoved(env);
+      return provider(...args);
+    },
+  });
+  assert.equal(bucket.objects.size, 0);
+  assert.equal(await db.prepare("SELECT COUNT(*) n FROM account_recording_transcripts").first("n"), 0);
+});
+
+test("small transcripts stay inline and keep the original shape; the lazy listing reports their UTF-8 size", async (t) => {
+  const { env, queue } = await setup(t);
+  await queue();
+  await processPending(env, { fetch: deepgramTurn("Sí, señor.") });
+  const transcript = "[0:00:00.000–0:00:01.000 · S0] Sí, señor.";
+  const [inline] = await recordingsFor(env, "one");
+  assert.deepEqual(Object.keys(inline), ["id", "meetingId", "status", "detail", "transcript", "partSize", "provider", "region"]);
+  assert.equal(inline.transcript, transcript);
+  const [lazy] = await recordingsFor(env, "one", { lazy: true });
+  assert.deepEqual(lazy, {
+    ...inline,
+    transcript: null,
+    transcriptAvailable: true,
+    transcriptBytes: new TextEncoder().encode(transcript).length,
+  });
+  assert.equal(await recordingTranscript(env, ["one", "meeting", "recording"]), transcript);
+});
+
+test("a queued recording has no transcript to serve and the lazy listing says so", async (t) => {
+  const { env, queue } = await setup(t);
+  await queue();
+  const [lazy] = await recordingsFor(env, "one", { lazy: true });
+  assert.equal(lazy.status, "queued");
+  assert.equal(lazy.transcriptAvailable, false);
+  assert.equal(lazy.transcriptBytes, null);
+  assert.equal(await recordingTranscript(env, ["one", "meeting", "recording"]), null);
 });

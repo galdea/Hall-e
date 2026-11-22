@@ -428,6 +428,28 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         private const val MAX_ERROR_LENGTH = 240
         private val lock = Any()
         internal val processToken: String = UUID.randomUUID().toString()
+
+        /**
+         * After account deletion: moves the scope's recordings into this phone's personal library (see
+         * [moveScopedRecordings]) and removes the scoped store once it is empty.
+         */
+        internal fun moveAccountRecordings(context: Context, scope: String): RecordingMoveOutcome {
+            require(scope.matches(Regex("[0-9a-f]{64}")))
+            // A recorder from a process that died is no longer active; one in this process is deferred.
+            MobileMeetingStore(context, scope).recoverInterrupted()
+            fun metadata(name: String) = object : RecordingMetadata {
+                private val prefs = context.getSharedPreferences(name, Context.MODE_PRIVATE)
+                override fun read(): String? = prefs.getString(KEY_MEETINGS, null)
+                override fun write(value: String?): Boolean =
+                    (if (value == null) prefs.edit().remove(KEY_MEETINGS) else prefs.edit().putString(KEY_MEETINGS, value)).commit()
+            }
+            val scopedName = "account-meetings-$scope"
+            val outcome = moveScopedRecordings(scope, metadata(scopedName), metadata(PREFERENCES),
+                File(context.noBackupFilesDir, "account-audio/$scope"), File(context.filesDir, RECORDINGS_DIRECTORY),
+                locked = { block -> synchronized(lock) { block() } })
+            if (outcome.complete) synchronized(lock) { context.deleteSharedPreferences(scopedName) }
+            return outcome
+        }
     }
 }
 

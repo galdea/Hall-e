@@ -932,4 +932,348 @@ struct AccountAgendaTests {
         }
         #expect(deletes.count == count)
     }
+
+    // MARK: ADR 0007 — capabilities, account deletion, lazy transcripts
+
+    @Test func lazyTranscriptFieldsDecodeAndOldCachesStillLoad() throws {
+        // A cache written before ADR 0007: no lazy fields anywhere.
+        let old = """
+        {"meetings":[{"id":"m1","title":"Old","startAt":"2026-11-20T13:00:00Z","endAt":"2026-11-20T14:00:00Z",
+          "revision":1,"deleted":false,"recordings":[{"id":"r1","status":"completed","transcript":"Inline text"}]}],
+         "pending":[],"version":"\(String(repeating: "a", count: 32))"}
+        """
+        let legacy = try JSONDecoder().decode(AccountCalendarCache.self, from: Data(old.utf8))
+        let inline = try #require(legacy.meetings.first?.recordings.first)
+        #expect(legacy.lazyTranscripts == nil)
+        #expect(inline.inlineTranscript == "Inline text" && !inline.transcriptIsRemote && inline.hasTranscript)
+        #expect(inline.transcriptAvailable == nil && inline.transcriptBytes == nil && inline.transcriptStoredSeparately == nil)
+
+        let lazy = """
+        [{"id":"r2","status":"completed","transcript":null,"transcriptAvailable":true,"transcriptBytes":2048},
+         {"id":"r3","status":"processing","transcript":null,"transcriptAvailable":false,"transcriptBytes":null},
+         {"id":"r4","status":"completed","transcript":null,"transcriptStoredSeparately":true},
+         {"id":"r5","status":"completed","transcript":"","source":"local-import"}]
+        """
+        let recordings = try JSONDecoder().decode([AccountRecording].self, from: Data(lazy.utf8))
+        #expect(recordings.map(\.transcriptIsRemote) == [true, false, true, false])
+        #expect(recordings.map(\.hasTranscript) == [true, false, true, false])
+        #expect(recordings[0].transcriptBytes == 2048 && recordings[1].transcriptBytes == nil)
+        var cache = legacy
+        cache.meetings[0].recordings = recordings
+        cache.lazyTranscripts = true
+        let reopened = try JSONDecoder().decode(AccountCalendarCache.self, from: JSONEncoder().encode(cache))
+        #expect(reopened.meetings == cache.meetings && reopened.lazyTranscripts == true)
+
+        // Missing or partial features mean "not supported".
+        struct Session: Decodable { var features: AccountFeatures? }
+        let none = try JSONDecoder().decode(Session.self, from: Data(#"{"userId":"u","expiresAt":1}"#.utf8))
+        #expect((none.features ?? .init()) == AccountFeatures())
+        let partial = try JSONDecoder().decode(Session.self, from: Data(#"{"features":{"lazyTranscripts":true}}"#.utf8))
+        #expect(partial.features == AccountFeatures(accountDeletion: false, lazyTranscripts: true))
+    }
+
+    @MainActor @Test func capabilitiesComeFromTheSessionOncePerConnectionAndSelectLazyAgendas() async throws {
+        let fixture = try SignedInFixture.make()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let credentials = AccountCredentials(userId: "test-A", token: "fixture-A", expiresAt: 4_102_444_800_000)
+        let version = String(repeating: "b", count: 32)
+        var sessionReply: (Int, [String: Any]) = (200, ["userId": "test-A", "expiresAt": 4_102_444_800_000])
+        var sessionOffline = false
+        var sessionGets: [String?] = []
+        var meetingQueries: [[String: String]] = []
+        func json(_ object: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: object) }
+        CalendarFixtureHTTP.reply = { req in
+            let path = req.url!.path
+            if path.hasSuffix("/auth/email/start") { return (200, try json(["challengeId": "c1"])) }
+            if path.hasSuffix("/auth/email/verify") { return (200, try JSONEncoder().encode(credentials)) }
+            if path.hasSuffix("/auth/logout") { return (204, Data()) }
+            if path.hasSuffix("/auth/session"), req.httpMethod == "GET" {
+                sessionGets.append(req.value(forHTTPHeaderField: "Authorization"))
+                if sessionOffline { throw URLError(.notConnectedToInternet) }
+                return (sessionReply.0, try json(sessionReply.1))
+            }
+            if path.hasSuffix("/meetings"), req.httpMethod == "GET" {
+                let items = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
+                meetingQueries.append(query)
+                if query["since"] == version { return (200, try json(["unchanged": true, "version": version])) }
+                return (200, try json(["meetings": [], "version": version]))
+            }
+            return (404, Data())
+        }
+
+        // No `features` in the session: nothing optional, ordinary agenda, asked once per connection.
+        await fixture.signIn()
+        #expect(sessionGets == ["Bearer fixture-A"])
+        #expect(model.features == AccountFeatures())
+        #expect(meetingQueries.last == [:])
+        await model.run { try await model.synchronize() }
+        #expect(sessionGets.count == 1)
+        #expect(meetingQueries.last == ["since": version])
+
+        // A new connection asks again; lazy support switches to lazy agendas with a full first pull.
+        await model.run { try await model.signOut() }
+        sessionReply.1["features"] = ["accountDeletion": true, "lazyTranscripts": true]
+        await fixture.signIn()
+        #expect(sessionGets.count == 2)
+        #expect(model.features == AccountFeatures(accountDeletion: true, lazyTranscripts: true))
+        #expect(meetingQueries.last == ["transcripts": "lazy"])
+        #expect(model.cache.lazyTranscripts == true)
+        await model.run { try await model.synchronize() }
+        #expect(meetingQueries.last == ["transcripts": "lazy", "since": version])
+        #expect(sessionGets.count == 2)
+
+        // A transport failure leaves capabilities unknown: retried next sync, lazy mode kept meanwhile.
+        await model.run { try await model.signOut() }
+        sessionOffline = true
+        await fixture.signIn()
+        #expect(model.features == AccountFeatures())
+        #expect(meetingQueries.last == ["transcripts": "lazy", "since": version])
+        sessionOffline = false
+        await model.run { try await model.synchronize() }
+        #expect(sessionGets.count == 4)
+        #expect(model.features.accountDeletion)
+        await model.run { try await model.synchronize() }
+        #expect(sessionGets.count == 4)
+
+        // Other error statuses settle as "no features"; switching mode forces a full pull.
+        await model.run { try await model.signOut() }
+        sessionReply = (500, ["error": "service_unavailable"])
+        await fixture.signIn()
+        #expect(model.features == AccountFeatures())
+        #expect(meetingQueries.last == [:])
+        await model.run { try await model.synchronize() }
+        #expect(sessionGets.count == 5)
+
+        // 401 from auth/session ends the session like any other request.
+        await model.run { try await model.signOut() }
+        sessionReply = (401, ["error": "unauthorized"])
+        await fixture.signIn()
+        #expect(model.account == nil)
+        #expect(model.message == AccountAgendaError.session.localizedDescription)
+    }
+
+    @MainActor @Test func lazyTranscriptsAreFetchedOnDemandCachedPrivatelyAndEvicted() async throws {
+        let fixture = try SignedInFixture.make()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let credentials = AccountCredentials(userId: "test-A", token: "fixture-A", expiresAt: 4_102_444_800_000)
+        var meeting = AccountMeeting.draft(title: "Lazy review")
+        meeting.revision = 3
+        let recorded = AccountRecording(id: UUID().uuidString.lowercased(), status: "completed", transcript: nil,
+                                        transcriptAvailable: true, transcriptBytes: 12)
+        let imported = AccountRecording(id: UUID().uuidString.lowercased(), status: "completed", transcript: nil,
+                                        source: "local-import", transcriptAvailable: true, transcriptBytes: 9)
+        let pending = AccountRecording(id: UUID().uuidString.lowercased(), status: "processing", transcript: nil,
+                                       transcriptAvailable: false)
+        meeting.recordings = [recorded, imported, pending]
+        var versionCounter = 0
+        var transcriptGets: [(path: String, auth: String?)] = []
+        var transcriptStatus: [String: Int] = [:]
+        var logouts = 0
+        func json(_ object: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: object) }
+        CalendarFixtureHTTP.reply = { req in
+            let path = req.url!.path
+            if path.hasSuffix("/auth/email/start") { return (200, try json(["challengeId": "c1"])) }
+            if path.hasSuffix("/auth/email/verify") { return (200, try JSONEncoder().encode(credentials)) }
+            if path.hasSuffix("/auth/logout") { logouts += 1; return (204, Data()) }
+            if path.hasSuffix("/auth/session") {
+                return (200, try json(["userId": "test-A", "features": ["accountDeletion": false, "lazyTranscripts": true]]))
+            }
+            if path.hasSuffix("/transcript"), req.httpMethod == "GET" {
+                transcriptGets.append((path, req.value(forHTTPHeaderField: "Authorization")))
+                let rid = path.split(separator: "/").dropLast().last.map(String.init) ?? ""
+                let status = transcriptStatus[rid] ?? 200
+                if status != 200 { return (status, try json(["error": status == 404 ? "not_found" : "service_unavailable"])) }
+                return (200, Data((rid == recorded.id ? "Señora: hola" : "Copied text").utf8))
+            }
+            if path.hasSuffix("/meetings"), req.httpMethod == "GET" {
+                versionCounter += 1
+                struct Page: Encodable { var meetings: [AccountMeeting]; var version: String }
+                return (200, try JSONEncoder().encode(Page(meetings: [meeting], version: String(format: "%032x", versionCounter))))
+            }
+            return (404, Data())
+        }
+        await fixture.signIn()
+        let account = try #require(model.account)
+        let listed = try #require(model.cache.visible.first?.recordings)
+        #expect(listed.allSatisfy { $0.transcript == nil })
+        #expect(model.transcriptState(meetingId: meeting.id, recording: recorded) == .idle)
+        #expect(transcriptGets.isEmpty)
+
+        // Opening the row fetches the text through the injected transport and stores it privately.
+        let loaded = await model.loadTranscript(meetingId: meeting.id, recording: recorded)
+        #expect(loaded == .loaded("Señora: hola"))
+        #expect(model.transcriptState(meetingId: meeting.id, recording: recorded) == .loaded("Señora: hola"))
+        #expect(transcriptGets.count == 1)
+        #expect(transcriptGets[0].path.hasSuffix("/account/v1/meetings/\(meeting.id)/recordings/\(recorded.id)/transcript"))
+        #expect(transcriptGets[0].auth == "Bearer fixture-A")
+        let store = AccountTranscriptCache(root: fixture.root, origin: account.origin, userId: account.credentials.userId)
+        let cached = store.file(meetingId: meeting.id, recordingId: recorded.id)
+        #expect(store.directory.deletingLastPathComponent().standardizedFileURL.path == fixture.root.standardizedFileURL.path)
+        #expect(store.directory.lastPathComponent == AccountCalendarCache.partition(account.origin, account.credentials.userId) + ".transcripts")
+        #expect(try String(contentsOf: cached, encoding: .utf8) == "Señora: hola")
+        let fileMode = try FileManager.default.attributesOfItem(atPath: cached.path)[.posixPermissions] as? Int
+        let dirMode = try FileManager.default.attributesOfItem(atPath: store.directory.path)[.posixPermissions] as? Int
+        #expect(fileMode == 0o600 && dirMode == 0o700)
+
+        // Held in memory, and read from disk after a restart without another request.
+        _ = await model.loadTranscript(meetingId: meeting.id, recording: recorded)
+        #expect(transcriptGets.count == 1)
+        let offline = URLSessionConfiguration.ephemeral
+        offline.protocolClasses = [CalendarFixtureHTTP.self]
+        let restarted = AccountAgendaModel(preferences: fixture.prefs, cacheRoot: { fixture.root },
+                                           loadVault: { fixture.vault() }, saveVault: { _ in },
+                                           transport: URLSession(configuration: offline), packagedOrigin: nil)
+        await restarted.run {}
+        #expect(await restarted.loadTranscript(meetingId: meeting.id, recording: recorded) == .loaded("Señora: hola"))
+        #expect(transcriptGets.count == 1)
+
+        // Errors stay on the row; a retry succeeds. Inline text and text-less recordings never fetch.
+        transcriptStatus[imported.id] = 503
+        guard case .failed(let message) = await model.loadTranscript(meetingId: meeting.id, recording: imported) else {
+            Issue.record("expected failure"); return
+        }
+        #expect(!message.isEmpty)
+        #expect(model.cache.pending.isEmpty && model.account == account)
+        transcriptStatus[imported.id] = 404
+        guard case .failed = await model.loadTranscript(meetingId: meeting.id, recording: imported, force: true) else {
+            Issue.record("expected not found"); return
+        }
+        transcriptStatus[imported.id] = 200
+        #expect(await model.loadTranscript(meetingId: meeting.id, recording: imported, force: true) == .loaded("Copied text"))
+        let count = transcriptGets.count
+        var inline = recorded
+        inline.transcript = "Inline wins"
+        #expect(await model.loadTranscript(meetingId: meeting.id, recording: inline) == .loaded("Inline wins"))
+        guard case .failed = await model.loadTranscript(meetingId: meeting.id, recording: pending) else {
+            Issue.record("expected unavailable"); return
+        }
+        #expect(transcriptGets.count == count)
+
+        // A recording that leaves the agenda loses its cached text; the others keep theirs.
+        meeting.recordings = [imported, pending]
+        await model.run { try await model.synchronize() }
+        #expect(!FileManager.default.fileExists(atPath: cached.path))
+        #expect(model.transcriptState(meetingId: meeting.id, recording: recorded) == .idle)
+        #expect(store.load(meetingId: meeting.id, recordingId: imported.id) == "Copied text")
+        #expect(model.transcriptState(meetingId: meeting.id, recording: imported) == .loaded("Copied text"))
+
+        // Sign-out removes fetched transcripts but keeps the calendar cache (and its offline queue).
+        try model.enqueue(.draft(title: "Queued offline"))
+        await model.run { try await model.signOut() }
+        #expect(model.account == nil && logouts == 1)
+        #expect(!FileManager.default.fileExists(atPath: store.directory.path))
+        let calendar = AccountCalendarCache.file(in: fixture.root, origin: account.origin, userId: account.credentials.userId)
+        #expect(try AccountCalendarCache.load(from: calendar).pending.count == 1)
+        #expect(model.transcriptState(meetingId: meeting.id, recording: imported) == .idle)
+        guard case .failed = await model.loadTranscript(meetingId: meeting.id, recording: imported) else {
+            Issue.record("expected signed-out failure"); return
+        }
+    }
+
+    @MainActor @Test func deleteAccountWipesThisAccountOnlyAfterTheServiceAcceptsIt() async throws {
+        let fixture = try SignedInFixture.make()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        var credentials = AccountCredentials(userId: "test-A", token: "fixture-A", expiresAt: 4_102_444_800_000)
+        var meeting = AccountMeeting.draft(title: "Private")
+        meeting.revision = 1
+        meeting.recordings = [AccountRecording(id: UUID().uuidString.lowercased(), status: "completed", transcript: nil,
+                                               transcriptAvailable: true)]
+        var deletionEnabled = true
+        var deleteReply: (Int, [String: Any])? = (403, ["error": "deletion_disabled"])
+        var deletes: [(auth: String?, body: [String: Any])] = []
+        var logouts: [String?] = []
+        var logoutStatus = 204
+        func json(_ object: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: object) }
+        CalendarFixtureHTTP.reply = { req in
+            let path = req.url!.path
+            if path.hasSuffix("/auth/email/start") { return (200, try json(["challengeId": "c1"])) }
+            if path.hasSuffix("/auth/email/verify") { return (200, try JSONEncoder().encode(credentials)) }
+            if path.hasSuffix("/auth/logout") {
+                logouts.append(req.value(forHTTPHeaderField: "Authorization"))
+                return (logoutStatus, logoutStatus == 204 ? Data() : try json(["error": "unavailable"]))
+            }
+            if path.hasSuffix("/auth/session") {
+                return (200, try json(["userId": "test-A", "features": ["accountDeletion": deletionEnabled, "lazyTranscripts": true]]))
+            }
+            if path.hasSuffix("/account/v1/account/delete") {
+                deletes.append((req.value(forHTTPHeaderField: "Authorization"), try requestJSON(req)))
+                guard let reply = deleteReply else { throw URLError(.networkConnectionLost) }
+                return (reply.0, try json(reply.1))
+            }
+            if path.hasSuffix("/transcript") { return (200, Data("Private words".utf8)) }
+            if path.hasSuffix("/meetings"), req.httpMethod == "GET" {
+                struct Page: Encodable { var meetings: [AccountMeeting]; var version: String }
+                return (200, try JSONEncoder().encode(Page(meetings: [meeting], version: String(repeating: "c", count: 32))))
+            }
+            return (404, Data())
+        }
+
+        // Without the capability the option is hidden (the view reads `features`).
+        deletionEnabled = false
+        await fixture.signIn()
+        #expect(!model.features.accountDeletion)
+        // Queue a revocation for an earlier session of the same user, then sign in again.
+        logoutStatus = 503
+        await model.run { try await model.signOut() }
+        #expect(try fixture.revocationCount() == 1)
+        logoutStatus = 204
+        deletionEnabled = true
+        credentials.token = "fixture-A2"
+        logoutStatus = 503
+        await fixture.signIn()
+        #expect(model.features.accountDeletion)
+        let account = try #require(model.account)
+        _ = await model.loadTranscript(meetingId: meeting.id, recording: meeting.recordings[0])
+        let calendar = AccountCalendarCache.file(in: fixture.root, origin: account.origin, userId: account.credentials.userId)
+        let transcripts = AccountTranscriptCache.directory(in: fixture.root, origin: account.origin, userId: account.credentials.userId)
+        #expect(FileManager.default.fileExists(atPath: calendar.path))
+        #expect(FileManager.default.fileExists(atPath: transcripts.path))
+        let logoutsBefore = logouts.count
+
+        // The typed confirmation is checked before any request.
+        await #expect(throws: AccountAgendaError.self) { try await model.deleteAccount(confirmation: "delete") }
+        #expect(deletes.isEmpty)
+
+        // 403 deletion_disabled, 400, 500 and transport errors: plain message, nothing changes on this Mac.
+        for reply in [(403, ["error": "deletion_disabled"]), (400, ["error": "confirmation_required"]),
+                      (500, ["error": "service_unavailable"])] as [(Int, [String: Any])] {
+            deleteReply = reply
+            await model.run { try await model.deleteAccount(confirmation: "DELETE") }
+            #expect(model.account == account)
+            #expect(!model.message.isEmpty && !model.message.contains("(deletion_disabled)"))
+            #expect(FileManager.default.fileExists(atPath: calendar.path))
+            #expect(FileManager.default.fileExists(atPath: transcripts.path))
+        }
+        #expect(model.message == AccountAgendaError.deletionFailed(500, "service_unavailable").localizedDescription)
+        deleteReply = (403, ["error": "deletion_disabled"])
+        await model.run { try await model.deleteAccount(confirmation: "DELETE") }
+        #expect(model.message.contains(PublicUICopy.text("turned off", "desactivada")))
+        deleteReply = nil
+        await model.run { try await model.deleteAccount(confirmation: "DELETE") }
+        #expect(model.account == account && model.canEdit)
+        #expect(deletes.count == 5)
+        #expect(deletes.allSatisfy { $0.auth == "Bearer fixture-A2" && $0.body as? [String: String] == ["confirmation": "DELETE"] })
+
+        // 202: cache, transcripts and stored sessions for this account go; no revocation is attempted.
+        deleteReply = (202, ["status": "deleting"])
+        logoutStatus = 204
+        await model.run { try await model.deleteAccount(confirmation: "DELETE") }
+        #expect(deletes.count == 6)
+        #expect(model.account == nil && !model.canEdit && model.cache.visible.isEmpty)
+        #expect(model.features == AccountFeatures())
+        #expect(!FileManager.default.fileExists(atPath: calendar.path))
+        #expect(!FileManager.default.fileExists(atPath: transcripts.path))
+        #expect(try fixture.revocationCount() == 0)
+        let stored = try #require(fixture.vault())
+        let vault = try #require(try JSONSerialization.jsonObject(with: Data(stored.utf8)) as? [String: Any])
+        #expect(vault["active"] == nil || vault["active"] is NSNull)
+        #expect(logouts.count == logoutsBefore)
+        await model.run { try await model.synchronize() }
+        #expect(logouts.count == logoutsBefore)
+        #expect(!model.message.contains("HTTP"))
+    }
 }

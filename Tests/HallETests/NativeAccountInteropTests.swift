@@ -148,7 +148,12 @@ struct NativeAccountInteropTests {
             try #require(recordings.count == 1)
             try #require(recordings[0].status == "completed")
             let expected = hosted ? "[STAGING SYNTHETIC]" : "Synthetic native transcript."
-            try #require(recordings[0].transcript?.contains(expected) == true)
+            // Lazy agendas carry no text; the Mac fetches it on demand (inline text is returned as is).
+            guard case .loaded(let transcript) = await desktop.loadTranscript(meetingId: fixture.meetingId,
+                                                                              recording: recordings[0]) else {
+                throw AccountAgendaError.invalidResponse
+            }
+            try #require(transcript.contains(expected))
             let imported = try #require(desktop.cache.visible.first { $0.id == importedID })
             try #require(imported.project == confirmed && imported.recordings.isEmpty)
         }

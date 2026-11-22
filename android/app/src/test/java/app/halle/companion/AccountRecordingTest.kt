@@ -37,9 +37,9 @@ class AccountRecordingTest {
 
     @Test fun validSnapshotVersionSelectsConditionalPull() {
         val version = "0123456789abcdef0123456789abcdef"
-        assertEquals("/meetings?since=$version", snapshotPath(version))
-        assertEquals("/meetings", snapshotPath(null))
-        assertEquals("/meetings", snapshotPath("stale or unsupported"))
+        assertEquals("/meetings?transcripts=lazy&since=$version", snapshotPath(version))
+        assertEquals("/meetings?transcripts=lazy", snapshotPath(null))
+        assertEquals("/meetings?transcripts=lazy", snapshotPath("stale or unsupported"))
     }
 
     @Test fun recoveredOutboxReplaysLostAckWithoutDuplicatingAudioOrJob() {
@@ -226,7 +226,7 @@ class AccountRecordingTest {
                 .put("recordings", org.json.JSONArray())
             JSONObject().put("version", "0123456789abcdef0123456789abcdef").put("meetings", org.json.JSONArray().put(deleted))
         }
-        assertEquals(listOf("GET /meetings"), calls)
+        assertEquals(listOf("GET /meetings?transcripts=lazy"), calls)
         assertNull(cal.upload(rid))
         assertTrue(audioFile.isFile)
 

@@ -1,6 +1,6 @@
 # 0007 — Private account deletion and agenda paging
 
-Date: 2026-11-21. Status: **Proposed — needs owner approval and an independent review before implementation.**
+Date: 2026-11-21. Status: **Accepted 2026-11-22 by the owner** (deletion option B; agenda option B, extended to store large transcripts separately). Independent cross-provider review of the implementation is still due.
 
 ## Context
 
@@ -40,3 +40,22 @@ Verified facts: tables are keyed by `user_id`. Audio is in a private R2 bucket u
 ## Rollback and reconsideration
 
 Deletion cannot be rolled back once executed, so it ships behind a server flag, off by default, enabled only after staging tests with synthetic accounts. Lazy transcripts roll back by restoring inline transcripts on the server. Reconsider if account sizes exceed the measured budget, a regulator requires a retention window, or shared organization projects (HAL-2/HAL-3) change data ownership.
+
+## Implementation contract (2026-11-22)
+
+All paths are relative to `/account/v1`. Old clients keep working: nothing changes for a client that does not opt in.
+
+**Capabilities.** `GET auth/session` adds `features: {accountDeletion: boolean, lazyTranscripts: true}`. `accountDeletion` is true only when the Worker variable `ACCOUNT_DELETION_ENABLED` is exactly `yes`. Clients show "Delete account…" only when it is true.
+
+**Account deletion.** `POST account/delete` with an authenticated session and body `{"confirmation": "DELETE"}`.
+- `202 {"status": "deleting"}`: all of the user's rows are removed in one D1 batch, every session and identity of the user is revoked, and the user's audio and stored transcripts are queued for R2 disposal by a table that does not depend on the deleted rows. Disposal starts at once (`waitUntil`) and the cron retries it.
+- `403 {"error": "deletion_disabled"}` when the flag is off; `400 {"error": "confirmation_required"}` when the body is wrong.
+- The same session afterwards gets `401`. A retry after a failure before commit repeats the batch safely.
+- Provider-side copies are disclosed, not deleted. An audit log line carries only a hashed user reference, never an email.
+- Clients: typed confirmation, then on 202 they wipe that account's local cache and stored session (Keychain or Keystore) and return to the sign-in screen. Local recordings and the personal library stay.
+
+**Lazy transcripts.** `GET meetings?transcripts=lazy` (combinable with `since=`). Every recording, including `local-import` copies, then carries `transcript: null`, `transcriptAvailable: boolean` and `transcriptBytes: number|null`.
+- `GET meetings/:id/recordings/:rid/transcript` returns `200 text/plain; charset=utf-8` with the text, `404 {"error": "not_found"}` when there is none. The same path serves `local-import` copies by their recording ID.
+- Without `transcripts=lazy`, responses are unchanged, except that a transcript stored separately is sent as `transcript: null, transcriptStoredSeparately: true`.
+
+**Large transcripts.** A provider transcript whose formatted text exceeds 512 KiB, up to 8 MiB, is stored in R2 under the recording's prefix and served by the transcript endpoint. The recording completes normally. Above 8 MiB, or if the provider JSON exceeds 12 MiB, the existing `review` path and owner discard still apply.

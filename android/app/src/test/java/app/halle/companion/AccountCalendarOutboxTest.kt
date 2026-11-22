@@ -66,7 +66,7 @@ class AccountCalendarOutboxTest {
             calls += "$method $path"
             snapshotReply(row(id, "After", revision = 2, recordings = recordings))
         }
-        assertEquals(listOf("GET /meetings"), calls)
+        assertEquals(listOf("GET /meetings?transcripts=lazy"), calls)
         assertEquals("fedcba9876543210fedcba9876543210", storage.getString("version"))
         assertEquals(listOf("After"), cal.visible().map { it.getString("title") })
     }

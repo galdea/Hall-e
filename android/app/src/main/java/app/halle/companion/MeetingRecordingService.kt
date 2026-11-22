@@ -242,7 +242,11 @@ class MeetingRecordingService : Service() {
         } else if (!saved) {
             store.interruptRecording(id, "The audio file could not be finalized. The saved file may be incomplete.", elapsed)
         }
-        if (accountScope != null) AccountSyncJob.schedule(this)
+        if (accountScope != null) {
+            AccountSyncJob.schedule(this)
+            // If the account was deleted while recording, this recording now moves to the personal library.
+            AccountRecordingMoves.resumeAsync(this)
+        }
         accountScope = null
         sharedLease?.let { lease ->
             val client = sharedLeaseClient

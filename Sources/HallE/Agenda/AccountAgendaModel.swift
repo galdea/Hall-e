@@ -93,8 +93,19 @@ final class AccountAgendaModel {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     var account: AccountConnection? { vault.active }
     var canEdit: Bool { account != nil && cacheReady }
+    /// Capabilities from `GET auth/session`, fetched once per connection. Unknown or missing means none.
+    private(set) var features = AccountFeatures()
+    private var featuresFor: AccountConnection?
+    /// On-demand transcript text per recording, keyed by `transcriptKey`.
+    private(set) var transcriptStates: [String: AccountTranscriptState] = [:]
     private func file(_ connection: AccountConnection) -> URL {
         AccountCalendarCache.file(in: cacheRoot(), origin: connection.origin, userId: connection.credentials.userId)
+    }
+    private func transcripts(_ connection: AccountConnection) -> AccountTranscriptCache {
+        AccountTranscriptCache(root: cacheRoot(), origin: connection.origin, userId: connection.credentials.userId)
+    }
+    private static func transcriptKey(_ meetingId: String, _ recordingId: String) -> String {
+        meetingId.lowercased() + "/" + recordingId.lowercased()
     }
 
     func run(background: Bool = false, _ operation: () async throws -> Void) async {
@@ -246,6 +257,7 @@ final class AccountAgendaModel {
         email = ""
         endpoint = origin.absoluteString
         cache = .init()
+        transcriptStates = [:]
         try openCache(connection)
         message = ""
         try await synchronize()
@@ -257,15 +269,62 @@ final class AccountAgendaModel {
         message = vault.revocations.isEmpty ? "" : PublicUICopy.text("Signed out locally. Server revocation is queued.", "Sesión cerrada en el Mac. Queda pendiente la revocación en el servidor.")
     }
 
+    /// Signs this Mac out of the active account. The calendar cache file stays on disk so queued
+    /// offline edits survive a later sign-in; fetched transcript text is removed because it can be
+    /// fetched again and should not outlive the session on this Mac.
     private func clearActive(queueRevocation: Bool) async throws {
         var next = vault
-        if let old = next.active, queueRevocation && !old.expired { next.revocations.append(old) }
+        let old = next.active
+        if let old, queueRevocation && !old.expired { next.revocations.append(old) }
         next.active = nil
         try await store(next)
+        if let old { transcripts(old).removeAll() }
+        resetSignedOutState()
+    }
+
+    private func resetSignedOutState() {
         cache = .init()
         cacheReady = false
+        features = .init()
+        featuresFor = nil
+        transcriptStates = [:]
         resetChallenge()
         email = ""
+    }
+
+    /// Permanently deletes the signed-in account on the service (ADR 0007). Only a `202` changes
+    /// anything here: then this account's calendar cache, fetched transcripts and stored session are
+    /// removed and the Mac returns to the signed-out state. The deleted session is not revoked again.
+    /// Recordings and transcripts in the Mac library are untouched.
+    func deleteAccount(confirmation: String) async throws {
+        guard confirmation.trimmingCharacters(in: .whitespacesAndNewlines) == "DELETE" else {
+            throw AccountAgendaError.deletionConfirmation
+        }
+        guard let account, !account.expired else { throw AccountAgendaError.session }
+        let status: Int
+        do {
+            status = try await api(account.origin).request("POST", "account/delete", token: account.credentials.token,
+                                                           body: ["confirmation": "DELETE"]).0
+        } catch AccountAgendaError.response(let status, let code) {
+            throw AccountAgendaError.deletionFailed(status, code)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch is URLError {
+            throw AccountAgendaError.deletionFailed(0, "network")
+        }
+        guard status == 202 else { throw AccountAgendaError.deletionFailed(status, "unexpected_status") }
+        try? FileManager.default.removeItem(at: file(account))
+        transcripts(account).removeAll()
+        var next = vault
+        // Every session of this user is already revoked by the server; queued revocations for it would only fail.
+        next.revocations.removeAll { $0.origin == account.origin && $0.credentials.userId == account.credentials.userId }
+        if next.active == account { next.active = nil }
+        try await store(next)
+        resetSignedOutState()
+        message = PublicUICopy.text("The account was deleted. Recordings on this Mac were kept.",
+                                    "La cuenta se eliminó. Las grabaciones de este Mac se conservaron.")
     }
 
     private func retryRevocations() async {
@@ -278,6 +337,108 @@ final class AccountAgendaModel {
             var next = vault
             next.revocations.removeAll { $0 == old }
             try? await store(next)
+        }
+    }
+
+    /// What to show for a recording's transcript right now. Inline text wins; otherwise the result of
+    /// the last `loadTranscript` call for this recording, or `.idle` before one.
+    func transcriptState(meetingId: String, recording: AccountRecording) -> AccountTranscriptState {
+        if let inline = recording.inlineTranscript { return .loaded(inline) }
+        return transcriptStates[Self.transcriptKey(meetingId, recording.id)] ?? .idle
+    }
+
+    /// Fetches a recording's transcript when it is not in the agenda: first from this account's
+    /// on-disk transcript cache, then from `GET meetings/:id/recordings/:rid/transcript`, which is
+    /// then cached. Errors become a `.failed` state for that recording only. A `force` reload skips
+    /// an earlier result held in memory (for a retry after an error).
+    @discardableResult
+    func loadTranscript(meetingId: String, recording: AccountRecording, force: Bool = false) async -> AccountTranscriptState {
+        if let inline = recording.inlineTranscript { return .loaded(inline) }
+        let key = Self.transcriptKey(meetingId, recording.id)
+        guard let account, cacheReady else {
+            return .failed(AccountAgendaError.session.localizedDescription)
+        }
+        switch transcriptStates[key] {
+        case .loading?: return .loading
+        case .loaded(let text)? where !force: return .loaded(text)
+        default: break
+        }
+        guard recording.transcriptIsRemote else {
+            let state = AccountTranscriptState.failed(Self.transcriptUnavailable)
+            transcriptStates[key] = state
+            return state
+        }
+        let store = transcripts(account)
+        if let text = store.load(meetingId: meetingId, recordingId: recording.id) {
+            transcriptStates[key] = .loaded(text)
+            return .loaded(text)
+        }
+        transcriptStates[key] = .loading
+        let state: AccountTranscriptState
+        do {
+            let (_, data) = try await api(account.origin).request(
+                "GET", "meetings/\(meetingId)/recordings/\(recording.id)/transcript", token: account.credentials.token)
+            guard let text = String(data: data, encoding: .utf8) else { throw AccountAgendaError.invalidResponse }
+            // Sign-out, account switch or a sync that dropped the recording while this was in flight wins.
+            guard self.account == account, cacheReady, recordingIsListed(meetingId: meetingId, recordingId: recording.id) else {
+                if self.account == account { transcriptStates[key] = nil }
+                return .idle
+            }
+            try? store.save(text, meetingId: meetingId, recordingId: recording.id)
+            state = .loaded(text)
+        } catch AccountAgendaError.response(404, _) {
+            state = .failed(Self.transcriptUnavailable)
+        } catch is CancellationError {
+            if self.account == account { transcriptStates[key] = nil }
+            return .idle
+        } catch {
+            state = .failed(PublicUICopy.text("The transcript could not be loaded.", "No se pudo cargar la transcripción.")
+                            + " " + error.localizedDescription)
+        }
+        guard self.account == account else { return .idle }
+        transcriptStates[key] = state
+        return state
+    }
+
+    private static var transcriptUnavailable: String {
+        PublicUICopy.text("This transcript is not available.", "Esta transcripción no está disponible.")
+    }
+
+    private func recordingIsListed(meetingId: String, recordingId: String) -> Bool {
+        cache.meetings.contains { $0.id == meetingId && !$0.deleted && $0.recordings.contains { $0.id == recordingId } }
+    }
+
+    /// Drops cached transcript text for recordings that left the agenda or now carry their text inline.
+    private func evictTranscripts(_ account: AccountConnection, keeping meetings: [AccountMeeting]) {
+        let remote = meetings.filter { !$0.deleted }.flatMap { meeting in
+            meeting.recordings.filter(\.transcriptIsRemote).map { (meetingId: meeting.id, recordingId: $0.id) }
+        }
+        transcripts(account).retain(remote)
+        let keys = Set(remote.map { Self.transcriptKey($0.meetingId, $0.recordingId) })
+        transcriptStates = transcriptStates.filter { keys.contains($0.key) }
+    }
+
+    /// Reads `features` from `GET auth/session` once per connection. A `401` ends the session like any
+    /// other request; other answers without usable features mean no optional features. Transport
+    /// failures leave the capabilities unknown so the next sync asks again.
+    private func refreshFeatures(_ account: AccountConnection, api: AccountAPI) async throws {
+        struct Session: Decodable { var features: AccountFeatures? }
+        do {
+            let session = try await api.json(Session.self, "GET", "auth/session", token: account.credentials.token)
+            features = session.features ?? .init()
+            featuresFor = account
+        } catch AccountAgendaError.response(401, let code) {
+            throw AccountAgendaError.response(401, code)
+        } catch AccountAgendaError.response {
+            features = .init()
+            featuresFor = account
+        } catch is DecodingError {
+            features = .init()
+            featuresFor = account
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            features = .init()
         }
     }
 
@@ -370,7 +531,12 @@ final class AccountAgendaModel {
             if account.expired { throw AccountAgendaError.response(401, "session_expired") }
             if !cacheReady { try openCache(account) }
             let api = api(account.origin)
-            let version = force || cache.pending.contains(where: { !$0.conflict }) ? nil : cache.version
+            if featuresFor != account { try await refreshFeatures(account, api: api) }
+            guard self.account == account else { return }
+            // Without a fresh answer from auth/session, keep the mode the cache was last filled in.
+            let lazy = featuresFor == account ? features.lazyTranscripts : (cache.lazyTranscripts ?? false)
+            let sameMode = (cache.lazyTranscripts ?? false) == lazy
+            let version = force || !sameMode || cache.pending.contains(where: { !$0.conflict }) ? nil : cache.version
             for edit in cache.pending where !edit.conflict {
                 do {
                     struct Result: Decodable { let meeting: AccountMeeting }
@@ -391,7 +557,8 @@ final class AccountAgendaModel {
                 var unchanged: Bool?
                 var version: String?
             }
-            let query = version.map { [URLQueryItem(name: "since", value: $0)] } ?? []
+            var query = lazy ? [URLQueryItem(name: "transcripts", value: "lazy")] : []
+            if let version { query.append(URLQueryItem(name: "since", value: version)) }
             let remote = try await api.json(CalendarResponse.self, "GET", "meetings", token: account.credentials.token, query: query)
             if let nextVersion = remote.version, nextVersion.range(of: "^[0-9a-f]{32}$", options: .regularExpression) == nil {
                 throw AccountAgendaError.invalidResponse
@@ -405,7 +572,9 @@ final class AccountAgendaModel {
                 var next = cache
                 next.meetings = meetings
                 next.version = remote.version
+                next.lazyTranscripts = lazy
                 try update(next)
+                evictTranscripts(account, keeping: meetings)
             }
             message = PublicUICopy.text("Synced", "Sincronizado") + " · " + Date.now.formatted(date: .omitted, time: .shortened)
         } catch AccountAgendaError.response(401, _) {

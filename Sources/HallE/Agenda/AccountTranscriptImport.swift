@@ -62,8 +62,8 @@ struct AccountTranscriptImportControls: View {
             }
 
             ForEach(meeting.recordings.filter { $0.source == "local-import" }) { recording in
-                DisclosureGroup(text("Copied Mac transcript", "Transcripción copiada del Mac")) {
-                    if let transcript = recording.transcript { Text(transcript).textSelection(.enabled) }
+                AccountTranscriptDisclosure(title: text("Copied Mac transcript", "Transcripción copiada del Mac"),
+                                            meetingId: meeting.id, recording: recording, model: model) {
                     Button(text("Remove account copy…", "Eliminar copia de la cuenta…"), role: .destructive) {
                         removal = Removal(recording: recording, account: account)
                     }.disabled(model.busy)

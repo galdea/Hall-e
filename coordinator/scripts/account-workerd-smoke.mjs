@@ -24,6 +24,9 @@ function idToken(nonce) {
 }
 const networkAttempts = [];
 const transcript = "Synthetic local runtime transcript.";
+// Above the 512 KiB row limit: published from R2 through the transcript endpoint.
+const largeTranscript = "Transcripción sintética extensa. ".repeat(20 * 1024);
+let deepgramTranscript = transcript;
 // This mono AAC fixture is a 0.20-second synthesized 440 Hz tone. An MP4
 // 'free' box preserves the playable recording while exercising a second part.
 const tone = await readFile(resolve(root, "test-support/phone-tone.mp4"));
@@ -40,7 +43,7 @@ const options = {
     ACCOUNT_GOOGLE_CLIENT_ID: audience, ACCOUNT_GOOGLE_CLIENT_SECRET: "synthetic-google-secret", ACCOUNT_PUBLIC_ORIGIN: runtimeOrigin,
     ACCOUNT_ENABLE_TRANSCRIPTION: "yes", ACCOUNT_DEEPGRAM_KEY: "synthetic-local-runtime-key",
     ACCOUNT_SPEECHMATICS_REGION: "eu1", ACCOUNT_SPEECHMATICS_KEY: "synthetic-region-key",
-    ACCOUNT_SPEECHMATICS_TRAINING_OPT_OUT: "confirmed",
+    ACCOUNT_SPEECHMATICS_TRAINING_OPT_OUT: "confirmed", ACCOUNT_DELETION_ENABLED: "yes",
   },
   async outboundService(request) {
     const url = new URL(request.url);
@@ -98,7 +101,7 @@ const options = {
     assert.deepEqual(Buffer.from(await request.arrayBuffer()), audio);
     return Response.json({
       metadata: { request_id: "synthetic-local-id" },
-      results: { channels: [{ alternatives: [{ transcript, words: [] }] }] },
+      results: { channels: [{ alternatives: [{ transcript: deepgramTranscript, words: [] }] }] },
     });
   },
 };
@@ -218,7 +221,47 @@ try {
   await worker.scheduled({cron:"* * * * *"});
   assert.equal(regionalSubmissions,1);
   assert.match((await call("GET", regional, desktop.token)).transcript,/S1.*Sintético/);
-  console.log("PASS local workerd + D1 + R2: email, Google PKCE/JWKS/browser proof, linking, revoked session, tenant isolation, AAC upload replay, Deepgram and regional Speechmatics doubles.");
+  assert.deepEqual((await call("GET", "/auth/session", desktop.token)).features, {accountDeletion:true, lazyTranscripts:true});
+  const recordingId = recording.split("/").at(-1);
+  const lazy = await call("GET", "/meetings?transcripts=lazy", mobile.token);
+  const listed = lazy.meetings[0].recordings.find(item => item.id === recordingId);
+  assert.deepEqual([listed.transcript, listed.transcriptAvailable, listed.transcriptBytes], [null, true, Buffer.byteLength(transcript)]);
+  const text = await runtime.dispatchFetch(runtimeOrigin + "/account/v1" + recording + "/transcript", {
+    headers: {authorization: "Bearer " + desktop.token},
+  });
+  assert.equal(text.status, 200);
+  assert.equal(text.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(await text.text(), transcript);
+  await call("GET", recording + "/transcript", stranger.token, undefined, [404]);
+  deepgramTranscript = largeTranscript;
+  const large = meeting + "/recordings/" + randomUUID();
+  await call("PUT", large, mobile.token, proposal);
+  await call("PUT", large + "/parts/0", mobile.token, audio.subarray(0, partSize));
+  await call("PUT", large + "/parts/1", mobile.token, audio.subarray(partSize));
+  await call("POST", large + "/complete", mobile.token, {});
+  await worker.scheduled({cron:"* * * * *"});
+  const stored = await call("GET", large, desktop.token);
+  assert.deepEqual([stored.status, stored.transcript, stored.transcriptStoredSeparately], ["completed", null, true]);
+  const largeText = await runtime.dispatchFetch(runtimeOrigin + "/account/v1" + large + "/transcript", {
+    headers: {authorization: "Bearer " + desktop.token},
+  });
+  assert.equal(await largeText.text(), largeTranscript);
+  assert.equal((await (await runtime.getR2Bucket("ACCOUNT_AUDIO")).list()).objects.length, 6);
+  await call("POST", "/account/delete", mobile.token, {confirmation:"delete"}, [400]);
+  assert.deepEqual(await call("POST", "/account/delete", mobile.token, {confirmation:"DELETE"}, [202]), {status:"deleting"});
+  for (const {token} of [desktop, mobile]) await call("GET", "/auth/session", token, undefined, [401]);
+  assert.equal((await call("GET", "/auth/session", stranger.token)).userId, stranger.userId);
+  // The cron drains whatever the immediate disposal has not finished.
+  await worker.scheduled({cron:"* * * * *"});
+  for (const table of ["account_users", "account_emails", "account_identities", "account_sessions", "account_meetings",
+    "account_meeting_mutations", "account_projects", "account_meeting_projects", "account_recordings",
+    "account_transcript_imports", "account_calendar_versions"]) {
+    assert.equal(await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id=?`).bind(desktop.userId).first("n"), 0, table);
+  }
+  assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM account_recording_parts").first("n"), 0);
+  assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM account_disposals").first("n"), 0);
+  assert.equal((await (await runtime.getR2Bucket("ACCOUNT_AUDIO")).list()).objects.length, 0);
+  console.log("PASS local workerd + D1 + R2: email, Google PKCE/JWKS/browser proof, linking, revoked session, tenant isolation, AAC upload replay, Deepgram and regional Speechmatics doubles, lazy transcripts and account deletion.");
 } finally {
   await runtime.dispose();
 }

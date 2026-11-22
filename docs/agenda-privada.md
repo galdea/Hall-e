@@ -73,8 +73,11 @@ La prueba de runtime necesita Node con `node:sqlite`, Miniflare, esbuild y permi
 | --- | --- |
 | `POST auth/email/start`, `POST auth/email/verify` | Solicitud y confirmación de código. |
 | `POST auth/browser/start`, `GET auth/browser/callback`, `POST auth/browser/finish` | Google en navegador del sistema, confirmación en el dispositivo iniciador y sesión propia de Hall-e. |
-| `GET auth/session`, `POST auth/logout` | Comprobar y revocar la sesión del dispositivo. |
+| `GET auth/session`, `POST auth/logout` | Comprobar y revocar la sesión del dispositivo. La sesión informa `features.accountDeletion` y `features.lazyTranscripts`. |
+| `POST account/delete` | Con `{"confirmation": "DELETE"}`, elimina en un solo lote todas las filas de la cuenta, revoca sus sesiones e identidades y programa la eliminación del audio y las transcripciones en R2. Responde 202; 403 `deletion_disabled` si el operador no lo habilitó con `ACCOUNT_DELETION_ENABLED=yes`. |
 | `GET meetings`, `GET meetings?since=<version>` | Estado privado y marcas de borrado. Una versión vigente permite responder sin volver a leer ni enviar las transcripciones. |
+| `GET meetings?transcripts=lazy` | Igual, pero sin el texto: cada grabación indica `transcriptAvailable` y `transcriptBytes`. Los clientes actuales lo usan y descargan cada transcripción al abrirla. |
+| `GET meetings/:id/recordings/:rid/transcript` | Texto de una transcripción (`text/plain`), también para copias importadas. |
 | `PUT meetings/:id` | Crear, cambiar o borrar con `baseRevision`, `mutationId` y, para borrar, `deleted: true`. Un conflicto devuelve HTTP 409. |
 | `PUT meetings/:id/recordings/:rid`, `PUT …/parts/:n`, `POST …/complete` | Consentimiento, manifiesto, partes numeradas desde cero y confirmación. `GET` del recurso de grabación devuelve estado y texto. |
 | `DELETE meetings/:id/recordings/:rid` | Descartar una grabación en estado `review` o `failed`, por ejemplo una transcripción que supera el límite. Responde 204, también al repetirse mientras se elimina; una grabación activa devuelve 409 `recording_active`. |
@@ -108,7 +111,7 @@ La primera versión (`cef0539..40f93eb`) la revisaron dos modelos del mismo prov
 
 Un agente de Gemini auditó `cef0539..40f93eb` y corrigió sus hallazgos. Claude (Opus 5.5), de otro proveedor, revisó esas correcciones y completó las pendientes: recuperación de partes perdidas en R2, descarte de grabaciones en revisión, marcas de borrado sin horario, limpieza inmediata del audio, conflictos con ambas versiones en Mac, reenvío único ante `missing_parts` en Android y aislamiento de staging respecto del coordinador de emparejamiento de producción. Evidencia local en el commit de la PR: 57 pruebas del coordinador, 289 de Swift Testing más XCTest, 40 pruebas JVM de Android (una de interoperabilidad omitida sin `HALL_E_NATIVE_QA`) y la prueba de runtime `workerd` con D1 y R2 locales.
 
-Límites conocidos: una transcripción de más de 512 KiB solo puede descartarse; guardarla requiere una decisión de producto. Ante `missing_parts` en una carga nueva, Android reenvía todas las partes una vez porque el servicio solo indica que faltan. El borrado completo de la cuenta y la paginación de la agenda están propuestos en `docs/architecture/decisions/0007-private-account-deletion-and-agenda-paging.md`.
+Límites conocidos: desde el ADR 0007, una transcripción de más de 512 KiB y hasta 8 MiB se guarda en R2 y se entrega por su propio recurso; por encima de 8 MiB sigue en revisión y puede descartarse. Ante `missing_parts` en una carga nueva, Android reenvía todas las partes una vez porque el servicio solo indica que faltan. El borrado completo de la cuenta y la paginación de la agenda están propuestos en `docs/architecture/decisions/0007-private-account-deletion-and-agenda-paging.md`.
 
 ## Qué falta verificar antes de usar cuentas reales
 

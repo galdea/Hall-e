@@ -34,7 +34,20 @@ internal class AccountHttpError(val status: Int, val reason: String?) : IOExcept
 
 internal object AccountTransport {
     fun request(origin: String, path: String, method: String = "GET", token: String? = null,
-                body: JSONObject? = null, bytes: ByteArray? = null): JSONObject {
+                body: JSONObject? = null, bytes: ByteArray? = null): JSONObject =
+        exchange(origin, path, method, token, body, bytes) { conn ->
+            val raw = conn.inputStream.bufferedReader().use { it.readText() }
+            if (raw.isBlank()) JSONObject() else JSONObject(raw)
+        }
+
+    /** A `GET` whose success reply is `text/plain` (a stored transcript). Errors are JSON, as with [request]. */
+    fun requestText(origin: String, path: String, token: String): String =
+        exchange(origin, path, "GET", token, null, null) { conn ->
+            conn.inputStream.use { transcriptText(conn.contentType, it) }
+        }
+
+    private fun <T> exchange(origin: String, path: String, method: String, token: String?,
+                             body: JSONObject?, bytes: ByteArray?, read: (HttpsURLConnection) -> T): T {
         val conn = URL(accountOrigin(origin) + "/account/v1" + path).openConnection() as HttpsURLConnection
         try {
             conn.instanceFollowRedirects = false
@@ -54,8 +67,7 @@ internal object AccountTransport {
                 val reason = runCatching { conn.errorStream?.bufferedReader()?.use { JSONObject(it.readText()).optString("error") } }.getOrNull()
                 throw AccountHttpError(conn.responseCode, reason)
             }
-            val raw = conn.inputStream.bufferedReader().use { it.readText() }
-            return if (raw.isBlank()) JSONObject() else JSONObject(raw)
+            return read(conn)
         } finally { conn.disconnect() }
     }
 }

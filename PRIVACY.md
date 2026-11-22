@@ -22,6 +22,8 @@ Android recording requires a user action and microphone permission. Before a pri
 
 Deleting an account meeting removes it from the shared calendar. A deletion marker lets disconnected clients learn about the removal. The service hides the associated recording immediately and its scheduled worker cleans up the stored audio and transcript. Provider-side copies and local originals have their own retention. This feature uses separate storage and credentials from paired workspaces. See the [implementation and QA guide](docs/agenda-privada.md) for the scope and limits of this branch.
 
+Deleting the account removes its rows, sessions, sign-in methods, audio and transcripts from the account service. The stored audio and transcripts are cleaned up in the background right after the request. This option is available only when the service operator enables it. Provider-side copies follow each provider's retention. Local recordings and each device's personal library are not affected.
+
 ## Local setup and recording
 
 A new installation requires no Hall-e account. Supported Apple Speech transcription is explicitly constrained to on-device recognition; an unavailable local model produces a setup/retry state rather than an unapproved cloud upload. The optional eight-second setup check records a temporary microphone sample only after you start it. It never uses cloud transcription or enters the recording library, and Hall-e deletes it after completion or cancellation. A sample may remain in the system temporary directory after an unexpected app or system crash.
