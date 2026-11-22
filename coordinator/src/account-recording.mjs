@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 const MiB = 1024 * 1024;
 const PART_SIZE = 8 * MiB;
 const MAX_AUDIO = 256 * MiB;
+const INLINE_TRANSCRIPT = 512 * 1024;
+const STORED_TRANSCRIPT = 8 * MiB;
 const MINUTE = 60_000;
 const STALE_UPLOAD = 7 * 24 * 60 * MINUTE;
 const CLAIM_TTL = 15 * MINUTE;
@@ -14,12 +16,16 @@ function json(value, status = 200) {
 }
 const error = (code, status) => json({ error: code }, status);
 const key = (blob, index) => `recordings/${blob}/${index}`;
+const transcriptKey = (blob) => `recordings/${blob}/transcript`;
 const parts = (row) => Math.ceil(row.size / PART_SIZE);
 const partBytes = (row, index) => Math.min(PART_SIZE, row.size - index * PART_SIZE);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Every R2 object under a recording's prefix: its audio parts and a separately stored transcript.
+const objectKeys = (row) => [...Array.from({ length: parts(row) }, (_, i) => key(row.blob_id, i)), transcriptKey(row.blob_id)];
+const withStored = `account_recordings LEFT JOIN account_recording_transcripts stored USING (blob_id)`;
 
 function view(row) {
-  return {
+  const result = {
     id: row.id,
     meetingId: row.meeting_id,
     status: row.status,
@@ -29,26 +35,46 @@ function view(row) {
     provider: row.provider,
     region: row.region || null,
   };
+  // Older clients keep the same shape; text kept in R2 is read from the transcript endpoint.
+  if (row.stored_bytes != null) result.transcriptStoredSeparately = true;
+  return result;
 }
 
-export async function recordingsFor(env, userId) {
+function lazyView(row) {
+  const { transcriptStoredSeparately, ...result } = view({ ...row, transcript: null });
+  const bytes = row.stored_bytes ?? row.text_bytes;
+  return { ...result, transcriptAvailable: bytes != null, transcriptBytes: bytes ?? null };
+}
+
+// Lazy listings never read transcript text from D1, only its size.
+export async function recordingsFor(env, userId, { lazy = false } = {}) {
+  const text = lazy ? "length(CAST(transcript AS BLOB)) AS text_bytes" : "transcript";
   const { results } = await env.ACCOUNT_DB.prepare(
-    `SELECT id, meeting_id, status, detail, transcript, provider, region
-    FROM account_recordings WHERE user_id=? AND status!='disposing' AND ${liveMeeting} ORDER BY consent_at, id`,
+    `SELECT id, meeting_id, status, detail, ${text}, provider, region, stored.bytes AS stored_bytes
+    FROM ${withStored} WHERE user_id=? AND status!='disposing' AND ${liveMeeting} ORDER BY consent_at, id`,
   )
     .bind(userId)
     .all();
-  return results.map(view);
+  return results.map(lazy ? lazyView : view);
 }
 
 async function find(db, ids) {
   return db
     .prepare(
-      `SELECT * FROM account_recordings WHERE user_id=? AND meeting_id=? AND id=?
-    AND status!='disposing' AND ${liveMeeting}`,
+      `SELECT account_recordings.*, stored.bytes AS stored_bytes FROM ${withStored}
+    WHERE user_id=? AND meeting_id=? AND id=? AND status!='disposing' AND ${liveMeeting}`,
     )
     .bind(...ids)
     .first();
+}
+
+// The owner's transcript text, wherever it is kept; null when the recording has none.
+export async function recordingTranscript(env, ids) {
+  const row = await find(env.ACCOUNT_DB, ids);
+  if (!row || row.stored_bytes == null) return row?.transcript ?? null;
+  const object = await env.ACCOUNT_AUDIO.get(transcriptKey(row.blob_id));
+  if (!object) throw new Error("missing_transcript");
+  return object.text();
 }
 
 async function isDisposing(db, ids) {
@@ -325,11 +351,12 @@ async function jsonBody(response, maxSize) {
 }
 
 function resultText(text) {
-  // Keep one D1 row bounded; report a review state instead of publishing a truncated result.
-  if (typeof text !== "string" || new TextEncoder().encode(text).length > 512 * 1024) {
+  // Keep one D1 row bounded and move longer text to R2; report a review state instead of publishing a truncated result.
+  const bytes = typeof text === "string" ? new TextEncoder().encode(text) : null;
+  if (!bytes || bytes.length > STORED_TRANSCRIPT) {
     return { status: "review", detail: "transcript_unreadable_or_oversize" };
   }
-  return { status: "completed", transcript: text };
+  return bytes.length > INLINE_TRANSCRIPT ? { status: "completed", stored: bytes } : { status: "completed", transcript: text };
 }
 
 function timeLabel(seconds) {
@@ -550,7 +577,7 @@ async function disposeOne(env, now) {
     .bind(now - STALE_UPLOAD)
     .first();
   if (!row) return false;
-  await env.ACCOUNT_AUDIO.delete(Array.from({ length: parts(row) }, (_, i) => key(row.blob_id, i)));
+  await env.ACCOUNT_AUDIO.delete(objectKeys(row));
   await db
     .prepare("DELETE FROM account_recordings WHERE blob_id=? AND status='disposing'")
     .bind(row.blob_id)
@@ -558,9 +585,19 @@ async function disposeOne(env, now) {
   return true;
 }
 
+// Objects of a deleted account. The queue row goes only after R2 confirms; repeating a delete is harmless.
+async function disposeQueued(env) {
+  const db = env.ACCOUNT_DB;
+  const row = await db.prepare("SELECT blob_id, size FROM account_disposals ORDER BY queued_at, blob_id LIMIT 1").first();
+  if (!row) return false;
+  await env.ACCOUNT_AUDIO.delete(objectKeys(row));
+  await db.prepare("DELETE FROM account_disposals WHERE blob_id=?").bind(row.blob_id).run();
+  return true;
+}
+
 // Run after a delete is acknowledged. The cron remains the fallback for anything left or failed.
 export async function disposeRemoved(env, { now = Date.now, limit = 16 } = {}) {
-  for (let i = 0; i < limit && (await disposeOne(env, now())); i++);
+  for (let i = 0; i < limit && ((await disposeQueued(env)) || (await disposeOne(env, now()))); i++);
 }
 
 // A scheduled invocation consumes at most one job. Calls can overlap: the conditional claim is persisted before POST.
@@ -571,6 +608,7 @@ export async function processPending(
   const now = clock();
   const db = env.ACCOUNT_DB;
   await disposeOne(env, now);
+  for (let i = 0; i < 16 && (await disposeQueued(env)); i++);
   await db
     .prepare(
       `UPDATE account_recordings SET status='review',detail='submission_uncertain'
@@ -624,20 +662,45 @@ export async function processPending(
       ? { status: "processing", detail: "poll_retry", delay: MINUTE }
       : { status: "review", detail: "submission_uncertain" };
   }
-  await db
-    .prepare(
-      `UPDATE account_recordings SET status=?,detail=?,transcript=?,provider_job=COALESCE(?,provider_job),
-    claim=NULL,next_at=?,updated_at=? WHERE blob_id=? AND claim=? AND status!='disposing' AND ${liveMeeting}`,
-    )
-    .bind(
-      result.status,
-      result.detail ?? null,
-      result.transcript ?? null,
-      result.job ?? null,
-      clock() + (result.delay ?? 0),
-      clock(),
-      row.blob_id,
-      claim,
-    )
-    .run();
+  const owned = `blob_id=? AND claim=? AND status!='disposing' AND ${liveMeeting}`;
+  const writes = [];
+  if (result.stored) {
+    // Write the object before publishing it. The marker and the result commit together, or neither does.
+    await env.ACCOUNT_AUDIO.put(transcriptKey(row.blob_id), result.stored, {
+      httpMetadata: { contentType: "text/plain; charset=utf-8" },
+    });
+    writes.push(
+      db
+        .prepare(
+          `INSERT INTO account_recording_transcripts(blob_id,bytes) SELECT blob_id,? FROM account_recordings
+      WHERE ${owned} ON CONFLICT(blob_id) DO UPDATE SET bytes=excluded.bytes`,
+        )
+        .bind(result.stored.length, row.blob_id, claim),
+    );
+  }
+  writes.push(
+    db
+      .prepare(
+        `UPDATE account_recordings SET status=?,detail=?,transcript=?,provider_job=COALESCE(?,provider_job),
+    claim=NULL,next_at=?,updated_at=? WHERE ${owned}`,
+      )
+      .bind(
+        result.status,
+        result.detail ?? null,
+        result.transcript ?? null,
+        result.job ?? null,
+        clock() + (result.delay ?? 0),
+        clock(),
+        row.blob_id,
+        claim,
+      ),
+  );
+  const updated = (await db.batch(writes)).at(-1);
+  if (!result.stored || updated.meta.changes) return;
+  // A removal won the race and its disposal may already have run. A live row can still publish this key.
+  const live = await db
+    .prepare(`SELECT 1 FROM account_recordings WHERE blob_id=? AND status!='disposing' AND ${liveMeeting}`)
+    .bind(row.blob_id)
+    .first();
+  if (!live) await env.ACCOUNT_AUDIO.delete(transcriptKey(row.blob_id));
 }

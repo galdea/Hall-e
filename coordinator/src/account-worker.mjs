@@ -1,7 +1,8 @@
 import {authenticate, handleAuth} from "./account-auth.mjs";
 import {handleBrowserAuth} from "./account-browser.mjs";
-import {handleTranscriptImport, importedRecordingsFor} from "./account-import.mjs";
-import {disposeRemoved, handleRecording, processPending, recordingsFor} from "./account-recording.mjs";
+import {deleteAccount} from "./account-deletion.mjs";
+import {handleTranscriptImport, importedRecordingsFor, importedTranscript} from "./account-import.mjs";
+import {disposeRemoved, handleRecording, processPending, recordingTranscript, recordingsFor} from "./account-recording.mjs";
 import {accountJSON, isAccountId, listMeetings, putMeeting} from "./account-meetings.mjs";
 
 const fail = (error, status) => accountJSON({error}, status);
@@ -40,6 +41,13 @@ function disposeSoon(env, ctx) {
   ctx?.waitUntil?.(disposeRemoved(env).catch(error => console.error("account_disposal_failed", error?.name ?? "Error")));
 }
 
+// One path serves provider recordings and local-import copies; both queries are scoped to the owner.
+async function transcriptOf(env, ids) {
+  const text = (await recordingTranscript(env, ids)) ?? (await importedTranscript(env, ids));
+  if (text === null) return fail("not_found", 404);
+  return new Response(text, {headers: {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"}});
+}
+
 async function route(request, env, ctx) {
   const url = new URL(request.url);
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
@@ -51,12 +59,24 @@ async function route(request, env, ctx) {
   if (area === "auth") {
     return meeting === "browser" ? handleBrowserAuth(request, env) : handleAuth(request, env);
   }
+  if (area === "account") {
+    if (meeting !== "delete" || resource !== undefined) return fail("not_found", 404);
+    if (request.method !== "POST") return fail("method_not_allowed", 405);
+    const session = await authenticate(request, env);
+    if (!session) return fail("unauthorized", 401);
+    const response = await deleteAccount(await boundedRequest(request, 1024), env, session.userId);
+    if (response.status === 202) disposeSoon(env, ctx);
+    return response;
+  }
   if (area !== "meetings") return fail("not_found", 404);
   const session = await authenticate(request, env);
   if (!session) return fail("unauthorized", 401);
   if (meeting === undefined && request.method === "GET") {
+    // Opt-in only: without it the agenda keeps sending inline transcripts to older clients.
+    const lazy = url.searchParams.get("transcripts") === "lazy";
     return listMeetings(env, session.userId, async (env, userId) =>
-      [...await recordingsFor(env, userId), ...await importedRecordingsFor(env, userId)], url.searchParams.get("since"));
+      [...await recordingsFor(env, userId, {lazy}), ...await importedRecordingsFor(env, userId, {lazy})],
+      url.searchParams.get("since"));
   }
   if (!isAccountId(meeting)) return fail("not_found", 404);
   const meetingId = meeting.toLowerCase();
@@ -70,6 +90,9 @@ async function route(request, env, ctx) {
     return response;
   }
   if (resource === "recordings" && isAccountId(recording)) {
+    if (tail.join("/") === "transcript" && request.method === "GET") {
+      return transcriptOf(env, [session.userId, meetingId, recording.toLowerCase()]);
+    }
     const response = await handleRecording(request, env, session.userId, meetingId, recording.toLowerCase(), tail.join("/"));
     if (response.status === 204 && request.method === "DELETE") disposeSoon(env, ctx);
     return response;

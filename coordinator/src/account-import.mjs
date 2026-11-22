@@ -10,14 +10,26 @@ function view(row) {
   };
 }
 
-export async function importedRecordingsFor(env, userId) {
-  const {results} = await env.ACCOUNT_DB.prepare(`
-    SELECT imported.id, imported.meeting_id, imported.transcript
-    FROM account_transcript_imports imported JOIN account_meetings meeting
+function lazyView(row) {
+  return {...view({...row, transcript: null}), transcriptAvailable: true, transcriptBytes: row.transcript_bytes};
+}
+
+const liveImports = `FROM account_transcript_imports imported JOIN account_meetings meeting
       ON meeting.user_id=imported.user_id AND meeting.id=imported.meeting_id
-    WHERE imported.user_id=? AND imported.transcript IS NOT NULL AND meeting.deleted=0
+    WHERE imported.user_id=? AND imported.transcript IS NOT NULL AND meeting.deleted=0`;
+
+export async function importedRecordingsFor(env, userId, {lazy = false} = {}) {
+  const text = lazy ? "length(CAST(imported.transcript AS BLOB)) AS transcript_bytes" : "imported.transcript";
+  const {results} = await env.ACCOUNT_DB.prepare(`
+    SELECT imported.id, imported.meeting_id, ${text}
+    ${liveImports}
     ORDER BY imported.id`).bind(userId).all();
-  return results.map(view);
+  return results.map(lazy ? lazyView : view);
+}
+
+export async function importedTranscript(env, [userId, meetingId, importId]) {
+  return await env.ACCOUNT_DB.prepare(`SELECT imported.transcript ${liveImports} AND imported.meeting_id=? AND imported.id=?`)
+    .bind(userId, meetingId, importId).first("transcript") ?? null;
 }
 
 export async function handleTranscriptImport(request, env, userId, meetingId, importId) {

@@ -206,7 +206,9 @@ export function createAccountAuth({ fetchImpl = (...args) => globalThis.fetch(..
       // A removed tester can still revoke their own bearer.
       const session = await sessionFor(request, env, now, action === 'logout' ? null : testers);
       if (!session) reject(401, 'unauthorized');
-      if (action === 'session') return json({ userId: session.userId, expiresAt: session.expiresAt });
+      // Clients offer account deletion only when the operator enabled it on this service.
+      if (action === 'session') return json({ userId: session.userId, expiresAt: session.expiresAt,
+        features: { accountDeletion: env.ACCOUNT_DELETION_ENABLED === 'yes', lazyTranscripts: true } });
       await statement(db, 'DELETE FROM account_sessions WHERE session_id = ?', session.sessionId).run();
       return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
     }

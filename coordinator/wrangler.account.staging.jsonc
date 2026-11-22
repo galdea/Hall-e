@@ -33,7 +33,8 @@
   "vars": {
     "ACCOUNT_PUBLIC_ORIGIN": "https://halle-account-staging.gabriel-aldea.workers.dev",
     "ACCOUNT_STAGING_TESTER_EMAILS": "halle-owner@example.test,halle-other@example.test",
-    "ACCOUNT_STAGING_FIXTURE": "yes"
+    "ACCOUNT_STAGING_FIXTURE": "yes",
+    "ACCOUNT_DELETION_ENABLED": "yes"
   },
   "triggers": {
     "crons": [
