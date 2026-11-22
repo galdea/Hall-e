@@ -221,6 +221,8 @@ export function createAccountAuth({ fetchImpl = (...args) => globalThis.fetch(..
     if (phase === 'start') {
       if (body.link === true && !session) reject(401, 'unauthorized');
       if (session && body.link !== true) reject(400, 'explicit_link_required');
+      // Google reveals the address only after the code exchange; a closed roster stops before Google is involved.
+      if (provider === 'google' && testers?.length === 0) reject(403, 'tester_required');
       const email = provider === 'email' ? normalizedEmail(body.email) : null;
       const key = await hmacKey(env);
       const fingerprint = async value => base64url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value))));

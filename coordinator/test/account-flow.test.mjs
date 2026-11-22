@@ -43,7 +43,7 @@ function accountFlow(t) {
     env.ACCOUNT_DB = openAccountDatabase(path, { migrate: false });
   }
 
-  async function request(method, route, { token, body } = {}) {
+  async function request(method, route, { token, body, ctx } = {}) {
     const headers = new Headers();
     if (token) headers.set("authorization", `Bearer ${token}`);
     if (body !== undefined) {
@@ -51,7 +51,7 @@ function accountFlow(t) {
       headers.set("content-type", binary ? "application/octet-stream" : "application/json");
       if (!binary) body = JSON.stringify(body);
     }
-    const response = await accountWorker.fetch(new Request(prefix + route, { method, headers, body }), env);
+    const response = await accountWorker.fetch(new Request(prefix + route, { method, headers, body }), env, ctx);
     assert.match(response.headers.get("cache-control") ?? "", /\bno-store\b/);
     const content = await response.text();
     return { status: response.status, body: content ? JSON.parse(content) : null };
@@ -337,4 +337,48 @@ test("an explicitly copied local transcript is private, immutable, and removable
     .bind(sourceMeeting.id).first("COUNT(*)"), 0);
   assert.equal((await request("PUT", attachedToDeletedMeeting, { token: mac.token, body: fixture })).status, 404);
   assert.equal(env.ACCOUNT_AUDIO.objects.size, 0);
+});
+
+test("a meeting delete starts R2 disposal at once, logs only the error class and leaves the cron as fallback", async (t) => {
+  const { env, request, login } = accountFlow(t);
+  const owner = await login(verifiedEmail);
+  const bytes = new TextEncoder().encode("synthetic disposal fixture");
+  const proposal = {
+    size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"),
+    consent: true, mimeType: "audio/mp4", provider: "deepgram",
+  };
+  const logged = t.mock.method(console, "error", () => {});
+  async function removeWithAudio(failStorage) {
+    const meeting = `/meetings/${randomUUID()}`;
+    const recording = `${meeting}/recordings/${randomUUID()}`;
+    const created = expectSuccess(await request("PUT", meeting, { token: owner.token, body: meetingChange("Synthetic disposal") })).meeting;
+    expectSuccess(await request("PUT", recording, { token: owner.token, body: proposal }));
+    expectSuccess(await request("PUT", `${recording}/parts/0`, { token: owner.token, body: bytes }));
+    assert.equal(env.ACCOUNT_AUDIO.objects.size, 1);
+    const tasks = [];
+    const ctx = { waitUntil: (task) => tasks.push(task) };
+    const remove = env.ACCOUNT_AUDIO.delete;
+    if (failStorage) env.ACCOUNT_AUDIO.delete = async () => { throw new TypeError("synthetic storage failure for alex@example.test"); };
+    expectSuccess(await request("PUT", meeting, {
+      token: owner.token, ctx, body: meetingChange("Synthetic disposal", created.revision, { deleted: true }),
+    }));
+    assert.equal(tasks.length, 1);
+    await Promise.all(tasks);
+    env.ACCOUNT_AUDIO.delete = remove;
+  }
+  await removeWithAudio(false);
+  assert.equal(env.ACCOUNT_AUDIO.objects.size, 0);
+  assert.equal(await env.ACCOUNT_DB.prepare("SELECT COUNT(*) AS n FROM account_recordings").first("n"), 0);
+  assert.equal(logged.mock.callCount(), 0);
+
+  await removeWithAudio(true);
+  assert.equal(env.ACCOUNT_AUDIO.objects.size, 1);
+  assert.deepEqual(logged.mock.calls.map((call) => call.arguments), [["account_disposal_failed", "TypeError"]]);
+  await processPending(env, { fetch: () => assert.fail("unexpected provider request") });
+  assert.equal(env.ACCOUNT_AUDIO.objects.size, 0);
+
+  const ctx = { waitUntil: () => assert.fail("an edit must not start disposal") };
+  const kept = `/meetings/${randomUUID()}`;
+  const draft = expectSuccess(await request("PUT", kept, { token: owner.token, body: meetingChange("Synthetic kept") })).meeting;
+  expectSuccess(await request("PUT", kept, { token: owner.token, ctx, body: meetingChange("Synthetic edit", draft.revision) }));
 });

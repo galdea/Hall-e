@@ -30,8 +30,11 @@ test("hosted QA story exercises the actual staging entrypoint, shared fixture re
     readCode: email => env.ACCOUNT_DB.prepare("DELETE FROM staging_qa_mailbox WHERE email=? AND expires_at>unixepoch()*1000 RETURNING code").bind(email).first("code"),
     waitForCron: () => Promise.all(background),
   });
-  assert.equal(background.length, 2);
+  // Two completions start the fixture processor; the cleanup delete starts R2 disposal without the cron.
+  assert.equal(background.length, 3);
   await Promise.all(background);
+  assert.equal(env.ACCOUNT_AUDIO.objects.size, 0);
+  assert.equal(await env.ACCOUNT_DB.prepare("SELECT count(*) AS n FROM account_recordings").first("n"), 0);
   assert.equal(await env.ACCOUNT_DB.prepare("SELECT count(*) AS n FROM staging_qa_mailbox").first("n"), 0);
   assert.equal(await env.ACCOUNT_DB.prepare("SELECT count(*) AS n FROM account_sessions").first("n"), 0);
   await staging.scheduled({}, env);

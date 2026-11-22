@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import {openAccountDatabase} from "../test-support/account.mjs";
 import {putMeeting, listMeetings} from "../src/account-meetings.mjs";
 
@@ -85,4 +86,58 @@ test("phone and desktop share private project labels, preserve older-client edit
   assert.equal((await put(owner,id,{...tagged,project:null})).status,409);
   assert.equal((await put(owner,id,next(3,{project:{id:"local-client-name",name:"private"}}))).status,400);
   assert.deepEqual((await snapshot(other)).meetings[0].project,privateProject);
+});
+
+test("a tombstone keeps no schedule and deleting the last linked meeting removes that account's project label", async t => {
+  const {env, owner, id, change} = fixture(t);
+  const put = (user, mid, body) => putMeeting(body, env, user, mid);
+  const next = (base, patch) => ({...change,baseRevision:base,mutationId:crypto.randomUUID(),...patch});
+  const shared = {id: crypto.randomUUID(), name: "Synthetic shared label"};
+  const solo = {id: crypto.randomUUID(), name: "Synthetic single label"};
+  const secondId = crypto.randomUUID(), other = crypto.randomUUID();
+  await put(owner,id,{...change,project:shared});
+  await put(owner,secondId,next(0,{project:shared}));
+  const thirdId = crypto.randomUUID();
+  await put(owner,thirdId,next(0,{project:solo}));
+  await put(other,id,{...change,project:solo});
+  const labels = async user => (await env.ACCOUNT_DB.prepare("SELECT id FROM account_projects WHERE user_id=? ORDER BY name")
+    .bind(user).all()).results.map(row => row.id);
+
+  const remove = {mutationId:crypto.randomUUID(),baseRevision:1,deleted:true};
+  const removed = (await (await put(owner,thirdId,remove)).json()).meeting;
+  assert.equal(removed.startAt, "1970-01-01T00:00:00.000Z");
+  assert.equal(removed.endAt, "1970-01-01T00:00:00.000Z");
+  assert.ok(Date.parse(removed.startAt) === 0 && Date.parse(removed.endAt) === 0);
+  assert.deepEqual(await labels(owner), [shared.id]);
+  assert.deepEqual(await labels(other), [solo.id]);
+  assert.deepEqual((await (await put(owner,thirdId,remove)).json()).meeting, removed);
+
+  await put(owner,id,next(1,{project:null}));
+  assert.deepEqual(await labels(owner), [shared.id]);
+  await put(owner,secondId,next(1,{deleted:true,title:undefined,startAt:undefined,endAt:undefined}));
+  assert.deepEqual(await labels(owner), []);
+  const list = await (await listMeetings(env,owner,async () => [])).json();
+  for (const meeting of list.meetings.filter(m => m.deleted)) {
+    assert.deepEqual([meeting.title, meeting.startAt, meeting.endAt, meeting.project],
+      ["", "1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z", null]);
+  }
+  assert.deepEqual(list.meetings.filter(m => !m.deleted).map(m => [m.id, m.startAt]), [[id, "2026-11-20T12:30:00.000Z"]]);
+});
+
+test("the retention backfill scrubs earlier tombstones and unused labels and is safe to re-run", async t => {
+  const {env, owner, id, change} = fixture(t);
+  const db = env.ACCOUNT_DB;
+  const label = {id: crypto.randomUUID(), name: "Synthetic kept label"};
+  await putMeeting({...change,project:label}, env, owner, id);
+  await db.prepare("INSERT INTO account_meetings VALUES (?,?,'',?,?,2,1,'legacy')")
+    .bind(owner, "legacy-tombstone", "2026-01-02T03:04:05.000Z", "2026-01-02T04:04:05.000Z").run();
+  await db.prepare("INSERT INTO account_projects VALUES (?,?,?)").bind(owner, "legacy-label", "Synthetic orphan").run();
+  const sql = readFileSync(new URL("../account-retention.sql", import.meta.url), "utf8");
+  for (let run = 0; run < 2; run++) await db.exec(sql);
+  const rows = (await db.prepare("SELECT id, start_at, end_at FROM account_meetings WHERE user_id=? ORDER BY deleted").bind(owner).all()).results;
+  assert.deepEqual(rows.map(row => [row.id, row.start_at, row.end_at]), [
+    [id, "2026-11-20T12:30:00.000Z", "2026-11-20T13:30:00.000Z"],
+    ["legacy-tombstone", "1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z"],
+  ]);
+  assert.deepEqual((await db.prepare("SELECT id FROM account_projects").all()).results.map(row => row.id), [label.id]);
 });

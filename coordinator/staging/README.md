@@ -5,7 +5,7 @@ Las compilaciones privadas de macOS y Android incluyen el origen `https://halle-
 ## Probar con dos dispositivos
 
 1. Abre **Hall-e Staging → Agenda privada** en el Mac. Solicita el código para `halle-owner@example.test`.
-2. En la terminal del Mac autenticado con Wrangler, ejecuta `node coordinator/scripts/staging-code.mjs` desde el repositorio. Introduce el código en el Mac. Caduca en diez minutos. Cada lectura consume el mensaje del buzón.
+2. En el Mac autenticado con Wrangler, abre `coordinator/staging/Hall-e Staging Code.command` (o ejecuta `node coordinator/scripts/staging-code.mjs` desde el repositorio). El archivo busca `node` y `wrangler` en el `PATH`; `WRANGLER_BIN` permite indicar otra ruta. Introduce el código en el Mac. Caduca en diez minutos. Cada lectura consume el mensaje del buzón.
 3. Repite el proceso en Android con el mismo correo. Solicita y verifica los códigos de los dispositivos de uno en uno.
 4. Crea una reunión sintética en un dispositivo, asígnale un proyecto y sincroniza el otro. En Android, abre esa reunión y pulsa **Enviar tono de prueba**. Al actualizar la reunión en el Mac aparece el resultado marcado como sintético. Para comprobar el aislamiento puedes iniciar una sesión independiente como `halle-other@example.test` y consultar su código pasando ese correo al comando.
 

@@ -276,3 +276,89 @@ test("uploading while a stale recording is disposing on a live meeting returns r
   await db.prepare("UPDATE account_meetings SET deleted=1 WHERE user_id='one'").run();
   assert.equal((await call("PUT", "", manifest)).status, 404);
 });
+
+test("a stored part missing from R2 or of the wrong size is requested again, keeping the parts that are present", async (t) => {
+  const { db, bucket, call, read } = await setup(t);
+  const MiB = 1024 * 1024;
+  const large = new Uint8Array(8 * MiB + 8).map((_, i) => i % 251);
+  const spec = { ...manifest, size: large.length, sha256: createHash("sha256").update(large).digest("hex") };
+  const first = large.subarray(0, 8 * MiB),
+    second = large.subarray(8 * MiB);
+  await call("PUT", "", spec);
+  assert.equal((await call("PUT", "parts/0", first)).status, 200);
+  assert.equal((await call("PUT", "parts/1", second)).status, 200);
+  const [kept, lost] = [...bucket.objects.keys()].sort();
+  bucket.objects.delete(lost);
+  const stored = () => db.prepare("SELECT part_index, stored FROM account_recording_parts ORDER BY part_index").all();
+  const missing = await call("POST", "complete");
+  assert.equal(missing.status, 409);
+  assert.equal((await missing.json()).error, "missing_parts");
+  assert.deepEqual((await stored()).results.map((p) => p.stored), [1, 0]);
+  assert.equal(bucket.objects.get(kept).size, 8 * MiB);
+  assert.equal((await call("PUT", "parts/1", second.map((b) => b + 1))).status, 409);
+  assert.equal((await call("PUT", "parts/1", second)).status, 200);
+  assert.equal((await (await call("POST", "complete")).json()).status, "queued");
+
+  // A truncated object is replaced only by the bytes matching the part's reserved digest.
+  const { call: other, bucket: otherBucket, read: otherRead } = await setup(t);
+  await other("PUT", "", manifest);
+  await other("PUT", "parts/0", body);
+  const [only] = otherBucket.objects.keys();
+  await otherBucket.put(only, body.subarray(0, 3));
+  assert.equal((await (await other("POST", "complete")).json()).error, "missing_parts");
+  assert.equal((await otherRead()).status, "uploading");
+  await other("PUT", "parts/0", body);
+  assert.deepEqual(otherBucket.objects.get(only).bytes, body);
+  assert.equal((await (await other("POST", "complete")).json()).status, "queued");
+  assert.equal((await read()).status, "queued");
+});
+
+test("an oversize transcript keeps its audio and provider reference until the owner discards the recording", async (t) => {
+  const { env, db, bucket, queue, call, read } = await setup(t);
+  await queue();
+  const turn = { speaker: 0, start: 0, end: 1, transcript: "x".repeat(600 * 1024) };
+  await processPending(env, {
+    fetch: async () =>
+      Response.json({
+        metadata: { request_id: "dg-fixture-request" },
+        results: { channels: [{ alternatives: [{ transcript: "x" }] }], utterances: [turn] },
+      }),
+  });
+  const held = await read();
+  assert.equal(held.status, "review");
+  assert.equal(held.detail, "transcript_unreadable_or_oversize");
+  assert.equal(held.transcript, null);
+  const row = () => db.prepare("SELECT status, provider_job FROM account_recordings WHERE user_id='one'").first();
+  assert.equal((await row()).provider_job, "dg-fixture-request");
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const noSend = { fetch: () => assert.fail("unexpected provider request"), now: () => Date.now() + 2 * week };
+  await processPending(env, noSend);
+  assert.equal(bucket.objects.size, 1);
+  assert.equal((await read()).status, "review");
+  assert.equal((await call("DELETE", "", undefined, "two")).status, 404);
+
+  const discard = await call("DELETE", "");
+  assert.equal(discard.status, 204);
+  assert.equal((await call("DELETE", "")).status, 204);
+  assert.equal((await call("GET", "")).status, 404);
+  assert.deepEqual(await recordingsFor(env, "one"), []);
+  assert.equal((await row()).status, "disposing");
+  await processPending(env, noSend);
+  assert.equal(bucket.objects.size, 0);
+  assert.equal(await row(), null);
+  assert.equal((await call("DELETE", "")).status, 404);
+});
+
+test("a provider response over 12 MiB keeps Deepgram's request header, and active recordings cannot be discarded", async (t) => {
+  const { env, db, queue, call, read } = await setup(t);
+  await queue();
+  assert.equal((await (await call("DELETE", "")).json()).error, "recording_active");
+  await processPending(env, {
+    fetch: async () =>
+      new Response(new Uint8Array(12 * 1024 * 1024 + 1), { headers: { "dg-request-id": "dg-header-request" } }),
+  });
+  assert.equal((await read()).detail, "transcript_unreadable_or_oversize");
+  const job = await db.prepare("SELECT provider_job FROM account_recordings WHERE user_id='one'").first("provider_job");
+  assert.equal(job, "dg-header-request");
+  assert.equal((await call("DELETE", "")).status, 204);
+});

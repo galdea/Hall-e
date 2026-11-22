@@ -1,7 +1,7 @@
 import {authenticate, handleAuth} from "./account-auth.mjs";
 import {handleBrowserAuth} from "./account-browser.mjs";
 import {handleTranscriptImport, importedRecordingsFor} from "./account-import.mjs";
-import {handleRecording, processPending, recordingsFor} from "./account-recording.mjs";
+import {disposeRemoved, handleRecording, processPending, recordingsFor} from "./account-recording.mjs";
 import {accountJSON, isAccountId, listMeetings, putMeeting} from "./account-meetings.mjs";
 
 const fail = (error, status) => accountJSON({error}, status);
@@ -35,7 +35,12 @@ async function boundedRequest(request, limit) {
   return new Request(request, {body: bytes});
 }
 
-async function route(request, env) {
+// Start R2 cleanup once a removal is acknowledged; the cron retries. Logs carry only the error class.
+function disposeSoon(env, ctx) {
+  ctx?.waitUntil?.(disposeRemoved(env).catch(error => console.error("account_disposal_failed", error?.name ?? "Error")));
+}
+
+async function route(request, env, ctx) {
   const url = new URL(request.url);
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
     return fail("https_required", 400);
@@ -60,10 +65,14 @@ async function route(request, env) {
     if (!bounded) return fail("body_too_large", 413);
     let body;
     try { body = await bounded.json(); } catch { return fail("invalid_json", 400); }
-    return putMeeting(body, env, session.userId, meetingId);
+    const response = await putMeeting(body, env, session.userId, meetingId);
+    if (response.ok && body?.deleted === true) disposeSoon(env, ctx);
+    return response;
   }
   if (resource === "recordings" && isAccountId(recording)) {
-    return handleRecording(request, env, session.userId, meetingId, recording.toLowerCase(), tail.join("/"));
+    const response = await handleRecording(request, env, session.userId, meetingId, recording.toLowerCase(), tail.join("/"));
+    if (response.status === 204 && request.method === "DELETE") disposeSoon(env, ctx);
+    return response;
   }
   if (resource === "imports" && isAccountId(recording) && tail.length === 0) {
     if (request.method === "PUT") {
@@ -76,9 +85,9 @@ async function route(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      const response = await route(request, env);
+      const response = await route(request, env, ctx);
       const headers = new Headers(response.headers);
       headers.set("Cache-Control", "no-store");
       headers.set("Referrer-Policy", "no-referrer");
