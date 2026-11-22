@@ -26,9 +26,45 @@ struct AccountRecording: Codable, Equatable, Identifiable {
     var status: String
     var transcript: String?
     var source: String? = nil
+    /// Lazy agendas (`transcripts=lazy`) send `transcript: null` and say here whether text exists.
+    var transcriptAvailable: Bool? = nil
+    var transcriptBytes: Int? = nil
+    /// Without lazy mode, a large transcript kept in object storage arrives as `transcript: null` plus this flag.
+    var transcriptStoredSeparately: Bool? = nil
 
     /// The service stopped on this recording, so the owner may discard it.
     var canDiscard: Bool { status == "review" || status == "failed" }
+
+    /// Text sent inline with the agenda (old servers, old caches, small non-lazy transcripts).
+    var inlineTranscript: String? {
+        guard let transcript, !transcript.isEmpty else { return nil }
+        return transcript
+    }
+
+    /// The text is not in the agenda and must be fetched from the transcript endpoint.
+    var transcriptIsRemote: Bool {
+        inlineTranscript == nil && (transcriptAvailable == true || transcriptStoredSeparately == true)
+    }
+
+    var hasTranscript: Bool { inlineTranscript != nil || transcriptIsRemote }
+}
+
+/// What `GET auth/session` says this service supports. A missing `features` object means none.
+struct AccountFeatures: Decodable, Equatable {
+    var accountDeletion = false
+    var lazyTranscripts = false
+
+    init(accountDeletion: Bool = false, lazyTranscripts: Bool = false) {
+        self.accountDeletion = accountDeletion
+        self.lazyTranscripts = lazyTranscripts
+    }
+
+    init(from decoder: Decoder) throws {
+        enum Keys: String, CodingKey { case accountDeletion, lazyTranscripts }
+        let c = try decoder.container(keyedBy: Keys.self)
+        accountDeletion = (try? c.decodeIfPresent(Bool.self, forKey: .accountDeletion)) == true
+        lazyTranscripts = (try? c.decodeIfPresent(Bool.self, forKey: .lazyTranscripts)) == true
+    }
 }
 
 struct AccountMeeting: Codable, Equatable, Identifiable {
@@ -122,6 +158,8 @@ struct AccountCalendarCache: Codable {
     var meetings: [AccountMeeting] = []
     var pending: [AgendaMutation] = []
     var version: String? = nil
+    /// Whether `meetings` came from a lazy-transcript agenda; `version` is only reused for the same mode.
+    var lazyTranscripts: Bool? = nil
 
     var visible: [AccountMeeting] {
         var byID = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -241,6 +279,7 @@ struct AccountCalendarCache: Codable {
 
 enum AccountAgendaError: LocalizedError {
     case origin, invalidMeeting, pending, session, response(Int, String), invalidResponse, browser
+    case deletionConfirmation, deletionFailed(Int, String)
 
     var errorDescription: String? {
         switch self {
@@ -254,6 +293,23 @@ enum AccountAgendaError: LocalizedError {
             return PublicUICopy.text("The account service returned HTTP \(status) (\(code)).", "El servicio de cuentas devolvió HTTP \(status) (\(code)).")
         case .invalidResponse: return PublicUICopy.text("Unexpected response from the account service.", "Respuesta inesperada del servicio de cuentas.")
         case .browser: return PublicUICopy.text("Google sign-in could not open or timed out.", "No se pudo abrir Google o venció el plazo.")
+        case .deletionConfirmation: return PublicUICopy.text("Type DELETE to confirm.", "Escribe DELETE para confirmar.")
+        case .deletionFailed(let status, let code):
+            let prefix = PublicUICopy.text("The account was not deleted.", "La cuenta no se eliminó.")
+            switch (status, code) {
+            case (403, "deletion_disabled"):
+                return prefix + " " + PublicUICopy.text("Account deletion is turned off on this service.",
+                                                        "La eliminación de cuentas está desactivada en este servicio.")
+            case (400, "confirmation_required"):
+                return prefix + " " + PublicUICopy.text("Type DELETE to confirm.", "Escribe DELETE para confirmar.")
+            case (401, _):
+                return prefix + " " + PublicUICopy.text("Sign in again and retry.", "Vuelve a iniciar sesión e inténtalo de nuevo.")
+            case (0, _):
+                return prefix + " " + PublicUICopy.text("Check the connection and try again.", "Revisa la conexión e inténtalo de nuevo.")
+            default:
+                return prefix + " " + PublicUICopy.text("The account service returned HTTP \(status). Try again later.",
+                                                        "El servicio de cuentas devolvió HTTP \(status). Inténtalo más tarde.")
+            }
         }
     }
 }

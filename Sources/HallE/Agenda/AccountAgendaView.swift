@@ -15,6 +15,7 @@ struct AccountAgendaView: View {
     @State private var link = false
     @State private var feedback = ""
     @State private var discarding: RecordingDiscard?
+    @State private var deletingAccount: AccountConnection?
 
     private struct RecordingDiscard {
         var meetingId: String
@@ -50,6 +51,11 @@ struct AccountAgendaView: View {
                     Button(label("Sign out", "Cerrar sesión")) {
                         Task { await model.run { try await model.signOut() } }
                     }.disabled(model.busy)
+                    if model.features.accountDeletion {
+                        Button(label("Delete account…", "Eliminar cuenta…"), role: .destructive) {
+                            deletingAccount = account
+                        }.disabled(model.busy)
+                    }
                 }
                 if link { signInControls(linking: true) }
                 HStack {
@@ -102,6 +108,7 @@ struct AccountAgendaView: View {
             editing = nil
             deleting = nil
             discarding = nil
+            if new != deletingAccount { deletingAccount = nil }
             choosingOccurrence = false
             link = false
             feedback = ""
@@ -114,6 +121,9 @@ struct AccountAgendaView: View {
             }
         }
         .sheet(isPresented: $choosingOccurrence) { localCalendarPicker }
+        .sheet(item: $deletingAccount) { account in
+            AccountDeletionSheet(account: account, model: model)
+        }
         .alert(label("Delete this account meeting?", "¿Eliminar esta reunión de la cuenta?"),
                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { meeting in
             Button(label("Delete from account", "Eliminar de la cuenta"), role: .destructive) {
@@ -326,8 +336,9 @@ struct AccountAgendaView: View {
                             .disabled(model.busy || model.cache.pending.contains { $0.meeting.id == meeting.id })
                         }
                     }
-                    if let transcript = recording.transcript, !transcript.isEmpty {
-                        DisclosureGroup(label("Transcript", "Transcripción")) { Text(transcript).textSelection(.enabled) }
+                    if recording.hasTranscript {
+                        AccountTranscriptDisclosure(title: label("Transcript", "Transcripción"), meetingId: meeting.id,
+                                                    recording: recording, model: model)
                     }
                 }
             }
@@ -406,5 +417,118 @@ private struct AccountMeetingEditor: View {
                 }
             }
         }.padding(20).frame(minWidth: 380)
+    }
+}
+
+/// A transcript row whose text may arrive with the agenda or be fetched when it is opened.
+struct AccountTranscriptDisclosure<Extra: View>: View {
+    let title: String
+    let meetingId: String
+    let recording: AccountRecording
+    let model: AccountAgendaModel
+    @ViewBuilder var extra: () -> Extra
+    @State private var expanded = false
+
+    init(title: String, meetingId: String, recording: AccountRecording, model: AccountAgendaModel,
+         @ViewBuilder extra: @escaping () -> Extra) {
+        self.title = title
+        self.meetingId = meetingId
+        self.recording = recording
+        self.model = model
+        self.extra = extra
+    }
+
+    var body: some View {
+        DisclosureGroup(title, isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                switch model.transcriptState(meetingId: meetingId, recording: recording) {
+                case .loaded(let text):
+                    Text(text).textSelection(.enabled)
+                case .loading:
+                    loading
+                case .idle:
+                    if recording.transcriptIsRemote { loading }
+                case .failed(let message):
+                    Text(message).foregroundStyle(.secondary)
+                    Button(PublicUICopy.text("Try again", "Reintentar")) {
+                        Task { await model.loadTranscript(meetingId: meetingId, recording: recording, force: true) }
+                    }
+                }
+                extra()
+            }
+        }
+        .onChange(of: expanded) { _, open in
+            if open { Task { await model.loadTranscript(meetingId: meetingId, recording: recording) } }
+        }
+    }
+
+    private var loading: some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(PublicUICopy.text("Loading transcript…", "Cargando transcripción…")).foregroundStyle(.secondary)
+        }
+    }
+}
+
+extension AccountTranscriptDisclosure where Extra == EmptyView {
+    init(title: String, meetingId: String, recording: AccountRecording, model: AccountAgendaModel) {
+        self.init(title: title, meetingId: meetingId, recording: recording, model: model) { EmptyView() }
+    }
+}
+
+extension AccountConnection: Identifiable {
+    var id: String { origin.absoluteString + "\u{0}" + credentials.userId }
+}
+
+/// Typed confirmation before the account and everything it holds on the service is deleted.
+private struct AccountDeletionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let account: AccountConnection
+    let model: AccountAgendaModel
+    @State private var typed = ""
+    @State private var error = ""
+
+    private func text(_ english: String, _ spanish: String) -> String { PublicUICopy.text(english, spanish) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(text("Delete this Hall-e account?", "¿Eliminar esta cuenta de Hall-e?")).font(.headline)
+            Text(account.origin.host ?? "").font(.subheadline).foregroundStyle(.secondary)
+            Text(text("This permanently removes the account’s meetings, transcripts and audio from the account service and signs out every device that uses it. It cannot be undone.",
+                      "Esto elimina para siempre del servicio de cuentas las reuniones, transcripciones y audio de la cuenta, y cierra la sesión en todos los dispositivos que la usan. No se puede deshacer."))
+            Text(text("Recordings and transcripts in this Mac’s library stay on this Mac. Copies already processed by a transcription provider follow that provider’s retention.",
+                      "Las grabaciones y transcripciones de la biblioteca de este Mac se conservan en este Mac. Las copias ya procesadas por un proveedor de transcripción siguen la retención de ese proveedor."))
+                .foregroundStyle(.secondary)
+            Text(text("Type DELETE to confirm.", "Escribe DELETE para confirmar."))
+            TextField("DELETE", text: $typed)
+                .textFieldStyle(.roundedBorder)
+                .disabled(model.busy)
+            if !error.isEmpty { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            HStack {
+                Button(text("Cancel", "Cancelar")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                if model.busy { ProgressView().controlSize(.small) }
+                Button(text("Delete account", "Eliminar cuenta"), role: .destructive, action: submit)
+                    .disabled(typed != "DELETE" || model.busy || model.account != account)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .onChange(of: model.account) { _, current in if current != account { dismiss() } }
+    }
+
+    private func submit() {
+        error = ""
+        let confirmation = typed
+        Task {
+            await model.run {
+                guard model.account == account else { throw AccountAgendaError.session }
+                do { try await model.deleteAccount(confirmation: confirmation) }
+                catch {
+                    self.error = error.localizedDescription
+                    throw error
+                }
+            }
+        }
     }
 }
