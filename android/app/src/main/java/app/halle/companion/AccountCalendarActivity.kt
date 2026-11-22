@@ -36,6 +36,7 @@ class AccountCalendarActivity : Activity() {
     private val transcriptLoads = mutableMapOf<String, TranscriptLoad>()
     private var player: android.media.MediaPlayer? = null
     private var consent: (() -> Unit)? = null
+    private var micAskedBefore = false
     private val projectDialogs = mutableMapOf<AlertDialog, String>()
     private fun AlertDialog.Builder.showFor(cal: AccountCalendar) {
         if (sessions.current()?.token != cal.session.token) return
@@ -257,21 +258,37 @@ class AccountCalendarActivity : Activity() {
                 else -> " · local only"
             })
             draft.error?.let { line(it) }
-            cal.media.completedAudio(draft.id)?.let { file ->
-                action("Play phone copy") { playLocalFile(cal, file) }
+            val audio = cal.media.completedAudio(draft.id)
+            val offered = accountRecordingActions(draft.status, playable = audio != null, queued = queue != null,
+                uploadProblem = queue?.has("problem") == true, uploaded = shared)
+            if (draft.status == MobileMeetingStatus.INTERRUPTED && audio == null) {
+                line("No finished audio file was saved, so this recording cannot be played or uploaded.", 14f)
             }
-            if (queue?.has("problem") == true) {
-                action("Retry upload") { cal.retryUpload(draft.id); changed() }
-                action("Cancel upload") { cal.discardUpload(draft.id); changed() }
-            }
-            if (draft.status in setOf(MobileMeetingStatus.STARTING, MobileMeetingStatus.RECORDING)) {
-                action("Stop recording") { MeetingRecordingService.requestStop(this, draft.id, "user"); timer.postDelayed({ render() }, 650) }
-            } else if (cal.media.completedAudio(draft.id) != null && queue == null && !shared) {
-                if (usesStagingMailbox(cal.session.origin)) {
+            for (offer in offered) when (offer) {
+                PhoneRecordingAction.PLAY -> audio?.let { file -> action("Play phone copy") { playLocalFile(cal, file) } }
+                PhoneRecordingAction.RETRY_UPLOAD -> action("Retry upload") { cal.retryUpload(draft.id); changed() }
+                PhoneRecordingAction.CANCEL_UPLOAD -> action("Cancel upload") { cal.discardUpload(draft.id); changed() }
+                PhoneRecordingAction.STOP -> action("Stop recording") {
+                    MeetingRecordingService.requestStop(this, draft.id, "user"); timer.postDelayed({ render() }, 650)
+                }
+                PhoneRecordingAction.SEND -> if (usesStagingMailbox(cal.session.origin)) {
                     line("This recording stays on your phone. Use Send test tone to test staging sync.", 14f)
                 } else action("Send this recording for transcription…") {
                     provider(cal, false) { p -> cal.enqueueAudio(id, draft.id, p!!); changed() }
                 }
+                PhoneRecordingAction.DELETE -> action("Delete phone copy…") {
+                    AlertDialog.Builder(this).setTitle("Delete phone copy?")
+                        .setMessage(accountDeleteMessage(queued = queue != null, uploaded = shared))
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete") { _, _ -> safely {
+                            if (sessions.current()?.token != cal.session.token) return@safely
+                            player?.release(); player = null
+                            if (!cal.deleteLocalRecording(draft.id)) message("Could not delete the phone copy. Check available storage.")
+                            changed()
+                        } }
+                        .showFor(cal)
+                }
+                PhoneRecordingAction.SHARE_AUDIO, PhoneRecordingAction.SHARE_PARTIAL_FILE -> Unit
             }
         }
     }
@@ -591,17 +608,26 @@ class AccountCalendarActivity : Activity() {
                         timer.postDelayed({ if (active) render() }, 800)
                     }
                 }
-                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startConsented()
-                else requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 22)
+                // Notifications are asked once alongside the microphone; recording starts whatever that answer is.
+                val request = prepareRecordingPermissions()
+                if (request.permissions.isEmpty()) startConsented()
+                else { micAskedBefore = request.microphoneAskedBefore; requestPermissions(request.permissions, 22) }
             } }.setNegativeButton("Cancel", null).show()
     }
     private fun startConsented() { val start = consent; consent = null; safely { start?.invoke() } }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
-        if (code == 22 && grants.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+        if (code != 22) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             // The permission result can precede onResume. Starting still requires a foreground activity.
             timer.post { if (hasWindowFocus() || active) startConsented() else { consent = null; message("Tap Record again to start.") } }
-        } else { consent = null; message("Microphone access was not granted.") }
+        } else {
+            consent = null
+            // An empty result means the request was cancelled, not denied.
+            if (grants.isNotEmpty() && Manifest.permission.RECORD_AUDIO in permissions && microphoneNeedsSettings(micAskedBefore)) {
+                showMicrophoneSettingsDialog()
+            } else message("Microphone access was not granted.")
+        }
     }
 
     private fun beginAuth(google: Boolean, linked: AccountSession?) {
