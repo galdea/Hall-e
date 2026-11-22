@@ -193,6 +193,32 @@ class AccountRecordingTest {
         assertThrows(IllegalStateException::class.java) { cal.reapply(mid) }
     }
 
+    @Test fun orphanedRecordingsRequireAConfirmedRemoteDeletion() {
+        val session = AccountSession("https://account.invalid", "user-1", "tok", Long.MAX_VALUE)
+        val storage = MemoryCalendarStorage()
+        val cal = AccountCalendar(session, storage, null, recoverAudio = {}, completedAudioFile = { null })
+        val live = UUID.randomUUID().toString()
+        val gone = UUID.randomUUID().toString()
+        val conflicted = UUID.randomUUID().toString()
+        val missing = UUID.randomUUID().toString()
+        // Nothing pulled yet: no meeting is treated as deleted.
+        assertFalse(cal.isOrphanedMeeting(missing))
+
+        fun row(id: String, deleted: Boolean) = JSONObject().put("id", id).put("title", if (deleted) "" else "Meeting")
+            .put("startAt", "2026-11-20T10:00:00Z").put("endAt", "2026-11-20T10:30:00Z").put("revision", 2)
+            .put("deleted", deleted).put("recordings", org.json.JSONArray())
+        storage.commit(mapOf("snapshot" to org.json.JSONArray().put(row(live, false)).put(row(gone, true))
+            .put(row(conflicted, true)).toString()))
+        cal.stage(conflicted, "Phone edit", java.time.Instant.parse("2026-11-20T10:00:00Z"),
+            java.time.Instant.parse("2026-11-20T10:30:00Z"), base = 1, deleting = false)
+        storage.commit(mapOf("edit-$conflicted" to cal.pending(conflicted)!!.put("problem", 409).toString()))
+
+        assertFalse(cal.isOrphanedMeeting(live))
+        assertTrue(cal.isOrphanedMeeting(gone))
+        assertFalse(cal.isOrphanedMeeting(conflicted))
+        assertTrue(cal.isOrphanedMeeting(missing))
+    }
+
     @Test fun googleAuthUrlValidationRequiresExactHostNoPortNoUserInfoAndExactPath() {
         assertTrue(isApprovedGoogleAuthUrl("https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&state=xyz"))
         assertFalse(isApprovedGoogleAuthUrl("http://accounts.google.com/o/oauth2/v2/auth"))

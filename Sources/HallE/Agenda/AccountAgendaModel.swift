@@ -28,8 +28,10 @@ final class AccountAgendaModel {
     static func makeShared(environment: [String: String] = ProcessInfo.processInfo.environment) -> AccountAgendaModel {
         #if DEBUG
         if environment["HALLE_DEBUG_FIXTURES"] == "1" {
-            let suite = "cl.gabriel.hall-e.debug-fixtures.\(UUID().uuidString)"
+            // One fixed, wiped suite: never the real preferences, and no new plist per launch.
+            let suite = "cl.gabriel.hall-e.debug-fixtures"
             let prefs = UserDefaults(suiteName: suite) ?? UserDefaults()
+            prefs.removePersistentDomain(forName: suite)
             var inMemoryVault: String?
             return AccountAgendaModel(
                 preferences: prefs,

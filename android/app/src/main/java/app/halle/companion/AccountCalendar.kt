@@ -57,10 +57,14 @@ internal class AccountCalendar internal constructor(
     fun cached() = JSONArray(storage.getString("snapshot", "[]") ?: "[]").objects()
     fun pending(id: String) = objectFor("edit-$id")
     fun recordings(id: String) = media.list().filter { it.sourceEventKey == id }
-    fun orphanedRecordings(): List<MobileMeeting> {
-        val visibleIds = visible().mapTo(mutableSetOf()) { it.getString("id") }
-        return media.list().filter { it.sourceEventKey != null && it.sourceEventKey !in visibleIds }
+    // A recording is orphaned only when the account confirms its meeting is gone. A meeting with any
+    // pending change (including an unresolved conflict) or a calendar that has never been pulled is not.
+    internal fun isOrphanedMeeting(meetingId: String): Boolean {
+        if (pending(meetingId) != null || storage.getString("snapshot", null) == null) return false
+        return cached().none { it.getString("id") == meetingId && !it.optBoolean("deleted") }
     }
+    fun orphanedRecordings(): List<MobileMeeting> =
+        media.list().filter { recording -> recording.sourceEventKey?.let(::isOrphanedMeeting) == true }
     fun deleteOrphanedRecording(recordingId: String) {
         discardUpload(recordingId)
         media.deleteRecording(recordingId)
