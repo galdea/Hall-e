@@ -100,6 +100,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Finishes moving a deleted account's phone recordings into this library after an interruption.
+        AccountRecordingMoves.resumeAsync(this) { runOnUiThread { if (!isFinishing && !isDestroyed) render() } }
         if (::store.isInitialized) {
             if (!previewMode && pendingRecordingId == null) meetingStore.recoverInterrupted()
             if (selectedDate == LocalDate.now() && !previewMode) maybeCreateMorningSummary()

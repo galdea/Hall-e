@@ -31,7 +31,9 @@ class AccountCalendarActivity : Activity() {
     private var status = ""
     private var syncing = false
     private var signing = false
+    private var deleting = false
     private var active = false
+    private val transcriptLoads = mutableMapOf<String, TranscriptLoad>()
     private var player: android.media.MediaPlayer? = null
     private var consent: (() -> Unit)? = null
     private val projectDialogs = mutableMapOf<AlertDialog, String>()
@@ -179,6 +181,7 @@ class AccountCalendarActivity : Activity() {
             AlertDialog.Builder(this).setTitle("Link to this Hall-e account")
                 .setItems(arrayOf("Email code", "Google")) { _, i -> beginAuth(i == 1, session) }.show()
         }
+        if (cal.features().accountDeletion) action("Delete account…") { confirmAccountDeletion(cal) }
         action("Sign out") {
             player?.release(); player = null
             cal.media.activeRecording()?.let { MeetingRecordingService.requestStop(this, it.id, "user") }
@@ -232,7 +235,8 @@ class AccountCalendarActivity : Activity() {
         }
         for (r in remote) {
             line("Recording · " + r.getString("status") + (r.optNullableString("detail")?.let { " · $it" } ?: ""))
-            r.optNullableString("transcript")?.let { line(it) }
+            val inline = inlineTranscript(r)
+            if (inline != null) line(inline) else if (hasRemoteTranscript(r)) showRemoteTranscript(cal, id, r)
             if (isDiscardableRecording(r)) action("Discard recording…") {
                 AlertDialog.Builder(this).setTitle("Discard this recording from your account?")
                     .setMessage("The service stopped on this recording. Discarding removes its audio and any transcript draft " +
@@ -270,6 +274,110 @@ class AccountCalendarActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun showRemoteTranscript(cal: AccountCalendar, meetingId: String, recording: JSONObject) {
+        val recordingId = recording.getString("id")
+        val key = cal.session.scope + "/" + recordingId.lowercase(java.util.Locale.ROOT)
+        val state = transcriptLoads[key]
+        if (state is TranscriptLoad.Loaded) { line(state.text); return }
+        cal.cachedTranscript(recording)?.let { line(it); return }
+        when (state) {
+            null, TranscriptLoad.Loading -> {
+                if (state == null) loadTranscript(cal, meetingId, recordingId, key)
+                line("Loading transcript…", 14f)
+            }
+            TranscriptLoad.Missing -> line("No transcript is stored for this recording.", 14f)
+            is TranscriptLoad.Failed -> {
+                line(state.reason, 14f)
+                action("Retry transcript") { transcriptLoads.remove(key); render() }
+            }
+            is TranscriptLoad.Loaded -> Unit
+        }
+    }
+
+    private fun loadTranscript(cal: AccountCalendar, meetingId: String, recordingId: String, key: String) {
+        val session = cal.session
+        transcriptLoads[key] = TranscriptLoad.Loading
+        auth.execute {
+            val result = runCatching {
+                cal.loadTranscript(meetingId, recordingId) { path ->
+                    if (sessions.current()?.token != session.token) throw java.io.IOException("Session changed")
+                    AccountTransport.requestText(session.origin, path, session.token)
+                }
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess { text ->
+                    transcriptLoads[key] = text?.let(TranscriptLoad::Loaded) ?: TranscriptLoad.Missing
+                }.onFailure { error ->
+                    if (error is AccountHttpError && error.status == 401) sessions.logout(session, false)
+                    transcriptLoads[key] = TranscriptLoad.Failed(if (error is AccountHttpError)
+                        "Could not load the transcript (HTTP ${error.status})." else "Could not load the transcript. Check the connection.")
+                }
+                render()
+            }
+        }
+    }
+
+    private fun confirmAccountDeletion(cal: AccountCalendar) {
+        val typed = input("Type $ACCOUNT_DELETION_CONFIRMATION").apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+        }
+        if (sessions.current()?.token != cal.session.token) return
+        val dialog = AlertDialog.Builder(this).setTitle("Delete this Hall-e account?")
+            .setMessage("This permanently removes the account's meetings, transcripts and audio from the service " +
+                "and signs out every device. It cannot be undone. Recordings on this phone move to your personal library.\n\n" +
+                "Type $ACCOUNT_DELETION_CONFIRMATION to confirm.")
+            .setView(fields(typed)).setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete account") { _, _ ->
+                if (isAccountDeletionConfirmed(typed.text.toString())) deleteAccount(cal)
+                else message("Type $ACCOUNT_DELETION_CONFIRMATION to delete the account.")
+            }.create()
+        projectDialogs[dialog] = cal.session.token
+        dialog.setOnDismissListener { projectDialogs.remove(dialog) }
+        dialog.setOnShowListener {
+            val confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            confirm.isEnabled = false
+            typed.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    confirm.isEnabled = isAccountDeletionConfirmed(s?.toString().orEmpty())
+                }
+            })
+        }
+        dialog.show()
+    }
+
+    private fun deleteAccount(cal: AccountCalendar) {
+        val session = cal.session
+        if (deleting || sessions.current()?.token != session.token) return
+        deleting = true
+        status = "Deleting account…"
+        render()
+        AccountSync.deleteAccount(applicationContext, session) { error -> runOnUiThread {
+            deleting = false
+            val deleted = error == null || error is LocalWipeIncomplete
+            if (deleted) {
+                player?.release(); player = null
+                cal.media.activeRecording()?.let { MeetingRecordingService.requestStop(this, it.id, "user") }
+                AccountSyncJob.periodic(this, false)
+                transcriptLoads.keys.removeAll { it.startsWith(session.scope + "/") }
+                selected = null
+            }
+            status = when {
+                error == null -> "Account deleted. Recordings on this phone move to your personal library."
+                error is LocalWipeIncomplete -> "Account deleted. Some of its data cached on this phone could not be removed."
+                error is AccountHttpError && error.reason == "deletion_disabled" ->
+                    "Account deletion is not available on this server. Nothing was changed."
+                error is AccountHttpError && error.status == 401 -> "Session expired. Sign in to continue."
+                error is AccountHttpError -> "Could not delete the account (HTTP ${error.status}). Nothing was changed."
+                else -> "Could not delete the account. Check the connection; nothing was changed."
+            }
+            message(status)
+            if (!isFinishing && !isDestroyed) render()
+        } }
     }
 
     private fun playLocalFile(cal: AccountCalendar, file: java.io.File) {
@@ -579,6 +687,13 @@ class AccountCalendarActivity : Activity() {
         }
     }
     companion object { const val EXTRA_DAY = "accountCalendarDay" }
+}
+
+private sealed interface TranscriptLoad {
+    object Loading : TranscriptLoad
+    object Missing : TranscriptLoad
+    data class Failed(val reason: String) : TranscriptLoad
+    data class Loaded(val text: String) : TranscriptLoad
 }
 
 internal fun isApprovedGoogleAuthUrl(raw: String): Boolean {

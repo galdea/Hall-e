@@ -41,11 +41,13 @@ internal class AccountCalendar internal constructor(
     private val mediaStore: MobileMeetingStore?,
     private val recoverAudio: () -> Unit = { mediaStore?.recoverInterrupted() },
     private val completedAudioFile: (String) -> File? = { mediaStore?.completedAudio(it) },
+    private val transcripts: AccountTranscriptCache? = null,
 ) {
     constructor(context: Context, session: AccountSession) : this(
         session = session,
         storage = PrefsCalendarStorage(context, session.scope),
         mediaStore = MobileMeetingStore(context, session.scope),
+        transcripts = AccountTranscriptCache(context, session.scope),
     )
 
     val media: MobileMeetingStore get() = requireNotNull(mediaStore)
@@ -130,13 +132,91 @@ internal class AccountCalendar internal constructor(
     }
 
     private fun pullSnapshot(request: (String, String, JSONObject?, ByteArray?) -> JSONObject, force: Boolean) {
-        val prior = if (force) null else storage.getString("version", null)
-        val path = snapshotPath(prior)
-        val reply = request(path, "GET", null, null)
-        if (reply.optBoolean("unchanged") && path != "/meetings" && reply.optString("version") == prior) return
+        val prior = (if (force) null else storage.getString("version", null))?.takeIf { it.matches(versionFormat) }
+        val reply = request(snapshotPath(prior), "GET", null, null)
+        if (reply.optBoolean("unchanged") && prior != null && reply.optString("version") == prior) return
         val list = reply.getJSONArray("meetings")
         val version = reply.optNullableString("version")?.takeIf { it.matches(versionFormat) }
         check(storage.commit(mapOf("snapshot" to list.toString(), "version" to version)))
+        evictTranscripts()
+    }
+
+    private fun remoteRecording(meetingId: String, recordingId: String): JSONObject? = cached()
+        .firstOrNull { it.getString("id") == meetingId }?.optJSONArray("recordings")?.objects()
+        ?.firstOrNull { it.optString("id").equals(recordingId, true) }
+
+    private fun keepsTranscript(recording: JSONObject?) = recording != null && recording.opt("transcriptAvailable") != false
+
+    // Cached transcripts follow the snapshot: a recording that left it, or reports no transcript, loses its copy.
+    private fun evictTranscripts() {
+        val listed = cached().flatMap { (it.optJSONArray("recordings") ?: JSONArray()).objects() }
+            .filter(::keepsTranscript).map { it.optString("id") }.toSet()
+        transcripts?.retain(listed)
+    }
+
+    /** The phone's copy of a lazily served transcript, when it matches the size the agenda announces. */
+    fun cachedTranscript(recording: JSONObject): String? {
+        if (!hasRemoteTranscript(recording)) return null
+        val id = recording.optString("id")
+        if (runCatching { UUID.fromString(id) }.isFailure) return null
+        return transcripts?.read(id, transcriptBytes(recording))
+    }
+
+    /**
+     * Returns a recording's transcript from the phone cache or `GET meetings/:id/recordings/:rid/transcript`, and null
+     * when the service has none (404). The copy is kept only while the snapshot still lists the recording.
+     */
+    fun loadTranscript(meetingId: String, recordingId: String, fetch: (String) -> String): String? {
+        val recording = UUID.fromString(recordingId).toString()
+        val path = meetingPath(meetingId) + "/recordings/" + recording + "/transcript"
+        remoteRecording(meetingId, recording)?.let(::cachedTranscript)?.let { return it }
+        val text = try { fetch(path) } catch (error: AccountHttpError) {
+            if (error.status == 404) return null
+            throw error
+        }
+        transcripts?.write(recording, text) { keepsTranscript(remoteRecording(meetingId, recording)) }
+        return text
+    }
+
+    private val featureSession: String get() =
+        MessageDigest.getInstance("SHA-256").digest(("features\n" + session.token).toByteArray()).hex()
+
+    /** Capabilities cached for this signed-in session; none until [refreshFeatures] has succeeded once. */
+    fun features(): AccountFeatures = objectFor("features")?.takeIf { it.optString("session") == featureSession }
+        ?.let(AccountFeatures::from) ?: AccountFeatures.NONE
+
+    /** Reads `features` from `GET /auth/session` once per signed-in session. */
+    fun refreshFeatures(request: (String, String, JSONObject?, ByteArray?) -> JSONObject): AccountFeatures {
+        objectFor("features")?.takeIf { it.optString("session") == featureSession }?.let { return AccountFeatures.from(it) }
+        val reply = request("/auth/session", "GET", null, null)
+        check(reply.optNullableString("userId")?.let { it == session.userId } != false) { "Session belongs to another account." }
+        val features = AccountFeatures.from(reply)
+        save("features", JSONObject().put("session", featureSession).put("features", features.json()))
+        return features
+    }
+
+    /**
+     * Deletes the account on the service (`POST account/delete`). Only after `202 {"status": "deleting"}` does it
+     * [keepRecordings] (hand the phone recordings to the personal library), remove this account's snapshot, version,
+     * outbox, capabilities and cached transcripts, and [forgetSession]. Any error before that changes nothing on the phone.
+     */
+    fun deleteAccount(request: (String, String, JSONObject?, ByteArray?) -> JSONObject,
+                      keepRecordings: () -> Unit = {}, forgetSession: () -> Unit) {
+        val reply = request("/account/delete", "POST", JSONObject().put("confirmation", ACCOUNT_DELETION_CONFIRMATION), null)
+        check(reply.optString("status") == "deleting") { "Unexpected account deletion reply." }
+        var failure: Exception? = null
+        try {
+            try { keepRecordings() } catch (error: Exception) { failure = error }
+            try { forgetAccount() } catch (error: Exception) { failure = failure ?: error }
+        } finally { forgetSession() }
+        failure?.let { throw LocalWipeIncomplete(it) }
+    }
+
+    /** Removes everything this class stores for the account. Recordings in [MobileMeetingStore] are not touched. */
+    internal fun forgetAccount() {
+        val stored = storage.commit(keys("").associateWith { null })
+        val cleared = transcripts?.clear() ?: true
+        check(stored && cleared) { "Phone storage is unavailable." }
     }
 
     private fun isRemotelyDeleted(meetingId: String): Boolean =
@@ -239,6 +319,7 @@ internal class AccountCalendar internal constructor(
                 .filter { !it.optString("id").equals(recording, true) }))
         }
         check(storage.commit(mapOf("snapshot" to JSONArray(snapshot).toString(), "version" to null)))
+        evictTranscripts()
         return true
     }
 
@@ -248,8 +329,9 @@ internal class AccountCalendar internal constructor(
 internal fun isDiscardableRecording(recording: JSONObject) = recording.optString("status") in setOf("review", "failed")
 
 private val versionFormat = Regex("[0-9a-f]{32}")
+// Recordings carry metadata only; servers that predate lazy transcripts ignore the parameter and send them inline.
 internal fun snapshotPath(version: String?) = if (version != null && version.matches(versionFormat))
-    "/meetings?since=$version" else "/meetings"
+    "/meetings?transcripts=lazy&since=$version" else "/meetings?transcripts=lazy"
 
 internal fun sendAccountRecording(id: String, state: JSONObject, file: File,
                                  request: (String, String, JSONObject?, ByteArray?) -> JSONObject,
