@@ -233,6 +233,14 @@ class AccountCalendarActivity : Activity() {
         for (r in remote) {
             line("Recording · " + r.getString("status") + (r.optNullableString("detail")?.let { " · $it" } ?: ""))
             r.optNullableString("transcript")?.let { line(it) }
+            if (isDiscardableRecording(r)) action("Discard recording…") {
+                AlertDialog.Builder(this).setTitle("Discard this recording from your account?")
+                    .setMessage("The service stopped on this recording. Discarding removes its audio and any transcript draft " +
+                        "from your account on all devices. A copy kept on this phone is not deleted.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Discard") { _, _ -> discardRecording(cal, id, r.getString("id")) }
+                    .showFor(cal)
+            }
         }
         for (draft in cal.recordings(id)) {
             val queue = cal.upload(draft.id)
@@ -279,6 +287,29 @@ class AccountCalendarActivity : Activity() {
             }
             audio.prepareAsync()
         }.onFailure { audio.release(); player = null; message("The phone copy could not be played.") }
+    }
+
+    private fun discardRecording(cal: AccountCalendar, meetingId: String, recordingId: String) {
+        val session = cal.session
+        auth.execute {
+            val result = runCatching {
+                cal.discardRemoteRecording(meetingId, recordingId) { path, method, body, bytes ->
+                    if (sessions.current()?.token != session.token) throw java.io.IOException("Session changed")
+                    AccountTransport.request(session.origin, path, method, session.token, body, bytes)
+                }
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess { discarded ->
+                    message(if (discarded) "Recording discarded." else "This recording is still being processed and cannot be discarded.")
+                }.onFailure { error ->
+                    if (error is AccountHttpError && error.status == 401) sessions.logout(session, false)
+                    message(if (error is AccountHttpError) "Could not discard the recording (HTTP ${error.status})."
+                        else "Could not discard the recording. Check the connection and try again.")
+                }
+                render(); sync()
+            }
+        }
     }
 
     private fun changed() { AccountSyncJob.schedule(this); render(); sync() }

@@ -8,6 +8,18 @@ import org.junit.rules.TemporaryFolder
 import java.io.IOException
 import java.util.UUID
 
+internal class MemoryCalendarStorage : CalendarStorage {
+    private val data = mutableMapOf<String, String>()
+    override fun getString(key: String, default: String?): String? = data[key] ?: default
+    override fun keys(prefix: String): List<String> = data.keys.filter { it.startsWith(prefix) }.sorted()
+    override fun commit(edits: Map<String, String?>): Boolean {
+        for ((k, v) in edits) {
+            if (v == null) data.remove(k) else data[k] = v
+        }
+        return true
+    }
+}
+
 class AccountRecordingTest {
     @get:Rule val tmp = TemporaryFolder()
     private val rid = UUID.randomUUID().toString()
@@ -107,16 +119,96 @@ class AccountRecordingTest {
         assertEquals(setOf(0,1), parts)
     }
 
-    private class MemoryCalendarStorage : CalendarStorage {
-        private val data = mutableMapOf<String, String>()
-        override fun getString(key: String, default: String?): String? = data[key] ?: default
-        override fun keys(prefix: String): List<String> = data.keys.filter { it.startsWith(prefix) }.sorted()
-        override fun commit(edits: Map<String, String?>): Boolean {
-            for ((k, v) in edits) {
-                if (v == null) data.remove(k) else data[k] = v
+    @Test fun missingPartsRecoverySendsEachPartOncePerCycle() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(10) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 2)
+        val puts = mutableMapOf<Int, Int>()
+        val stored = mutableMapOf<Int, ByteArray>()
+        var completions = 0
+        sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+            when {
+                bytes != null -> {
+                    val index = path.substringAfterLast("/").toInt()
+                    puts[index] = (puts[index] ?: 0) + 1
+                    stored[index] = bytes
+                    JSONObject()
+                }
+                path.endsWith("/complete") -> {
+                    completions++
+                    // The expired upload was recreated by the manifest PUT, so parts 0 and 1 are gone.
+                    if (stored.size != 4) throw AccountHttpError(409, "missing_parts")
+                    JSONObject()
+                }
+                else -> JSONObject().put("status", "uploading").put("partSize", 3)
             }
-            return true
+        }) {}
+        assertEquals(mapOf(0 to 1, 1 to 1, 2 to 1, 3 to 1), puts.toSortedMap())
+        assertEquals(2, completions)
+        assertArrayEquals(file.readBytes(), stored.toSortedMap().values.fold(byteArrayOf()) { acc, raw -> acc + raw })
+        assertEquals(4, state.getInt("nextPart"))
+    }
+
+    @Test fun missingPartsOnAFreshUploadResendsEveryPartOnce() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(6) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 0)
+        val puts = mutableMapOf<Int, Int>()
+        val stored = mutableMapOf<Int, ByteArray>()
+        var loseOnce = true
+        var completions = 0
+        sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+            when {
+                bytes != null -> {
+                    val index = path.substringAfterLast("/").toInt()
+                    puts[index] = (puts[index] ?: 0) + 1
+                    stored[index] = bytes
+                    JSONObject()
+                }
+                path.endsWith("/complete") -> {
+                    completions++
+                    // Storage lost part 1 after it was acknowledged; the server marks it unstored.
+                    if (loseOnce) { loseOnce = false; stored.remove(1) }
+                    if (stored.size != 2) throw AccountHttpError(409, "missing_parts")
+                    JSONObject()
+                }
+                else -> JSONObject().put("status", "uploading").put("partSize", 3)
+            }
+        }) {}
+        assertEquals(mapOf(0 to 2, 1 to 2), puts.toSortedMap())
+        assertEquals(2, completions)
+        assertArrayEquals(file.readBytes(), stored.toSortedMap().values.fold(byteArrayOf()) { acc, raw -> acc + raw })
+        assertEquals(2, state.getInt("nextPart"))
+    }
+
+    @Test fun missingPartsRecoveryRunsOnlyOncePerCycle() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(6) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 0)
+        var puts = 0
+        var completions = 0
+        val error = assertThrows(AccountHttpError::class.java) {
+            sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+                if (bytes != null) puts++
+                if (path.endsWith("/complete")) { completions++; throw AccountHttpError(409, "missing_parts") }
+                JSONObject().put("status", "uploading").put("partSize", 3)
+            }) {}
         }
+        assertEquals("missing_parts", error.reason)
+        assertEquals(4, puts)
+        assertEquals(2, completions)
+    }
+
+    @Test fun otherCompletionConflictsAreNotRetried() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(6) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 1)
+        var puts = 0
+        val error = assertThrows(AccountHttpError::class.java) {
+            sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+                if (bytes != null) puts++
+                if (path.endsWith("/complete")) throw AccountHttpError(409, "digest_mismatch")
+                JSONObject().put("status", "uploading").put("partSize", 3)
+            }) {}
+        }
+        assertEquals("digest_mismatch", error.reason)
+        assertEquals(1, puts)
     }
 
     @Test fun syncReconcilesRemoteDeleteBeforeUploadAndSupportsRetryAndDiscard() {

@@ -219,8 +219,33 @@ internal class AccountCalendar internal constructor(
         }
     }
 
+    /**
+     * Ends an account recording the service stopped on (`review` or `failed`). The server answers 204, also on a
+     * retry, and `409 recording_active` when the recording is not in a discardable state; that returns false.
+     */
+    fun discardRemoteRecording(meetingId: String, recordingId: String,
+                               request: (String, String, JSONObject?, ByteArray?) -> JSONObject): Boolean {
+        val recording = UUID.fromString(recordingId).toString()
+        try {
+            request(meetingPath(meetingId) + "/recordings/" + recording, "DELETE", null, null)
+        } catch (error: AccountHttpError) {
+            if (error.status == 409 && error.reason == "recording_active") return false
+            throw error
+        }
+        // Hide it until the next full pull confirms the disposal.
+        val snapshot = cached().map { row ->
+            if (row.getString("id") != meetingId) row
+            else row.put("recordings", JSONArray((row.optJSONArray("recordings") ?: JSONArray()).objects()
+                .filter { !it.optString("id").equals(recording, true) }))
+        }
+        check(storage.commit(mapOf("snapshot" to JSONArray(snapshot).toString(), "version" to null)))
+        return true
+    }
+
     private fun permanent(status: Int) = status in 400..499 && status !in listOf(401, 408, 425, 429)
 }
+
+internal fun isDiscardableRecording(recording: JSONObject) = recording.optString("status") in setOf("review", "failed")
 
 private val versionFormat = Regex("[0-9a-f]{32}")
 internal fun snapshotPath(version: String?) = if (version != null && version.matches(versionFormat))
@@ -250,27 +275,29 @@ internal fun sendAccountRecording(id: String, state: JSONObject, file: File,
     if (remote.getString("status") != "uploading") return
     val partSize = remote.getInt("partSize")
     require(partSize in 1..8*1024*1024)
-    fun transferAndComplete() {
-        var index = state.getInt("nextPart")
+    val partCount = ((size + partSize - 1) / partSize).toInt()
+    fun transfer(from: Int, until: Int, sent: (Int) -> Unit) {
         RandomAccessFile(file, "r").use { input ->
-            input.seek(index.toLong() * partSize)
-            while (input.filePointer < size) {
+            for (index in from until until) {
+                input.seek(index.toLong() * partSize)
                 val bytes = ByteArray(minOf(size - input.filePointer, partSize.toLong()).toInt())
                 input.readFully(bytes)
                 request("$path/parts/$index", "PUT", null, bytes)
-                index++
-                state.put("nextPart", index)
-                checkpoint()
+                sent(index + 1)
             }
         }
-        request("$path/complete", "POST", JSONObject(), null)
     }
-    val resumed = state.getInt("nextPart") > 0
-    try { transferAndComplete() } catch (e: AccountHttpError) {
-        // Inactive uploads can expire while the phone is offline. Recreate just the missing manifest's bytes.
-        if (!resumed || e.status != 409 || e.reason != "missing_parts") throw e
-        state.put("nextPart", 0)
-        checkpoint()
-        transferAndComplete()
+    fun complete() { request("$path/complete", "POST", JSONObject(), null) }
+    val resumeFrom = state.getInt("nextPart").coerceIn(0, partCount)
+    transfer(resumeFrom, partCount) { state.put("nextPart", it); checkpoint() }
+    try { complete() } catch (e: AccountHttpError) {
+        if (e.status != 409 || e.reason != "missing_parts") throw e
+        // The server reports only that parts are missing, and marks them unstored, so re-send once:
+        // - resumed upload: it may have expired while the phone was offline, and the parts at or above resumeFrom
+        //   were just sent to the recreated upload, so only the earlier parts are replayed;
+        // - fresh upload (or nothing earlier to replay): storage lost a part just sent, so every part is re-sent.
+        // nextPart stays at partCount: an interrupted replay restarts from part 0 in the next cycle.
+        transfer(0, if (resumeFrom == 0) partCount else resumeFrom) {}
+        complete()
     }
 }

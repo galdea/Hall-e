@@ -77,6 +77,7 @@ La prueba de runtime necesita Node con `node:sqlite`, Miniflare, esbuild y permi
 | `GET meetings`, `GET meetings?since=<version>` | Estado privado y marcas de borrado. Una versión vigente permite responder sin volver a leer ni enviar las transcripciones. |
 | `PUT meetings/:id` | Crear, cambiar o borrar con `baseRevision`, `mutationId` y, para borrar, `deleted: true`. Un conflicto devuelve HTTP 409. |
 | `PUT meetings/:id/recordings/:rid`, `PUT …/parts/:n`, `POST …/complete` | Consentimiento, manifiesto, partes numeradas desde cero y confirmación. `GET` del recurso de grabación devuelve estado y texto. |
+| `DELETE meetings/:id/recordings/:rid` | Descartar una grabación en estado `review` o `failed`, por ejemplo una transcripción que supera el límite. Responde 204, también al repetirse mientras se elimina; una grabación activa devuelve 409 `recording_active`. |
 | `PUT meetings/:id/imports/:importId`, `DELETE …/:importId` | Copiar o retirar una transcripción local que seleccionó el usuario. |
 
 Al empaquetar las aplicaciones para un servicio ya habilitado, configura `HALLE_ACCOUNT_ORIGIN` con su origen HTTPS. La dirección queda disponible en ambas pantallas de inicio de sesión. Una dirección elegida por el usuario tiene prioridad. Si se omite, la dirección inicial queda en blanco.
@@ -85,13 +86,15 @@ Al empaquetar las aplicaciones para un servicio ya habilitado, configura `HALLE_
 
 En staging, `ACCOUNT_STAGING_TESTER_EMAILS` acepta direcciones exactas separadas por comas. La comparación normaliza mayúsculas y espacios. Una cadena vacía cierra el acceso. El servicio envía códigos solo a direcciones admitidas y comprueba el correo verificado por Google antes de crear o vincular una identidad. Al retirar todas las direcciones de una cuenta, sus sesiones pierden acceso a la agenda en la siguiente petición. La variable se omite en los entornos con inscripción abierta.
 
-El proceso de transcripción comprueba `ACCOUNT_ENABLE_TRANSCRIPTION` y la configuración del proveedor. Deepgram usa `ACCOUNT_DEEPGRAM_KEY`. Speechmatics usa `ACCOUNT_SPEECHMATICS_KEY`, una `ACCOUNT_SPEECHMATICS_REGION` que coincida con la consentida y `ACCOUNT_SPEECHMATICS_TRAINING_OPT_OUT` confirmado por el operador. La opción Android de esta versión identifica la región europea. El job queda pendiente si la configuración necesaria no está disponible. El cron procesa como máximo un trabajo por invocación.
+El proceso de transcripción comprueba `ACCOUNT_ENABLE_TRANSCRIPTION` y la configuración del proveedor. Deepgram usa `ACCOUNT_DEEPGRAM_KEY`. Speechmatics usa `ACCOUNT_SPEECHMATICS_KEY`, una `ACCOUNT_SPEECHMATICS_REGION` que coincida con la consentida y `ACCOUNT_SPEECHMATICS_TRAINING_OPT_OUT` confirmado por el operador. La opción Android de esta versión identifica la región europea. El job queda pendiente si la configuración necesaria no está disponible. El cron procesa como máximo un trabajo por invocación. Una grabación sin proveedor configurado no bloquea a las siguientes: el procesador salta hasta 16 trabajos en esa situación.
+
+Al borrar una reunión, el servicio guarda una marca sin horario (`1970-01-01T00:00:00.000Z` en inicio y fin), retira los proyectos que ya no usa ninguna reunión y empieza a eliminar el audio de R2 en ese momento; el cron queda como respaldo. `coordinator/account-retention.sql` aplica esa limpieza a filas anteriores y puede repetirse sin efectos.
 
 ## Revisión independiente y pruebas
 
 La [batería de historias de usuario](historias-cuenta-proyectos.md) cubre también la relación entre reuniones y proyectos en Mac y Android.
 
-Participaron dos modelos internos. **gpt-6.2-astra** revisó la arquitectura, identificó la frontera del coordinador de emparejamiento y comprobó el Worker sobre `workerd`. **gpt-6.2-sol** revisó privacidad y pruebas. Señaló el caso en que la carga incompleta caduca mientras el teléfono conserva un índice de parte antiguo. El cliente vuelve a enviar las partes ante `missing_parts`. Ambas revisiones coincidieron en que la idempotencia de una carga no demuestra que un proveedor externo haya aceptado o rechazado una petición cuya respuesta se perdió. Ese caso termina en revisión.
+La primera versión (`cef0539..40f93eb`) la revisaron dos modelos del mismo proveedor. **gpt-6.2-astra** revisó la arquitectura, identificó la frontera del coordinador de emparejamiento y comprobó el Worker sobre `workerd`. **gpt-6.2-sol** revisó privacidad y pruebas. Señaló el caso en que la carga incompleta caduca mientras el teléfono conserva un índice de parte antiguo. El cliente vuelve a enviar las partes ante `missing_parts`. Ambas revisiones coincidieron en que la idempotencia de una carga no demuestra que un proveedor externo haya aceptado o rechazado una petición cuya respuesta se perdió. Ese caso termina en revisión.
 
 | Capa | Evidencia |
 | --- | --- |
@@ -100,6 +103,12 @@ Participaron dos modelos internos. **gpt-6.2-astra** revisó la arquitectura, id
 | Runtime Cloudflare | `workerd`, D1 y R2 locales. Un tono AAC sintético de 440 Hz en un contenedor MPEG-4 de 8 MiB + 64 bytes se dividió en dos partes. Se repitieron una parte, el cierre y el cron. El proveedor simulado recibió un envío y ambas sesiones leyeron la transcripción. También se comprobó en ese runtime la carga multipart de Speechmatics, su único envío, la consulta del trabajo y su texto con hablante, además de Google con JWKS/PKCE y correo simulado. Se corrigió una incompatibilidad de `fetch` con redirecciones que no reproducía Node. |
 | Mac | Pasaron 56 pruebas en seis suites. Compilación Swift, prueba de pérdida de respuesta, reapertura de la cola y cambio de usuario con URLProtocol, Keychain simulado y archivos temporales. Pruebas de la agenda, fechas, captura, OAuth y adaptadores de transcripción. |
 | Android | Pasaron las 19 pruebas y se compiló el APK de depuración con Gradle 9.1 y SDK 36. Pruebas JVM del alcance de las cuentas, reanudación por partes y pérdida de la respuesta de confirmación. La grabación usa el servicio de micrófono existente. |
+
+### Revisión de seguimiento (21–22 de noviembre de 2026)
+
+Un agente de Gemini auditó `cef0539..40f93eb` y corrigió sus hallazgos. Claude (Opus 5.5), de otro proveedor, revisó esas correcciones y completó las pendientes: recuperación de partes perdidas en R2, descarte de grabaciones en revisión, marcas de borrado sin horario, limpieza inmediata del audio, conflictos con ambas versiones en Mac, reenvío único ante `missing_parts` en Android y aislamiento de staging respecto del coordinador de emparejamiento de producción. Evidencia local en el commit de la PR: 57 pruebas del coordinador, 289 de Swift Testing más XCTest, 40 pruebas JVM de Android (una de interoperabilidad omitida sin `HALL_E_NATIVE_QA`) y la prueba de runtime `workerd` con D1 y R2 locales.
+
+Límites conocidos: una transcripción de más de 512 KiB solo puede descartarse; guardarla requiere una decisión de producto. Ante `missing_parts` en una carga nueva, Android reenvía todas las partes una vez porque el servicio solo indica que faltan. El borrado completo de la cuenta y la paginación de la agenda están propuestos en `docs/architecture/decisions/0007-private-account-deletion-and-agenda-paging.md`.
 
 ## Qué falta verificar antes de usar cuentas reales
 
