@@ -329,13 +329,17 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         return File(recordingDirectory(), "$id.m4a").takeIf { it.isFile && it.length() > 0 }
     }
 
+    /** Removes the metadata and audio files. Refuses a recording in progress: the recorder must be stopped first. */
     internal fun deleteRecording(id: String): Boolean = synchronized(lock) {
         val values = readAll().toMutableList()
+        if (values.any { it.meeting.id == id && !canDeleteRecording(it.meeting.status) }) return@synchronized false
         val removed = values.removeAll { it.meeting.id == id }
+        // Commit the metadata first so a failed write never leaves a listed recording without its audio.
+        if (removed && !writeAll(values)) return@synchronized false
         val dir = recordingDirectory()
         File(dir, "$id.m4a").delete()
         File(dir, "$id.m4a.partial").delete()
-        !removed || writeAll(values)
+        true
     }
 
     private fun recordingDirectory() = accountScope?.let { File(context.noBackupFilesDir, "account-audio/$it") }

@@ -10,6 +10,16 @@ The Android companion is an agenda, reminder, and optional local recording app. 
 - The SDK path may be supplied through `ANDROID_HOME` or `ANDROID_SDK_ROOT`, or configured locally by Android Studio. `local.properties` is ignored.
 - For a signed release, set `ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. A release task fails if any value is missing. Keep keystores and passwords out of source control.
 
+### QA and staging APKs
+
+Build an APK that will go on a device from a clean tree, in `android/`: `HALLE_STAGING=1 HALLE_ACCOUNT_ORIGIN=https://… ./gradlew clean :app:assembleDebug` (omit both variables for a non-staging build). An incremental build once produced an APK that still contained an older compiled `MainActivity`, so device QA tested stale code. Before installing, check that the APK carries the change under test, for example by searching its dex files for a string the change adds:
+
+```bash
+unzip -p app/build/outputs/apk/debug/app-debug.apk 'classes*.dex' | strings | grep -F 'No finished audio file was saved'
+```
+
+No output means the APK is stale: rebuild with `clean` before installing.
+
 ## Calendar access and reminders
 
 Hall-e requests read-only calendar permission at runtime. It initially selects the calendars available on the device; the user can change that selection in Settings. It reads occurrences from `CalendarContract.Instances`, and excludes canceled or declined events. All-day entries appear in the agenda but do not trigger alerts. Occurrence identifiers include the calendar, event, and start time so recurring meetings can be scheduled separately. Changes to device time, timezone, date, boot state, or calendar provider request a reminder refresh. The app schedules the next 30 days of upcoming reminders and refreshes them when opened.

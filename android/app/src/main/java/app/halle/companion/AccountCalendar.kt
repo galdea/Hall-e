@@ -67,9 +67,12 @@ internal class AccountCalendar internal constructor(
     }
     fun orphanedRecordings(): List<MobileMeeting> =
         media.list().filter { recording -> recording.sourceEventKey?.let(::isOrphanedMeeting) == true }
-    fun deleteOrphanedRecording(recordingId: String) {
+    fun deleteOrphanedRecording(recordingId: String) { deleteLocalRecording(recordingId) }
+    /** Deletes a phone recording, then its upload-queue entry. False, changing nothing, while it is still recording. */
+    fun deleteLocalRecording(recordingId: String): Boolean {
+        if (!media.deleteRecording(recordingId)) return false
         discardUpload(recordingId)
-        media.deleteRecording(recordingId)
+        return true
     }
     fun upload(id: String) = objectFor("audio-$id")
     fun discard(id: String) { save("edit-$id", null) }

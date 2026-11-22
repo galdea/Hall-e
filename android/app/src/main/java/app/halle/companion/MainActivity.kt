@@ -59,6 +59,7 @@ class MainActivity : Activity() {
     private var previewMode = false
     private lateinit var meetingStore: MobileMeetingStore
     private var pendingRecordingId: String? = null
+    private var micAskedBefore = false
     private var mediaPlayer: MediaPlayer? = null
     private var playingMeetingId: String? = null
     private var pendingJoinUrl: String? = null
@@ -317,16 +318,21 @@ class MainActivity : Activity() {
                     actions.addView(button("Record") { requestRecording(meeting.id) })
                     actions.addView(button("Save without recording") { toast("Meeting saved on this phone.") })
                 }
-                if ((meeting.status == MobileMeetingStatus.RECORDED || meeting.status == MobileMeetingStatus.INTERRUPTED) &&
-                    meetingStore.playbackUri(meeting.id) != null) {
+                val offered = personalRecordingActions(meeting.status, playable = meetingStore.playbackUri(meeting.id) != null,
+                    partialFile = meeting.status == MobileMeetingStatus.INTERRUPTED && meetingStore.sharePartialFileIntent(meeting.id) != null)
+                if (PhoneRecordingAction.PLAY in offered) {
                     actions.addView(button(if (playingMeetingId == meeting.id) "Stop playback" else "Play") { togglePlayback(meeting) })
-                    actions.addView(button("Share audio") { shareRecording(meeting) })
                 }
-                if (meeting.status == MobileMeetingStatus.INTERRUPTED && meetingStore.sharePartialFileIntent(meeting.id) != null) {
+                if (PhoneRecordingAction.SHARE_AUDIO in offered) actions.addView(button("Share audio") { shareRecording(meeting) })
+                if (PhoneRecordingAction.SHARE_PARTIAL_FILE in offered) {
                     actions.addView(button("Share partial file…") { sharePartialRecordingFile(meeting) })
                 }
                 actions.addView(button("Project") { chooseMeetingProject(meeting) })
                 addView(actions)
+                if (PhoneRecordingAction.DELETE in offered) addView(button("Delete…") {
+                    confirmDeleteRecording(meeting, hasAudio = PhoneRecordingAction.PLAY in offered ||
+                        PhoneRecordingAction.SHARE_PARTIAL_FILE in offered)
+                })
             }
         }
     }
@@ -451,9 +457,12 @@ class MainActivity : Activity() {
         android.app.AlertDialog.Builder(this).setTitle("Record with this phone?")
             .setMessage("Hall-e records audio from this phone’s microphone only. It may not capture remote participants, and other audio apps may affect recording quality. Recording can require everyone’s consent.")
             .setPositiveButton("Continue") { _, _ ->
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                // Notifications are asked once alongside the microphone; recording starts whatever that answer is.
+                val request = prepareRecordingPermissions()
+                if (request.permissions.isNotEmpty()) {
                     pendingRecordingId = id
-                    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MICROPHONE)
+                    micAskedBefore = request.microphoneAskedBefore
+                    ActivityCompat.requestPermissions(this, request.permissions, REQUEST_MICROPHONE)
                 } else startRecording(id)
             }.setNegativeButton(if (pendingJoinUrl != null) "Join without recording" else "Not now") { _, _ ->
                 pendingJoinUrl?.let(::openMeeting)
@@ -596,6 +605,20 @@ class MainActivity : Activity() {
                 startActivity(Intent.createChooser(intent, "Share partial file · ${meeting.title}"))
             }
             .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun confirmDeleteRecording(meeting: MobileMeeting, hasAudio: Boolean) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete this recording?")
+            .setMessage(personalDeleteMessage(meeting.title, hasAudio, sharedSession = meeting.sharedSessionId != null))
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                if (playingMeetingId == meeting.id) { mediaPlayer?.release(); mediaPlayer = null; playingMeetingId = null }
+                toast(if (meetingStore.deleteRecording(meeting.id)) "Recording deleted from this phone."
+                    else "Could not delete the recording. Stop it first and check available storage.")
+                render()
+            }
             .show()
     }
 
@@ -835,9 +858,10 @@ class MainActivity : Activity() {
         ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_CALENDAR), REQUEST_CALENDAR)
     }
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33) ActivityCompat.requestPermissions(this,
-            arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
-        else toast("Notifications are controlled in Android Settings.")
+        if (Build.VERSION.SDK_INT >= 33) {
+            PermissionPrompts(this).markAsked(Manifest.permission.POST_NOTIFICATIONS)
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        } else toast("Notifications are controlled in Android Settings.")
     }
     private fun openExactAlarmSettings() {
         if (Build.VERSION.SDK_INT >= 31) runCatching {
@@ -855,12 +879,16 @@ class MainActivity : Activity() {
         }
         if (!previewMode && requestCode == REQUEST_MICROPHONE) {
             val id = pendingRecordingId
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && id != null) startRecording(id)
+            val microphone = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            if (microphone && id != null) startRecording(id)
             else {
                 pendingRecordingId = null
                 pendingJoinUrl?.let(::openMeeting)
                 pendingJoinUrl = null
                 toast("Microphone access was not granted. The meeting was saved without recording.")
+                // An empty result means the request was cancelled, not denied.
+                if (!microphone && grantResults.isNotEmpty() && Manifest.permission.RECORD_AUDIO in permissions &&
+                    microphoneNeedsSettings(micAskedBefore)) showMicrophoneSettingsDialog()
                 render()
             }
         }
