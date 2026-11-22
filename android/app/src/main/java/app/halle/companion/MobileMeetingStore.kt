@@ -329,6 +329,15 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         return File(recordingDirectory(), "$id.m4a").takeIf { it.isFile && it.length() > 0 }
     }
 
+    internal fun deleteRecording(id: String): Boolean = synchronized(lock) {
+        val values = readAll().toMutableList()
+        val removed = values.removeAll { it.meeting.id == id }
+        val dir = recordingDirectory()
+        File(dir, "$id.m4a").delete()
+        File(dir, "$id.m4a.partial").delete()
+        !removed || writeAll(values)
+    }
+
     private fun recordingDirectory() = accountScope?.let { File(context.noBackupFilesDir, "account-audio/$it") }
         ?: File(context.filesDir, RECORDINGS_DIRECTORY)
 

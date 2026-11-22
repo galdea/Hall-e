@@ -8,6 +8,18 @@ import org.junit.rules.TemporaryFolder
 import java.io.IOException
 import java.util.UUID
 
+internal class MemoryCalendarStorage : CalendarStorage {
+    private val data = mutableMapOf<String, String>()
+    override fun getString(key: String, default: String?): String? = data[key] ?: default
+    override fun keys(prefix: String): List<String> = data.keys.filter { it.startsWith(prefix) }.sorted()
+    override fun commit(edits: Map<String, String?>): Boolean {
+        for ((k, v) in edits) {
+            if (v == null) data.remove(k) else data[k] = v
+        }
+        return true
+    }
+}
+
 class AccountRecordingTest {
     @get:Rule val tmp = TemporaryFolder()
     private val rid = UUID.randomUUID().toString()
@@ -105,5 +117,206 @@ class AccountRecordingTest {
             JSONObject().put("status", "uploading").put("partSize", 3)
         }) {}
         assertEquals(setOf(0,1), parts)
+    }
+
+    @Test fun missingPartsRecoverySendsEachPartOncePerCycle() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(10) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 2)
+        val puts = mutableMapOf<Int, Int>()
+        val stored = mutableMapOf<Int, ByteArray>()
+        var completions = 0
+        sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+            when {
+                bytes != null -> {
+                    val index = path.substringAfterLast("/").toInt()
+                    puts[index] = (puts[index] ?: 0) + 1
+                    stored[index] = bytes
+                    JSONObject()
+                }
+                path.endsWith("/complete") -> {
+                    completions++
+                    // The expired upload was recreated by the manifest PUT, so parts 0 and 1 are gone.
+                    if (stored.size != 4) throw AccountHttpError(409, "missing_parts")
+                    JSONObject()
+                }
+                else -> JSONObject().put("status", "uploading").put("partSize", 3)
+            }
+        }) {}
+        assertEquals(mapOf(0 to 1, 1 to 1, 2 to 1, 3 to 1), puts.toSortedMap())
+        assertEquals(2, completions)
+        assertArrayEquals(file.readBytes(), stored.toSortedMap().values.fold(byteArrayOf()) { acc, raw -> acc + raw })
+        assertEquals(4, state.getInt("nextPart"))
+    }
+
+    @Test fun missingPartsOnAFreshUploadResendsEveryPartOnce() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(6) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 0)
+        val puts = mutableMapOf<Int, Int>()
+        val stored = mutableMapOf<Int, ByteArray>()
+        var loseOnce = true
+        var completions = 0
+        sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+            when {
+                bytes != null -> {
+                    val index = path.substringAfterLast("/").toInt()
+                    puts[index] = (puts[index] ?: 0) + 1
+                    stored[index] = bytes
+                    JSONObject()
+                }
+                path.endsWith("/complete") -> {
+                    completions++
+                    // Storage lost part 1 after it was acknowledged; the server marks it unstored.
+                    if (loseOnce) { loseOnce = false; stored.remove(1) }
+                    if (stored.size != 2) throw AccountHttpError(409, "missing_parts")
+                    JSONObject()
+                }
+                else -> JSONObject().put("status", "uploading").put("partSize", 3)
+            }
+        }) {}
+        assertEquals(mapOf(0 to 2, 1 to 2), puts.toSortedMap())
+        assertEquals(2, completions)
+        assertArrayEquals(file.readBytes(), stored.toSortedMap().values.fold(byteArrayOf()) { acc, raw -> acc + raw })
+        assertEquals(2, state.getInt("nextPart"))
+    }
+
+    @Test fun missingPartsRecoveryRunsOnlyOncePerCycle() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(6) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 0)
+        var puts = 0
+        var completions = 0
+        val error = assertThrows(AccountHttpError::class.java) {
+            sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+                if (bytes != null) puts++
+                if (path.endsWith("/complete")) { completions++; throw AccountHttpError(409, "missing_parts") }
+                JSONObject().put("status", "uploading").put("partSize", 3)
+            }) {}
+        }
+        assertEquals("missing_parts", error.reason)
+        assertEquals(4, puts)
+        assertEquals(2, completions)
+    }
+
+    @Test fun otherCompletionConflictsAreNotRetried() {
+        val file = tmp.newFile().apply { writeBytes(ByteArray(6) { it.toByte() }) }
+        val state = JSONObject().put("meeting", mid).put("provider", "deepgram").put("nextPart", 1)
+        var puts = 0
+        val error = assertThrows(AccountHttpError::class.java) {
+            sendAccountRecording(rid, state, file, { path, _, _, bytes ->
+                if (bytes != null) puts++
+                if (path.endsWith("/complete")) throw AccountHttpError(409, "digest_mismatch")
+                JSONObject().put("status", "uploading").put("partSize", 3)
+            }) {}
+        }
+        assertEquals("digest_mismatch", error.reason)
+        assertEquals(1, puts)
+    }
+
+    @Test fun syncReconcilesRemoteDeleteBeforeUploadAndSupportsRetryAndDiscard() {
+        val session = AccountSession("https://account.invalid", "user-1", "tok", Long.MAX_VALUE)
+        val storage = MemoryCalendarStorage()
+        val audioFile = tmp.newFile("sample.m4a").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val cal = AccountCalendar(session, storage, null, recoverAudio = {}, completedAudioFile = { if (it == rid) audioFile else null })
+        cal.enqueueAudio(mid, rid, "deepgram")
+        val calls = mutableListOf<String>()
+        cal.sync { path, method, _, _ ->
+            calls += "$method $path"
+            assertEquals("GET", method)
+            val deleted = JSONObject().put("id", mid).put("title", "").put("startAt", "2026-11-20T10:00:00Z")
+                .put("endAt", "2026-11-20T10:30:00Z").put("revision", 2).put("deleted", true)
+                .put("recordings", org.json.JSONArray())
+            JSONObject().put("version", "0123456789abcdef0123456789abcdef").put("meetings", org.json.JSONArray().put(deleted))
+        }
+        assertEquals(listOf("GET /meetings"), calls)
+        assertNull(cal.upload(rid))
+        assertTrue(audioFile.isFile)
+
+        // Permanent 409 marks problem; retryUpload clears problem; discardUpload removes outbox entry.
+        val liveId = UUID.randomUUID().toString()
+        cal.enqueueAudio(liveId, rid, "deepgram")
+        cal.sync { path, method, _, _ ->
+            if (method == "GET") {
+                val live = JSONObject().put("id", liveId).put("title", "Live").put("startAt", "2026-11-20T10:00:00Z")
+                    .put("endAt", "2026-11-20T10:30:00Z").put("revision", 1).put("deleted", false)
+                    .put("recordings", org.json.JSONArray())
+                JSONObject().put("version", "fedcba9876543210fedcba9876543210").put("meetings", org.json.JSONArray().put(live))
+            } else throw AccountHttpError(409, "manifest_conflict")
+        }
+        assertEquals(409, cal.upload(rid)!!.getInt("problem"))
+        cal.retryUpload(rid)
+        assertFalse(cal.upload(rid)!!.has("problem"))
+        cal.discardUpload(rid)
+        assertNull(cal.upload(rid))
+    }
+
+    @Test fun reapplyRebasesConflictedEditOntoLatestServerRevisionAndRejectsDeletedTarget() {
+        val session = AccountSession("https://account.invalid", "user-1", "tok", Long.MAX_VALUE)
+        val storage = MemoryCalendarStorage()
+        val cal = AccountCalendar(session, storage, null, recoverAudio = {}, completedAudioFile = { null })
+        val start = java.time.Instant.parse("2026-11-20T12:00:00Z")
+        val end = java.time.Instant.parse("2026-11-20T12:30:00Z")
+        cal.stage(mid, "Phone title", start, end, base = 1, deleting = false)
+        val originalMutation = cal.pending(mid)!!.getString("mutationId")
+        var serverRev = 2
+        var serverDeleted = false
+        cal.sync { _, method, _, _ ->
+            if (method == "PUT") throw AccountHttpError(409, "revision_conflict")
+            val row = JSONObject().put("id", mid).put("title", "Mac title").put("startAt", start.toString())
+                .put("endAt", end.toString()).put("revision", serverRev).put("deleted", serverDeleted)
+                .put("recordings", org.json.JSONArray())
+            JSONObject().put("version", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").put("meetings", org.json.JSONArray().put(row))
+        }
+        assertEquals(409, cal.pending(mid)!!.getInt("problem"))
+        cal.reapply(mid)
+        val rebased = cal.pending(mid)!!
+        assertFalse(rebased.has("problem"))
+        assertEquals(2, rebased.getInt("baseRevision"))
+        assertNotEquals(originalMutation, rebased.getString("mutationId"))
+
+        // If server later deletes the meeting and another conflict occurs, reapply refuses to resurrect it.
+        serverRev = 3
+        serverDeleted = true
+        cal.sync { _, method, _, _ ->
+            if (method == "PUT") throw AccountHttpError(409, "revision_conflict")
+            val row = JSONObject().put("id", mid).put("title", "").put("startAt", start.toString())
+                .put("endAt", end.toString()).put("revision", serverRev).put("deleted", true)
+                .put("recordings", org.json.JSONArray())
+            JSONObject().put("version", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").put("meetings", org.json.JSONArray().put(row))
+        }
+        assertThrows(IllegalStateException::class.java) { cal.reapply(mid) }
+    }
+
+    @Test fun orphanedRecordingsRequireAConfirmedRemoteDeletion() {
+        val session = AccountSession("https://account.invalid", "user-1", "tok", Long.MAX_VALUE)
+        val storage = MemoryCalendarStorage()
+        val cal = AccountCalendar(session, storage, null, recoverAudio = {}, completedAudioFile = { null })
+        val live = UUID.randomUUID().toString()
+        val gone = UUID.randomUUID().toString()
+        val conflicted = UUID.randomUUID().toString()
+        val missing = UUID.randomUUID().toString()
+        // Nothing pulled yet: no meeting is treated as deleted.
+        assertFalse(cal.isOrphanedMeeting(missing))
+
+        fun row(id: String, deleted: Boolean) = JSONObject().put("id", id).put("title", if (deleted) "" else "Meeting")
+            .put("startAt", "2026-11-20T10:00:00Z").put("endAt", "2026-11-20T10:30:00Z").put("revision", 2)
+            .put("deleted", deleted).put("recordings", org.json.JSONArray())
+        storage.commit(mapOf("snapshot" to org.json.JSONArray().put(row(live, false)).put(row(gone, true))
+            .put(row(conflicted, true)).toString()))
+        cal.stage(conflicted, "Phone edit", java.time.Instant.parse("2026-11-20T10:00:00Z"),
+            java.time.Instant.parse("2026-11-20T10:30:00Z"), base = 1, deleting = false)
+        storage.commit(mapOf("edit-$conflicted" to cal.pending(conflicted)!!.put("problem", 409).toString()))
+
+        assertFalse(cal.isOrphanedMeeting(live))
+        assertTrue(cal.isOrphanedMeeting(gone))
+        assertFalse(cal.isOrphanedMeeting(conflicted))
+        assertTrue(cal.isOrphanedMeeting(missing))
+    }
+
+    @Test fun googleAuthUrlValidationRequiresExactHostNoPortNoUserInfoAndExactPath() {
+        assertTrue(isApprovedGoogleAuthUrl("https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&state=xyz"))
+        assertFalse(isApprovedGoogleAuthUrl("http://accounts.google.com/o/oauth2/v2/auth"))
+        assertFalse(isApprovedGoogleAuthUrl("https://accounts.google.com:443/o/oauth2/v2/auth"))
+        assertFalse(isApprovedGoogleAuthUrl("https://user@accounts.google.com/o/oauth2/v2/auth"))
+        assertFalse(isApprovedGoogleAuthUrl("https://accounts.google.com/other"))
+        assertFalse(isApprovedGoogleAuthUrl("https://evil.example/o/oauth2/v2/auth"))
     }
 }

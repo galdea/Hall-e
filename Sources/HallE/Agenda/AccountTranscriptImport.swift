@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum TranscriptImportFailure: LocalizedError {
+enum TranscriptImportFailure: LocalizedError, Equatable {
     case unavailable, tooLarge
     var errorDescription: String? {
         switch self {
@@ -8,6 +8,33 @@ private enum TranscriptImportFailure: LocalizedError {
             PublicUICopy.text("This completed transcript is unavailable.", "Esta transcripción completada no está disponible.")
         case .tooLarge:
             PublicUICopy.text("This transcript exceeds the 512 KiB import limit.", "Esta transcripción supera el límite de 512 KiB.")
+        }
+    }
+}
+
+/// Client-side rules for copying a Mac transcript into the account. They mirror the account
+/// service's limits so an oversize or empty copy is refused before anything is sent.
+enum AccountTranscriptImportPolicy {
+    static let maxBytes = 512 * 1024
+
+    /// Returns the text to upload, or throws when it is empty or over the limit.
+    static func copy(plainText: String, speakerLabeledText: String) throws -> String {
+        guard !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !speakerLabeledText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { throw TranscriptImportFailure.unavailable }
+        guard speakerLabeledText.utf8.count <= maxBytes else { throw TranscriptImportFailure.tooLarge }
+        return speakerLabeledText
+    }
+
+    /// User-facing text for the import responses the sheet handles itself; nil for anything else.
+    static func message(for error: Error) -> String? {
+        switch error {
+        case AccountAgendaError.response(410, "import_removed"):
+            PublicUICopy.text("This account copy was removed.", "Esta copia se eliminó de la cuenta.")
+        case AccountAgendaError.response(409, "import_conflict"):
+            PublicUICopy.text("A copy of this transcript is already saved in the account.",
+                              "Ya existe una copia de esta transcripción en la cuenta.")
+        default: nil
         }
     }
 }
@@ -48,12 +75,7 @@ struct AccountTranscriptImportControls: View {
                 Button(text("Remove account copy", "Eliminar copia de la cuenta"), role: .destructive) {
                     Task {
                         await model.run {
-                            guard model.account == proposed.account else { throw AccountAgendaError.session }
-                            let token = proposed.account.credentials.token
-                            _ = try await AccountAPI(origin: proposed.account.origin).request(
-                                "DELETE", "meetings/\(meeting.id)/imports/\(proposed.recording.id)", token: token
-                            )
-                            try await model.synchronize(force: true)
+                            try await model.removeImportedTranscript(meetingId: meeting.id, importId: proposed.recording.id, from: proposed.account)
                         }
                     }
                 }
@@ -135,14 +157,11 @@ private struct TranscriptImportSheet: View {
             guard model.account == selection.account,
                   let session = sessions.first(where: { $0.id == selectedId }),
                   let transcript = TranscriptStore.load(session), transcript.status == .completed,
-                  transcript.sessionID == session.id,
-                  !transcript.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  transcript.sessionID == session.id
             else { throw TranscriptImportFailure.unavailable }
-            let copy = transcript.speakerLabeledText
-            guard copy.utf8.count <= 512 * 1024 else { throw TranscriptImportFailure.tooLarge }
-            let id = AccountCalendarCache.importID(source: "local-transcript:" + session.id.uuidString,
-                                                    origin: selection.account.origin,
-                                                    userId: selection.account.credentials.userId)
+            let copy = try AccountTranscriptImportPolicy.copy(plainText: transcript.plainText,
+                                                              speakerLabeledText: transcript.speakerLabeledText)
+            let id = AccountAgendaModel.transcriptImportID(meetingId: selection.meeting.id, sessionId: session.id, account: selection.account)
             draft = Draft(id: id, title: session.eventTitle, text: copy)
         } catch {
             self.error = error.localizedDescription
@@ -153,18 +172,11 @@ private struct TranscriptImportSheet: View {
         Task {
             await model.run {
                 do {
-                    guard model.account == selection.account else { throw AccountAgendaError.session }
-                    _ = try await AccountAPI(origin: selection.account.origin).request(
-                        "PUT", "meetings/\(selection.meeting.id)/imports/\(proposed.id)",
-                        token: selection.account.credentials.token, body: ["consent": true, "transcript": proposed.text]
-                    )
+                    try await model.importTranscript(meetingId: selection.meeting.id, importId: proposed.id,
+                                                     text: proposed.text, into: selection.account)
                     dismiss()
-                    try await model.synchronize(force: true)
-                } catch AccountAgendaError.response(410, "import_removed") {
-                    self.error = text("This account copy was removed.", "Esta copia se eliminó de la cuenta.")
-                } catch AccountAgendaError.response(409, "import_conflict") {
-                    self.error = text("A copy of this transcript is already saved in the account.",
-                                      "Ya existe una copia de esta transcripción en la cuenta.")
+                } catch let failure where AccountTranscriptImportPolicy.message(for: failure) != nil {
+                    self.error = AccountTranscriptImportPolicy.message(for: failure) ?? ""
                 } catch {
                     self.error = error.localizedDescription
                     throw error

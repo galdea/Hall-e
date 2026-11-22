@@ -8,7 +8,10 @@ import Security
 /// so a self-signed app without Apple-issued entitlements can store items whose
 /// ACL is keyed on our stable designated requirement.
 enum KeychainStore {
-    static let service = AppPaths.bundleID
+    static let service = service(isStaging: AppPaths.isStaging)
+
+    /// Staging and production keep their secrets under different Keychain services.
+    static func service(isStaging: Bool) -> String { AppPaths.bundleID(isStaging: isStaging) }
 
     enum KeychainError: Error, LocalizedError {
         case unexpectedStatus(OSStatus)

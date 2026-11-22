@@ -177,6 +177,8 @@ final class SharedMeetingCoordinator {
     private let credentialReader: () async throws -> String?
     private var credentialLoadGeneration = UUID()
     private var credentialLoadTask: Task<Void, Never>?
+    /// False in staging builds: the coordinator then behaves as unpaired and never sends a request.
+    let isAvailable: Bool
 
     private(set) var devices: [SharedDeviceRecord] = []
     private(set) var meetings: [SharedMeetingRecord] = []
@@ -197,8 +199,9 @@ final class SharedMeetingCoordinator {
 
     init(credentialReader: @escaping () async throws -> String? = {
         try await KeychainStore.getAsync(account: "shared-meetings-v1")
-    }) {
+    }, isAvailable: Bool = DistributionCapabilities.supportsSharedMeetingCoordinator) {
         self.credentialReader = credentialReader
+        self.isAvailable = isAvailable
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 8
         config.timeoutIntervalForResource = 10
@@ -209,11 +212,16 @@ final class SharedMeetingCoordinator {
                                                                            object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.loseLease("This Mac is sleeping. The shared recording was stopped.") }
         }
+        guard isAvailable else {
+            // A stale staging pairing must not turn local recordings into production shared sessions.
+            credentialsLoadState = .unpaired
+            return
+        }
         credentialLoadTask = Task { [weak self] in await self?.loadStoredCredentials() }
     }
 
     func retryCredentialLoad() async {
-        guard credentialsLoadState != .loading else { return }
+        guard isAvailable, credentialsLoadState != .loading else { return }
         beginAction()
         credentialLoadTask = Task { [weak self] in await self?.loadStoredCredentials() }
         await credentialLoadTask?.value
@@ -649,6 +657,7 @@ final class SharedMeetingCoordinator {
     }
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
                          config: SharedCredentials?, authenticated: Bool = true) async throws -> Data {
+        guard isAvailable else { throw SharedMeetingError.unavailable }
         let base = config?.endpoint ?? Self.endpoint
         guard base == Self.endpoint else { throw SharedMeetingError.invalidInvitation }
         let route = config.map { "/v1/workspaces/\($0.workspaceId)" + path } ?? path

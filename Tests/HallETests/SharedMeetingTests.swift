@@ -53,6 +53,25 @@ private actor CredentialReaderGate {
         #expect(coordinator.credentialsLoadState == .failed(TestCredentialReadDenied().localizedDescription))
     }
 
+    @MainActor @Test func unavailableCoordinatorStaysUnpairedWithoutReadingStoredPairing() async throws {
+        final class ReadCounter { var reads = 0 }
+        let counter = ReadCounter()
+        // A stale pairing saved by an older staging build must not be loaded or used.
+        let coordinator = SharedMeetingCoordinator(credentialReader: {
+            counter.reads += 1
+            return #"{"endpoint":"\#(SharedMeetingCoordinator.endpoint)","workspaceId":"w","deviceId":"d","deviceToken":"t","key":"k","owner":true}"#
+        }, isAvailable: false)
+        #expect(!coordinator.isAvailable)
+        #expect(coordinator.credentialsLoadState == .unpaired)
+        #expect(!coordinator.isPaired)
+
+        #expect(try await coordinator.prepareLocalCapture(event: Self.event(), requestedSessionID: nil) == nil)
+        await coordinator.retryCredentialLoad()
+        await coordinator.refresh()
+        #expect(coordinator.credentialsLoadState == .unpaired)
+        #expect(counter.reads == 0)
+    }
+
     private struct TestCredentialReadDenied: Error, LocalizedError {
         var errorDescription: String? { "Keychain access denied for test" }
     }

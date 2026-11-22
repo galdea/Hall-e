@@ -48,6 +48,8 @@ class SharedSessionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Staging builds must never reach the production pairing coordinator; MainActivity hides the entry point.
+        if (BuildConfig.STAGING) { finish(); return }
         client = SharedSessionClient(this)
         render()
         if (client.paired()) mainHandler.post(poll)

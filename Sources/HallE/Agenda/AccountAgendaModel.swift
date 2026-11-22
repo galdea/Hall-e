@@ -20,16 +20,35 @@ private struct AccountVault: Codable {
 
 @Observable @MainActor
 final class AccountAgendaModel {
-    static let shared = AccountAgendaModel()
+    static let shared = makeShared()
     fileprivate static let vaultKey = "private-agenda-sessions-v1"
     private static let optInKey = "private-agenda-initialized-v1"
     private static let originKey = "private-agenda-origin-v1"
+
+    static func makeShared(environment: [String: String] = ProcessInfo.processInfo.environment) -> AccountAgendaModel {
+        #if DEBUG
+        if environment["HALLE_DEBUG_FIXTURES"] == "1" {
+            // One fixed, wiped suite: never the real preferences, and no new plist per launch.
+            let suite = "cl.gabriel.hall-e.debug-fixtures"
+            let prefs = UserDefaults(suiteName: suite) ?? UserDefaults()
+            prefs.removePersistentDomain(forName: suite)
+            var inMemoryVault: String?
+            return AccountAgendaModel(
+                preferences: prefs,
+                loadVault: { inMemoryVault },
+                saveVault: { inMemoryVault = $0 }
+            )
+        }
+        #endif
+        return AccountAgendaModel()
+    }
 
     private let preferences: UserDefaults
     private let cacheRoot: () -> URL
     private let loadVault: () async throws -> String?
     private let saveVault: (String) async throws -> Void
     private let transport: URLSession
+    private let openURL: (URL) -> Bool
     private let stagingOrigin: URL?
 
     init(preferences: UserDefaults = .standard,
@@ -37,12 +56,14 @@ final class AccountAgendaModel {
          loadVault: @escaping () async throws -> String? = { try await KeychainStore.getAsync(account: AccountAgendaModel.vaultKey) },
          saveVault: @escaping (String) async throws -> Void = { try await KeychainStore.setAsync($0, account: AccountAgendaModel.vaultKey) },
          transport: URLSession = AccountAPI.session,
+         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
          packagedOrigin: String? = Bundle.main.object(forInfoDictionaryKey: "HallEAccountOrigin") as? String) {
         self.preferences = preferences
         self.cacheRoot = cacheRoot
         self.loadVault = loadVault
         self.saveVault = saveVault
         self.transport = transport
+        self.openURL = openURL
         self.stagingOrigin = AppPaths.isStaging ? (try? AccountAPI.origin(packagedOrigin ?? "")) : nil
         let preferredOrigin = preferences.string(forKey: Self.originKey) ?? packagedOrigin ?? ""
         self.endpoint = (try? AccountAPI.origin(preferredOrigin))?.absoluteString ?? ""
@@ -69,16 +90,25 @@ final class AccountAgendaModel {
     private var initialized = false
     private var vault = AccountVault()
     private var challengeOrigin: URL?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
     var account: AccountConnection? { vault.active }
     var canEdit: Bool { account != nil && cacheReady }
     private func file(_ connection: AccountConnection) -> URL {
         AccountCalendarCache.file(in: cacheRoot(), origin: connection.origin, userId: connection.credentials.userId)
     }
 
-    func run(_ operation: () async throws -> Void) async {
-        guard !busy else { return }
-        busy = true
-        defer { busy = false }
+    func run(background: Bool = false, _ operation: () async throws -> Void) async {
+        if busy {
+            if background { return }
+            await withCheckedContinuation { waiters.append($0) }
+            if Task.isCancelled {
+                releaseRunSlot()
+                return
+            }
+        } else {
+            busy = true
+        }
+        defer { releaseRunSlot() }
         do {
             try await initialize()
             try await operation()
@@ -86,6 +116,14 @@ final class AccountAgendaModel {
             return
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+    private func releaseRunSlot() {
+        if !waiters.isEmpty {
+            waiters.removeFirst().resume()
+        } else {
+            busy = false
         }
     }
 
@@ -168,7 +206,7 @@ final class AccountAgendaModel {
         let start = try await api.json(Start.self, "POST", "auth/browser/start", token: token, body: ["link": token != nil])
         guard let c = URLComponents(url: start.url, resolvingAgainstBaseURL: false),
               c.scheme == "https", c.host == "accounts.google.com", c.port == nil, c.user == nil,
-              c.password == nil, c.path == "/o/oauth2/v2/auth", NSWorkspace.shared.open(start.url) else { throw AccountAgendaError.browser }
+              c.password == nil, c.path == "/o/oauth2/v2/auth", openURL(start.url) else { throw AccountAgendaError.browser }
         browserToken = start.pollToken
         challengeOrigin = api.origin
         message = PublicUICopy.text("Enter the confirmation code shown by Hall-e in your browser.", "Introduce el código de confirmación que Hall-e muestra en el navegador.")
@@ -178,14 +216,19 @@ final class AccountAgendaModel {
         let (api, token) = try authContext()
         guard api.origin == challengeOrigin, let browserToken, confirmationCode.range(of: "^[0-9]{8}$", options: .regularExpression) != nil
         else { throw AccountAgendaError.invalidResponse }
-        let (status, data) = try await api.request("POST", "auth/browser/finish", token: token,
-                                                  body: ["pollToken": browserToken, "confirmationCode": confirmationCode])
-        if status == 202 {
-            message = PublicUICopy.text("Finish signing in in your browser, then confirm here.", "Termina el inicio de sesión en el navegador y confirma aquí.")
-            return
+        do {
+            let (status, data) = try await api.request("POST", "auth/browser/finish", token: token,
+                                                      body: ["pollToken": browserToken, "confirmationCode": confirmationCode])
+            if status == 202 {
+                message = PublicUICopy.text("Finish signing in in your browser, then confirm here.", "Termina el inicio de sesión en el navegador y confirma aquí.")
+                return
+            }
+            guard status == 200 else { throw AccountAgendaError.invalidResponse }
+            try await connect(try JSONDecoder().decode(AccountCredentials.self, from: data), api.origin)
+        } catch AccountAgendaError.response(let status, let code) {
+            if [403, 409, 410].contains(status) { resetChallenge() }
+            throw AccountAgendaError.response(status, code)
         }
-        guard status == 200 else { throw AccountAgendaError.invalidResponse }
-        try await connect(try JSONDecoder().decode(AccountCredentials.self, from: data), api.origin)
     }
 
     private func connect(_ creds: AccountCredentials, _ origin: URL) async throws {
@@ -240,9 +283,44 @@ final class AccountAgendaModel {
 
     func periodicSync() async {
         while !Task.isCancelled {
-            if preferences.bool(forKey: Self.optInKey) { await run { try await synchronize() } }
+            if preferences.bool(forKey: Self.optInKey) { await run(background: true) { try await synchronize() } }
             do { try await Task.sleep(for: .seconds(20)) } catch { return }
         }
+    }
+
+    static func transcriptImportID(meetingId: String, sessionId: UUID, account: AccountConnection) -> String {
+        AccountCalendarCache.importID(source: "local-transcript:\(meetingId):\(sessionId.uuidString)",
+                                      origin: account.origin,
+                                      userId: account.credentials.userId)
+    }
+
+    func importTranscript(meetingId: String, importId: String, text: String, into expected: AccountConnection) async throws {
+        guard account == expected else { throw AccountAgendaError.session }
+        _ = try await api(expected.origin).request(
+            "PUT", "meetings/\(meetingId)/imports/\(importId)",
+            token: expected.credentials.token, body: ["consent": true, "transcript": text]
+        )
+        try await synchronize(force: true)
+    }
+
+    func removeImportedTranscript(meetingId: String, importId: String, from expected: AccountConnection) async throws {
+        guard account == expected else { throw AccountAgendaError.session }
+        _ = try await api(expected.origin).request(
+            "DELETE", "meetings/\(meetingId)/imports/\(importId)",
+            token: expected.credentials.token
+        )
+        try await synchronize(force: true)
+    }
+
+    /// Ends a recording the service stopped on (`review` or `failed`). Only the owner can do this.
+    func discardRecording(meetingId: String, recording: AccountRecording, from expected: AccountConnection) async throws {
+        guard account == expected else { throw AccountAgendaError.session }
+        guard recording.canDiscard else { throw AccountAgendaError.response(409, "recording_active") }
+        _ = try await api(expected.origin).request(
+            "DELETE", "meetings/\(meetingId)/recordings/\(recording.id)",
+            token: expected.credentials.token
+        )
+        try await synchronize(force: true)
     }
 
     func enqueue(_ meeting: AccountMeeting) throws {
@@ -275,6 +353,16 @@ final class AccountAgendaModel {
         try update(next)
     }
 
+    func conflict(for mutation: AgendaMutation) -> AgendaConflict { cache.conflict(for: mutation) }
+
+    func saveAsNewMeeting(_ mutation: AgendaMutation) throws {
+        var next = cache
+        try next.saveAsNew(mutation)
+        try update(next)
+        message = PublicUICopy.text("Saved on this Mac as a new meeting. Waiting to sync.",
+                                    "Guardada en este Mac como una reunión nueva. Pendiente de sincronización.")
+    }
+
     func synchronize(force: Bool = false) async throws {
         await retryRevocations()
         guard let account else { return }
@@ -292,7 +380,7 @@ final class AccountAgendaModel {
                     var next = cache
                     next.acknowledge(edit, result: result.meeting)
                     try update(next)
-                } catch AccountAgendaError.response(let status, _) where status == 409 || status == 404 {
+                } catch AccountAgendaError.response(let status, _) where status >= 400 && status < 500 && ![401, 408, 425, 429].contains(status) {
                     var next = cache
                     if let i = next.pending.firstIndex(where: { $0.id == edit.id }) { next.pending[i].conflict = true }
                     try update(next)

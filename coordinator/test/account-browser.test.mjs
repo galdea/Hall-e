@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
+import {createAccountAuth} from "../src/account-auth.mjs";
 import {createBrowserAuth} from "../src/account-browser.mjs";
 import {openAccountDatabase} from "../test-support/account.mjs";
 
@@ -113,4 +114,64 @@ test("both the browser code and original native grant are required; five wrong c
   f.advance(300001);
   assert.equal((await f.post("finish", expired)).status,410);
   assert.equal(f.exchanges.length,0);
+});
+
+test("staging browser Google sign-in refuses a verified non-tester without creating a user, identity or session", async t => {
+  const db = openAccountDatabase();
+  t.after(() => db.close());
+  const clientId = "synthetic-client";
+  const env = {ACCOUNT_DB:db, ACCOUNT_AUTH_SECRET:"synthetic-proof-key-generated-for-this-fixture", ACCOUNT_GOOGLE_CLIENT_ID:clientId,
+    ACCOUNT_GOOGLE_CLIENT_SECRET:"synthetic-secret", ACCOUNT_PUBLIC_ORIGIN:origin, ACCOUNT_STAGING_TESTER_EMAILS:"halle-owner@example.test"};
+  const algorithm = {name:"RSASSA-PKCS1-v1_5", modulusLength:2048, publicExponent:new Uint8Array([1,0,1]), hash:"SHA-256"};
+  const keys = await crypto.subtle.generateKey(algorithm, false, ["sign","verify"]);
+  const jwk = {...await crypto.subtle.exportKey("jwk", keys.publicKey), kid:"fixture-key", alg:"RS256", use:"sig"};
+  const identity = createAccountAuth({fetchImpl: async url => {
+    assert.equal(url, "https://www.googleapis.com/oauth2/v3/certs");
+    return Response.json({keys:[jwk]});
+  }});
+  let signIn;
+  const exchanges = [];
+  async function idToken(nonce, email) {
+    const now = Math.floor(Date.now() / 1000);
+    const part = value => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const signed = part({alg:"RS256", kid:jwk.kid}) + "." + part({iss:"https://accounts.google.com", aud:clientId, exp:now + 300, iat:now,
+      nonce, sub:"synthetic-google-" + email, email, email_verified:true});
+    const signature = await crypto.subtle.sign(algorithm, keys.privateKey, new TextEncoder().encode(signed));
+    return signed + "." + Buffer.from(signature).toString("base64url");
+  }
+  const handle = createBrowserAuth({identity, async fetchImpl(url) {
+    assert.equal(url, "https://oauth2.googleapis.com/token");
+    exchanges.push(signIn.email);
+    return Response.json({id_token:await idToken(signIn.nonce, signIn.email)});
+  }});
+  const post = (action, body) => handle(new Request(path + action, {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body),
+  }), env);
+  const count = async table => (await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first()).n;
+  async function login(email) {
+    const {url, pollToken} = await (await post("start", {})).json();
+    const auth = new URL(url);
+    signIn = {email, nonce:auth.searchParams.get("nonce")};
+    const returned = await handle(new Request(path + "callback?" + new URLSearchParams({state:auth.searchParams.get("state"), code:"synthetic-code"})), env);
+    const confirmationCode = (await returned.text()).match(/\b\d{8}\b/)[0];
+    const response = await post("finish", {pollToken, confirmationCode});
+    return {status:response.status, body:await response.json()};
+  }
+
+  // Only Google's verified id_token names the account, so the code exchange precedes the roster check.
+  assert.deepEqual(await login("someone@example.test"), {status:403, body:{error:"tester_required"}});
+  assert.deepEqual(exchanges, ["someone@example.test"]);
+  for (const table of ["account_users","account_emails","account_identities","account_sessions","account_auth_challenges","account_browser_attempts"]) {
+    assert.equal(await count(table), 0, table);
+  }
+  const admitted = await login("halle-owner@example.test");
+  assert.equal(admitted.status, 200);
+  assert.ok(admitted.body.token);
+  assert.equal(await count("account_users"), 1);
+  assert.equal((await db.prepare("SELECT email FROM account_emails").first()).email, "halle-owner@example.test");
+  env.ACCOUNT_STAGING_TESTER_EMAILS = "";
+  const closed = await post("start", {});
+  assert.deepEqual([closed.status, await closed.json()], [403, {error:"tester_required"}]);
+  assert.equal(await count("account_browser_attempts"), 0);
+  assert.equal(exchanges.length, 2);
 });

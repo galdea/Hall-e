@@ -66,12 +66,13 @@ internal class AccountSessions(context: Context) {
         get() = prefs.getString("origin", null) ?: BuildConfig.ACCOUNT_ORIGIN
         set(value) { check(prefs.edit().putString("origin", accountOrigin(value)).commit()) }
 
-    private fun read(key: String) = prefs.getString(key, null)?.let {
-        JSONObject(String(AndroidVault.open(ALIAS, it), Charsets.UTF_8))
+    private fun read(key: String) = prefs.getString(key, null)?.let { encoded ->
+        runCatching { JSONObject(String(AndroidVault.open(ALIAS, encoded), Charsets.UTF_8)) }.getOrNull()
     }
     private fun encrypted(data: JSONObject) = AndroidVault.seal(ALIAS, data.toString().toByteArray())
     fun current(): AccountSession? = synchronized(lock) {
-        read("active")?.let { AccountSession.from(it.getString("origin"), it) }?.takeIf { it.expiresAt > System.currentTimeMillis() }
+        read("active")?.let { runCatching { AccountSession.from(it.getString("origin"), it) }.getOrNull() }
+            ?.takeIf { it.expiresAt > System.currentTimeMillis() }
     }
     fun save(value: AccountSession) = synchronized(lock) {
         check(prefs.edit().putString("active", encrypted(value.json())).putString("origin", value.origin).commit())
@@ -84,8 +85,9 @@ internal class AccountSessions(context: Context) {
     }
     fun revokePending() {
         prefs.all.keys.filter { it.startsWith("revoke-") }.forEach { key ->
-            val data = read(key) ?: return@forEach
-            val value = AccountSession.from(data.getString("origin"), data)
+            val data = read(key) ?: run { prefs.edit().remove(key).commit(); return@forEach }
+            val value = runCatching { AccountSession.from(data.getString("origin"), data) }.getOrNull()
+                ?: run { prefs.edit().remove(key).commit(); return@forEach }
             if (value.expiresAt > System.currentTimeMillis()) {
                 try { AccountTransport.request(value.origin, "/auth/logout", "POST", value.token, JSONObject()) }
                 catch (e: AccountHttpError) { if (e.status != 401) throw e }

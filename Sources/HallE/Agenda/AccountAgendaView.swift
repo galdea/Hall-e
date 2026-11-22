@@ -14,6 +14,14 @@ struct AccountAgendaView: View {
     @State private var choosingOccurrence = false
     @State private var link = false
     @State private var feedback = ""
+    @State private var discarding: RecordingDiscard?
+
+    private struct RecordingDiscard {
+        var meetingId: String
+        var meetingTitle: String
+        var recording: AccountRecording
+        var account: AccountConnection
+    }
 
     private func label(_ en: String, _ es: String) -> String { PublicUICopy.text(en, es) }
 
@@ -60,18 +68,7 @@ struct AccountAgendaView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(model.cache.pending.filter(\.conflict)) { change in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(label("This meeting changed on another device.", "Esta reunión cambió en otro dispositivo.")).bold()
-                                    Text(change.meeting.title + " · " + change.meeting.startAt + " — " + change.meeting.endAt).textSelection(.enabled)
-                                    if model.cache.meetings.contains(where: { $0.id == change.meeting.id && !$0.deleted }) {
-                                        Button(label("Apply my change to the current version", "Aplicar mi cambio a la versión actual")) {
-                                            local { try model.reapply(change); refresh() }
-                                        }
-                                    }
-                                    Button(label("Keep the server version", "Conservar la versión del servidor")) {
-                                        local { try model.keepServerVersion(change) }
-                                    }
-                                }.padding(8)
+                                conflictBanner(change, model.conflict(for: change))
                             }
                             if model.cache.visible.isEmpty {
                                 Text(label("No meetings in this account calendar.", "No hay reuniones en el calendario de esta cuenta."))
@@ -104,6 +101,7 @@ struct AccountAgendaView: View {
         .onChange(of: model.account) { _, new in
             editing = nil
             deleting = nil
+            discarding = nil
             choosingOccurrence = false
             link = false
             feedback = ""
@@ -125,6 +123,22 @@ struct AccountAgendaView: View {
             }
             Button(label("Cancel", "Cancelar"), role: .cancel) { }
         } message: { meeting in Text(meeting.title) }
+        .confirmationDialog(label("Discard this recording?", "¿Descartar esta grabación?"),
+                            isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } }),
+                            titleVisibility: .visible, presenting: discarding) { proposed in
+            Button(label("Discard recording", "Descartar grabación"), role: .destructive) {
+                Task {
+                    await model.run {
+                        try await model.discardRecording(meetingId: proposed.meetingId, recording: proposed.recording,
+                                                         from: proposed.account)
+                    }
+                }
+            }
+            Button(label("Cancel", "Cancelar"), role: .cancel) { }
+        } message: { proposed in
+            Text(label("The account service will delete this recording’s audio and any partial transcript from “\(proposed.meetingTitle)” on all your devices. The meeting itself stays.",
+                       "El servicio de cuentas eliminará el audio y cualquier transcripción parcial de esta grabación de «\(proposed.meetingTitle)» en todos tus dispositivos. La reunión se conserva."))
+        }
     }
 
     private var localCalendarPicker: some View {
@@ -222,6 +236,66 @@ struct AccountAgendaView: View {
         }
     }
 
+    private func conflictBanner(_ change: AgendaMutation, _ conflict: AgendaConflict) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch conflict.server {
+            case .live:
+                Text(label("This meeting changed on another device.", "Esta reunión cambió en otro dispositivo.")).bold()
+            case .deleted:
+                Text(label("Another device deleted this meeting.", "Otro dispositivo eliminó esta reunión.")).bold()
+            case .missing:
+                Text(label("The account service did not accept this change.", "El servicio de cuentas no aceptó este cambio.")).bold()
+            }
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label("On the server", "En el servidor")).font(.caption.bold()).foregroundStyle(.secondary)
+                    switch conflict.server {
+                    case .live(let server): conflictDetails(server)
+                    case .deleted: Text(label("Deleted", "Eliminada")).italic()
+                    case .missing: Text(label("Not saved on the server", "No está guardada en el servidor")).italic()
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label("Your change on this Mac", "Tu cambio en este Mac")).font(.caption.bold()).foregroundStyle(.secondary)
+                    if conflict.localDeletes {
+                        Text(label("Delete this meeting", "Eliminar esta reunión")).italic()
+                        Text(conflict.local.title).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        conflictDetails(conflict.local)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                if conflict.canReapply {
+                    Button(label("Apply my change to the current version", "Aplicar mi cambio a la versión actual")) {
+                        local { try model.reapply(change); refresh() }
+                    }
+                }
+                if conflict.canSaveAsNew {
+                    Button(label("Save my version as a new meeting", "Guardar mi versión como una reunión nueva")) {
+                        local { try model.saveAsNewMeeting(change); refresh() }
+                    }
+                }
+                Button(conflict.server == .missing ? label("Discard my change", "Descartar mi cambio")
+                                                   : label("Keep the server version", "Conservar la versión del servidor")) {
+                    local { try model.keepServerVersion(change) }
+                }
+            }
+        }
+        .padding(8)
+        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder private func conflictDetails(_ meeting: AccountMeeting) -> some View {
+        Text(meeting.title).textSelection(.enabled)
+        if let start = AccountMeeting.date(meeting.startAt), let end = AccountMeeting.date(meeting.endAt) {
+            Text(start.formatted() + " — " + end.formatted()).font(.caption)
+        } else {
+            Text(meeting.startAt + " — " + meeting.endAt).font(.caption)
+        }
+        Text(meeting.project?.name ?? label("No project", "Sin proyecto")).font(.caption).foregroundStyle(.secondary)
+    }
+
     private func meetingRow(_ meeting: AccountMeeting) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -241,8 +315,17 @@ struct AccountAgendaView: View {
             }
             ForEach(meeting.recordings.filter { $0.source != "local-import" }) { recording in
                 VStack(alignment: .leading, spacing: 4) {
-                    Label(label("Recording", "Grabación") + " · " + recording.status, systemImage: "waveform")
-                        .font(.callout)
+                    HStack {
+                        Label(label("Recording", "Grabación") + " · " + recording.status, systemImage: "waveform")
+                            .font(.callout)
+                        if recording.canDiscard, let account = model.account {
+                            Button(label("Discard recording…", "Descartar grabación…"), role: .destructive) {
+                                discarding = RecordingDiscard(meetingId: meeting.id, meetingTitle: meeting.title,
+                                                              recording: recording, account: account)
+                            }
+                            .disabled(model.busy || model.cache.pending.contains { $0.meeting.id == meeting.id })
+                        }
+                    }
                     if let transcript = recording.transcript, !transcript.isEmpty {
                         DisclosureGroup(label("Transcript", "Transcripción")) { Text(transcript).textSelection(.enabled) }
                     }

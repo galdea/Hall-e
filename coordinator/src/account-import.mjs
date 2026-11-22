@@ -52,7 +52,8 @@ export async function handleTranscriptImport(request, env, userId, meetingId, im
   ]);
   const row = result.results[0];
   if (!row) return fail("not_found", 404);
+  if (row.meeting_id !== meetingId) return fail("import_conflict", 409);
   if (row.transcript === null) return fail("import_removed", 410);
-  if (row.meeting_id !== meetingId || row.transcript !== body.transcript) return fail("import_conflict", 409);
+  if (row.transcript !== body.transcript) return fail("import_conflict", 409);
   return accountJSON({recording:view(row)});
 }

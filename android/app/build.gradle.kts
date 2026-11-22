@@ -21,6 +21,11 @@ val packagedAccountOrigin = providers.environmentVariable("HALLE_ACCOUNT_ORIGIN"
     URI("https", null, uri.host.lowercase(Locale.ROOT), if (uri.port == 443) -1 else uri.port,
         null, null, null).toASCIIString()
 }
+if (staging) {
+    require(packagedAccountOrigin.isNotEmpty()) {
+        "HALLE_STAGING=1 requires HALLE_ACCOUNT_ORIGIN to be set to the staging HTTPS origin."
+    }
+}
 
 android {
     namespace = "app.halle.companion"
@@ -37,15 +42,6 @@ android {
         buildConfigField("boolean", "STAGING", staging.toString())
         buildConfigField("String", "ACCOUNT_ORIGIN", "\"$packagedAccountOrigin\"")
         testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
-    }
-
-    if (staging) {
-        val tone = tasks.register<Sync>("prepareStagingTestTone") {
-            from(rootProject.file("../coordinator/test-support/phone-tone.mp4"))
-            into(layout.buildDirectory.dir("generated/staging-tone-assets"))
-        }
-        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/staging-tone-assets").get().asFile)
-        tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(tone) }
     }
 
     val releaseStorePath = System.getenv("ANDROID_KEYSTORE")
@@ -68,7 +64,8 @@ android {
         }
     }
     buildTypes {
-        debug { if (!staging) applicationIdSuffix = ".preview" }
+        // Staging debug gets its own suffix so it installs beside the staging release build.
+        debug { applicationIdSuffix = ".preview" }
         release {
             isMinifyEnabled = false
             if (signingConfigs.names.contains("release")) signingConfig = signingConfigs.getByName("release")
@@ -77,6 +74,36 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+/** Copies the synthetic staging tone into a variant's generated asset directory. */
+abstract class PrepareStagingTone : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val tone: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val directory = outputDir.get().asFile
+        directory.deleteRecursively()
+        check(directory.mkdirs()) { "Could not create $directory" }
+        tone.get().asFile.copyTo(directory.resolve("phone-tone.mp4"))
+    }
+}
+
+if (staging) {
+    val stagingTone = rootProject.layout.projectDirectory.file("../coordinator/test-support/phone-tone.mp4")
+    androidComponents {
+        onVariants { variant ->
+            val task = tasks.register<PrepareStagingTone>(
+                "prepare${variant.name.replaceFirstChar { it.uppercase() }}StagingTone") { tone.set(stagingTone) }
+            // AGP wires asset merging to the task output, so no preBuild dependency is needed.
+            variant.sources.assets?.addGeneratedSourceDirectory(task, PrepareStagingTone::outputDir)
+        }
     }
 }
 

@@ -110,6 +110,8 @@ class AccountCalendarActivity : Activity() {
             action("Sign in with email") { beginAuth(false, null) }
             if (usesStagingMailbox(sessions.lastOrigin)) {
                 line("Request one code per device. Open Hall-e Staging Code.command on the Mac to read it.", 14f)
+            } else action("Sign in with Google") { beginAuth(true, null) }
+            if (BuildConfig.STAGING) {
                 action("Change account server…") {
                     val server = input("HTTPS account server", sessions.lastOrigin)
                     AlertDialog.Builder(this).setTitle("Account server").setView(fields(server))
@@ -117,7 +119,7 @@ class AccountCalendarActivity : Activity() {
                             sessions.lastOrigin = accountOrigin(server.text.toString()); render()
                         } }.show()
                 }
-            } else action("Sign in with Google") { beginAuth(true, null) }
+            }
             return
         }
         val cal = AccountCalendar(this, session)
@@ -154,6 +156,23 @@ class AccountCalendarActivity : Activity() {
         for (id in cal.mutationIds()) {
             val pending = cal.pending(id) ?: continue
             if (pending.has("problem")) action("Resolve change · " + pending.getString("title")) { resolve(cal, id) }
+        }
+        val orphans = cal.orphanedRecordings()
+        if (orphans.isNotEmpty()) {
+            line("Local phone recordings from deleted meetings", 15f)
+            for (orphan in orphans) {
+                line(orphan.title + " · " + orphan.status.name.lowercase(), 14f)
+                cal.media.completedAudio(orphan.id)?.let { file ->
+                    action("Play phone copy · " + orphan.title) { playLocalFile(cal, file) }
+                }
+                action("Delete phone copy · " + orphan.title) {
+                    AlertDialog.Builder(this).setTitle("Delete local phone copy?")
+                        .setMessage("This meeting was deleted from your account. Deleting removes the audio file from this phone.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete") { _, _ -> cal.deleteOrphanedRecording(orphan.id); render() }
+                        .showFor(cal)
+                }
+            }
         }
         action("Copy a local meeting…") { importMeeting(cal) }
         if (!usesStagingMailbox(session.origin)) action("Link another sign-in method…") {
@@ -214,6 +233,14 @@ class AccountCalendarActivity : Activity() {
         for (r in remote) {
             line("Recording · " + r.getString("status") + (r.optNullableString("detail")?.let { " · $it" } ?: ""))
             r.optNullableString("transcript")?.let { line(it) }
+            if (isDiscardableRecording(r)) action("Discard recording…") {
+                AlertDialog.Builder(this).setTitle("Discard this recording from your account?")
+                    .setMessage("The service stopped on this recording. Discarding removes its audio and any transcript draft " +
+                        "from your account on all devices. A copy kept on this phone is not deleted.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Discard") { _, _ -> discardRecording(cal, id, r.getString("id")) }
+                    .showFor(cal)
+            }
         }
         for (draft in cal.recordings(id)) {
             val queue = cal.upload(draft.id)
@@ -227,23 +254,11 @@ class AccountCalendarActivity : Activity() {
             })
             draft.error?.let { line(it) }
             cal.media.completedAudio(draft.id)?.let { file ->
-                action("Play phone copy") {
-                    if (sessions.current()?.token == cal.session.token) {
-                        player?.release()
-                        val audio = android.media.MediaPlayer()
-                        player = audio
-                        runCatching {
-                            audio.setDataSource(file.absolutePath)
-                            audio.setOnPreparedListener { if (active && player === it) it.start() }
-                            audio.setOnCompletionListener { it.release(); if (player === it) player = null }
-                            audio.setOnErrorListener { failed, _, _ ->
-                                failed.release(); if (player === failed) player = null
-                                message("The phone copy could not be played."); true
-                            }
-                            audio.prepareAsync()
-                        }.onFailure { audio.release(); player = null; message("The phone copy could not be played.") }
-                    }
-                }
+                action("Play phone copy") { playLocalFile(cal, file) }
+            }
+            if (queue?.has("problem") == true) {
+                action("Retry upload") { cal.retryUpload(draft.id); changed() }
+                action("Cancel upload") { cal.discardUpload(draft.id); changed() }
             }
             if (draft.status in setOf(MobileMeetingStatus.STARTING, MobileMeetingStatus.RECORDING)) {
                 action("Stop recording") { MeetingRecordingService.requestStop(this, draft.id, "user"); timer.postDelayed({ render() }, 650) }
@@ -253,6 +268,46 @@ class AccountCalendarActivity : Activity() {
                 } else action("Send this recording for transcription…") {
                     provider(cal, false) { p -> cal.enqueueAudio(id, draft.id, p!!); changed() }
                 }
+            }
+        }
+    }
+
+    private fun playLocalFile(cal: AccountCalendar, file: java.io.File) {
+        if (sessions.current()?.token != cal.session.token) return
+        player?.release()
+        val audio = android.media.MediaPlayer()
+        player = audio
+        runCatching {
+            audio.setDataSource(file.absolutePath)
+            audio.setOnPreparedListener { if (active && player === it) it.start() }
+            audio.setOnCompletionListener { it.release(); if (player === it) player = null }
+            audio.setOnErrorListener { failed, _, _ ->
+                failed.release(); if (player === failed) player = null
+                message("The phone copy could not be played."); true
+            }
+            audio.prepareAsync()
+        }.onFailure { audio.release(); player = null; message("The phone copy could not be played.") }
+    }
+
+    private fun discardRecording(cal: AccountCalendar, meetingId: String, recordingId: String) {
+        val session = cal.session
+        auth.execute {
+            val result = runCatching {
+                cal.discardRemoteRecording(meetingId, recordingId) { path, method, body, bytes ->
+                    if (sessions.current()?.token != session.token) throw java.io.IOException("Session changed")
+                    AccountTransport.request(session.origin, path, method, session.token, body, bytes)
+                }
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess { discarded ->
+                    message(if (discarded) "Recording discarded." else "This recording is still being processed and cannot be discarded.")
+                }.onFailure { error ->
+                    if (error is AccountHttpError && error.status == 401) sessions.logout(session, false)
+                    message(if (error is AccountHttpError) "Could not discard the recording (HTTP ${error.status})."
+                        else "Could not discard the recording. Check the connection and try again.")
+                }
+                render(); sync()
             }
         }
     }
@@ -350,16 +405,33 @@ class AccountCalendarActivity : Activity() {
                 .setNegativeButton("Later", null).showFor(cal)
             return
         }
-        val summary = "Phone: ${local.optString("title")} · ${local(local.getString("startAt"))} · ${phoneProject?.name ?: "No project"}" +
-            "\nAccount: " + if (current == null || current.optBoolean("deleted")) "Deleted or unavailable" else
-                current.getString("title") + " · " + local(current.getString("startAt")) + " · " + (serverProject?.name ?: "No project")
-        AlertDialog.Builder(this).setTitle("Resolve pending change").setMessage(summary)
-            .setNegativeButton("Later", null).setNeutralButton("Discard phone edit") { _, _ -> cal.discard(id); changed() }
-            .setPositiveButton("Save phone version as new") { _, _ -> safely {
-                cal.stage(UUID.randomUUID().toString(), local.getString("title"), Instant.parse(local.getString("startAt")),
-                    Instant.parse(local.getString("endAt")), 0, false, phoneProject?.let(::ProjectChange))
-                cal.discard(id); changed()
-            } }.showFor(cal)
+        val isDelete = local.optBoolean("deleted")
+        val liveServer = current != null && !current.optBoolean("deleted")
+        val phoneAction = if (isDelete) "Delete “${local.optString("title")}”"
+            else "${local.optString("title")} · ${local(local.getString("startAt"))} · ${phoneProject?.name ?: "No project"}"
+        val summary = "Phone: $phoneAction" +
+            "\nAccount: " + if (!liveServer) "Deleted or unavailable" else
+                current!!.getString("title") + " · " + local(current.getString("startAt")) + " · " + (serverProject?.name ?: "No project")
+        val dialog = AlertDialog.Builder(this).setTitle("Resolve pending change").setMessage(summary)
+            .setNegativeButton("Later", null)
+        when {
+            isDelete && liveServer -> dialog
+                .setNeutralButton("Discard phone delete") { _, _ -> cal.discard(id); changed() }
+                .setPositiveButton("Delete current version") { _, _ -> safely { cal.reapply(id); changed() } }
+            isDelete -> dialog
+                .setPositiveButton("Discard phone delete") { _, _ -> cal.discard(id); changed() }
+            liveServer -> dialog
+                .setNeutralButton("Discard phone edit") { _, _ -> cal.discard(id); changed() }
+                .setPositiveButton("Apply phone change") { _, _ -> safely { cal.reapply(id); changed() } }
+            else -> dialog
+                .setNeutralButton("Discard phone edit") { _, _ -> cal.discard(id); changed() }
+                .setPositiveButton("Save phone version as new") { _, _ -> safely {
+                    cal.stage(UUID.randomUUID().toString(), local.getString("title"), Instant.parse(local.getString("startAt")),
+                        Instant.parse(local.getString("endAt")), 0, false, phoneProject?.let(::ProjectChange))
+                    cal.discard(id); changed()
+                } }
+        }
+        dialog.showFor(cal)
     }
     private fun importMeeting(cal: AccountCalendar) {
         val local = MobileMeetingStore(this).list()
@@ -439,8 +511,9 @@ class AccountCalendarActivity : Activity() {
                 if (!google) body.put("email", email.text.toString().trim())
                 authRequest(origin, if (google) "/auth/browser/start" else "/auth/email/start", body, linked) { result ->
                     if (google) {
-                        val url = Uri.parse(result.getString("url"))
-                        require(url.scheme == "https" && url.host == "accounts.google.com")
+                        val rawUrl = result.getString("url")
+                        require(isApprovedGoogleAuthUrl(rawUrl))
+                        val url = Uri.parse(rawUrl)
                         sessions.browserPending(JSONObject().put("origin", origin).put("pollToken", result.getString("pollToken"))
                             .put("linkedUser", linked?.userId ?: ""))
                         startActivity(Intent(Intent.ACTION_VIEW, url))
@@ -506,4 +579,10 @@ class AccountCalendarActivity : Activity() {
         }
     }
     companion object { const val EXTRA_DAY = "accountCalendarDay" }
+}
+
+internal fun isApprovedGoogleAuthUrl(raw: String): Boolean {
+    val uri = runCatching { java.net.URI(raw) }.getOrNull() ?: return false
+    return uri.scheme == "https" && uri.host == "accounts.google.com" &&
+        uri.userInfo == null && uri.port == -1 && uri.rawPath == "/o/oauth2/v2/auth"
 }

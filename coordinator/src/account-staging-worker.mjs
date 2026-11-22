@@ -30,7 +30,8 @@ export default {
     const response = await accountWorker.fetch(request, env, ctx);
     if (request.method === "POST" && response.ok &&
         /^\/account\/v1\/meetings\/[\da-f-]{36}\/recordings\/[\da-f-]{36}\/complete$/i.test(new URL(request.url).pathname)) {
-      ctx.waitUntil(runStagingProcessor(env));
+      // The cron retries; log only the error class so no account data reaches the logs.
+      ctx.waitUntil(runStagingProcessor(env).catch(error => console.error("staging_processor_failed", error?.name ?? "Error")));
     }
     return response;
   },

@@ -279,9 +279,15 @@ class MainActivity : Activity() {
             }
             addView(text("Create a meeting without calendar access, then choose whether to record with this phone’s microphone.",
                 13, Color.rgb(76, 99, 87)))
-            addView(button("Shared sessions") {
-                startActivity(Intent(this@MainActivity, SharedSessionActivity::class.java))
-            }, LinearLayout.LayoutParams(-1, dp(44)))
+            if (BuildConfig.STAGING) {
+                // Pairing talks only to the production coordinator, so staging builds never offer it.
+                addView(text("Shared sessions are unavailable in staging builds because pairing uses the production coordinator.",
+                    12, Color.rgb(95, 111, 102)))
+            } else {
+                addView(button("Shared sessions") {
+                    startActivity(Intent(this@MainActivity, SharedSessionActivity::class.java))
+                }, LinearLayout.LayoutParams(-1, dp(44)))
+            }
             addView(button("＋  New meeting") { showCreateMeeting() }, LinearLayout.LayoutParams(-1, dp(48)))
             if (active != null) {
                 addView(space(7))

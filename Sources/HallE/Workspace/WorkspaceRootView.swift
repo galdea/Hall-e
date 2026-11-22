@@ -55,7 +55,11 @@ struct WorkspaceRootView: View {
                 if !model.appState.accounts.isEmpty { SyncHealthButton() }
                 Button { showSharedMeetings = true } label: {
                     Label(PublicUICopy.text("Devices & shared meetings", "Dispositivos y reuniones compartidas"), systemImage: "laptopcomputer.and.iphone")
-                }.help(PublicUICopy.text("Pair devices and coordinate shared meetings", "Vincula dispositivos y coordina reuniones compartidas"))
+                }
+                .disabled(!DistributionCapabilities.supportsSharedMeetingCoordinator)
+                .help(DistributionCapabilities.supportsSharedMeetingCoordinator
+                      ? PublicUICopy.text("Pair devices and coordinate shared meetings", "Vincula dispositivos y coordina reuniones compartidas")
+                      : DistributionCapabilities.sharedMeetingsUnavailableExplanation)
                 Button { model.route = .search } label: { Image(systemName: "magnifyingglass") }
                     .keyboardShortcut("f", modifiers: .command).help(L10n.text("workspace.search"))
                 Button { SettingsWindowController.shared.show() } label: { Image(systemName: "gearshape") }

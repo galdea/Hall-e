@@ -5,6 +5,8 @@ export function accountJSON(body, status = 200) {
   return Response.json(body, {status, headers: {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}});
 }
 const fail = (error, status) => accountJSON({error}, status);
+// A tombstone keeps no schedule. Clients still parse every row's times as ISO 8601 instants.
+const TOMBSTONE_INSTANT = "1970-01-01T00:00:00.000Z";
 
 // Require an explicit offset. Device time zones and local DST settings must not change an instant.
 function instant(value) {
@@ -69,9 +71,12 @@ function projectWrites(db, change, owner, meetingId) {
   const accepted = `EXISTS (SELECT 1 FROM account_meetings WHERE user_id=? AND id=? AND last_mutation=?)
     AND NOT EXISTS (SELECT 1 FROM account_meeting_mutations WHERE user_id=? AND mutation_id=?)`;
   const guard = [owner, meetingId, change.id, owner, change.id];
+  // A label no meeting uses any longer is not retained.
+  const orphans = db.prepare(`DELETE FROM account_projects WHERE user_id=? AND NOT EXISTS (SELECT 1 FROM account_meeting_projects link
+    WHERE link.user_id=account_projects.user_id AND link.project_id=account_projects.id)`).bind(owner);
   if (change.deleted || !change.project) {
     return [db.prepare(`DELETE FROM account_meeting_projects WHERE user_id=? AND meeting_id=? AND ${accepted}`)
-      .bind(owner, meetingId, ...guard)];
+      .bind(owner, meetingId, ...guard), orphans];
   }
   const {id, name} = change.project;
   return [
@@ -79,6 +84,7 @@ function projectWrites(db, change, owner, meetingId) {
       ON CONFLICT(user_id,id) DO NOTHING`).bind(owner, id, name, ...guard),
     db.prepare(`INSERT INTO account_meeting_projects(user_id,meeting_id,project_id) SELECT ?,?,? WHERE ${accepted}
       ON CONFLICT(user_id,meeting_id) DO UPDATE SET project_id=excluded.project_id`).bind(owner, meetingId, id, ...guard),
+    orphans,
   ];
 }
 
@@ -102,10 +108,12 @@ export async function putMeeting(body, env, userId, meetingId) {
       SELECT ?,?,?,?,?,1,0,? WHERE ${unused} ON CONFLICT(user_id,id) DO NOTHING`)
       .bind(userId, meetingId, change.title, change.start, change.end, change.id, userId, change.id);
   } else {
+    // The fingerprint keeps null times for a delete, so receipts written before scrubbing still replay.
+    const [start, end] = change.deleted ? [TOMBSTONE_INSTANT, TOMBSTONE_INSTANT] : [change.start, change.end];
     write = db.prepare(`UPDATE account_meetings SET title=?,start_at=COALESCE(?,start_at),end_at=COALESCE(?,end_at),
       revision=revision+1,deleted=?,last_mutation=?
       WHERE user_id=? AND id=? AND revision=? AND deleted=0 AND ${unused}`)
-      .bind(change.title, change.start, change.end, Number(change.deleted), change.id, userId, meetingId, change.base, userId, change.id);
+      .bind(change.title, start, end, Number(change.deleted), change.id, userId, meetingId, change.base, userId, change.id);
   }
   const receipt = db.prepare(`INSERT INTO account_meeting_mutations (user_id,mutation_id,meeting_id,fingerprint)
     SELECT user_id,last_mutation,id,? FROM account_meetings WHERE user_id=? AND id=? AND last_mutation=?

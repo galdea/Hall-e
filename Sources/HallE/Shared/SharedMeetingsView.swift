@@ -2,9 +2,34 @@ import SwiftUI
 import AppKit
 import CoreImage.CIFilterBuiltins
 
+/// Entry point for every "Devices & shared meetings" surface. Staging builds show
+/// an explanation instead and never touch the production pairing coordinator.
+struct SharedMeetingsView: View {
+    private let pendingInvitation: String?
+
+    init(pendingInvitation: String? = nil) {
+        self.pendingInvitation = pendingInvitation
+    }
+
+    var body: some View {
+        if DistributionCapabilities.supportsSharedMeetingCoordinator {
+            SharedMeetingsPanel(pendingInvitation: pendingInvitation)
+        } else {
+            Form {
+                Section(PublicUICopy.text("Devices & shared meetings", "Dispositivos y reuniones compartidas")) {
+                    Label(DistributionCapabilities.sharedMeetingsUnavailableExplanation, systemImage: "lock.slash")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(PublicUICopy.text("Devices & shared meetings", "Dispositivos y reuniones compartidas"))
+        }
+    }
+}
+
 /// Pair trusted devices and coordinate meeting segments. Audio remains on the
 /// device that records it; this view never offers a remote start command.
-struct SharedMeetingsView: View {
+private struct SharedMeetingsPanel: View {
     @State private var coordinator = SharedMeetingCoordinator.shared
     @State private var invitationText = ""
     @State private var showConnectConsent = false
@@ -342,7 +367,7 @@ private struct SharedMeetingCreateSheet: View {
             TextField("Meeting link (optional)", text: $meetingURL)
                 .onChange(of: meetingURL) { _, value in
                     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                    meetingURLError = !trimmed.isEmpty && SharedMeetingsView.safeHTTPURL(trimmed) == nil
+                    meetingURLError = !trimmed.isEmpty && SharedMeetingsPanel.safeHTTPURL(trimmed) == nil
                         ? "Enter an http or https meeting link." : nil
                 }
             if let meetingURLError { Text(meetingURLError).font(.caption).foregroundStyle(.red) }

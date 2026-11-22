@@ -11,3 +11,7 @@ Routine main pushes and PRs do not require a hosted test run. One batch owner re
 
 Owner adoption 2026-10-28: read `docs/release-verification-policy.md` with this repository's CI policy and release runbook before changing verification or requesting a release. One batch owner coordinates local evidence across coding agents. Preflight the exact clean candidate and complete batch baseline; preserve every release/security/browser/migration/backup gate, isolate parallel lanes, and require complete exact-revision evidence. Measure runner minutes as well as elapsed time. Routine work uses diff-appropriate local checks; hosted spending and deployment need their existing authorization. Current paid Actions overage policy is $0 with Stop usage; do not change billing.
 <!-- END MANAGED: release-verification -->
+
+## Model routing and independent review
+
+Owner preference (2026-11-20, `~/.codex/skills/buzz-claude-workflow/references/model-selection.md`): keep Dot on OpenAI. Assign repository implementation, multi-file fixes and UI polish primarily to Claude Code (Opus 5.5, or Fable 5.2 when eligible), and long-context investigation or cross-file evidence to Gemini 4 Neon (or Hydrogen for bounded extraction/tests; earlier Gemini routes are retired). For independent technical review, use an eligible provider distinct from the author/candidate rather than two models from the same provider, and follow the quota-handoff rules without silently substituting a required separate-provider gate.

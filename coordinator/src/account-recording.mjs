@@ -15,6 +15,7 @@ function json(value, status = 200) {
 const error = (code, status) => json({ error: code }, status);
 const key = (blob, index) => `recordings/${blob}/${index}`;
 const parts = (row) => Math.ceil(row.size / PART_SIZE);
+const partBytes = (row, index) => Math.min(PART_SIZE, row.size - index * PART_SIZE);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function view(row) {
@@ -48,6 +49,18 @@ async function find(db, ids) {
     )
     .bind(...ids)
     .first();
+}
+
+async function isDisposing(db, ids) {
+  return Boolean(
+    await db
+      .prepare(
+        `SELECT 1 FROM account_recordings WHERE user_id=? AND meeting_id=? AND id=?
+      AND status='disposing' AND ${liveMeeting}`,
+      )
+      .bind(...ids)
+      .first(),
+  );
 }
 
 // Keep input bounded even when the sender omits or understates Content-Length.
@@ -127,7 +140,7 @@ async function initialize(request, db, ids) {
     )
     .run();
   const row = await find(db, ids);
-  if (!row) return error("not_found", 404);
+  if (!row) return (await isDisposing(db, ids)) ? error("upload_disposing", 503) : error("not_found", 404);
   if (
     row.size !== spec.size ||
     row.sha256 !== spec.sha256 ||
@@ -142,7 +155,7 @@ async function initialize(request, db, ids) {
 async function putPart(request, env, row, index) {
   const count = parts(row);
   if (!Number.isSafeInteger(index) || index < 0 || index >= count) return error("unknown_part", 400);
-  const expected = Math.min(PART_SIZE, row.size - index * PART_SIZE);
+  const expected = partBytes(row, index);
   const length = request.headers.get("Content-Length");
   if (length !== null && Number(length) !== expected) return error("part_length", 400);
   let bytes;
@@ -194,9 +207,33 @@ async function putPart(request, env, row, index) {
 async function* audioParts(bucket, row) {
   for (let i = 0; i < parts(row); i++) {
     const object = await bucket.get(key(row.blob_id, i));
-    if (!object || object.size !== Math.min(PART_SIZE, row.size - i * PART_SIZE)) throw new Error("missing_audio");
+    if (!object || object.size !== partBytes(row, i)) throw new Error("missing_audio");
     for await (const bytes of object.body) yield bytes;
   }
+}
+
+// D1 can record a part that R2 no longer holds. Ask the sender for those parts again; their
+// reserved digests stay, so only the same bytes are accepted. Present objects are never deleted.
+async function lostParts(env, row) {
+  const lost = [];
+  for (let i = 0; i < parts(row); i++) {
+    const object = await env.ACCOUNT_AUDIO.head(key(row.blob_id, i));
+    if (object?.size !== partBytes(row, i)) lost.push(i);
+  }
+  if (!lost.length) return false;
+  const db = env.ACCOUNT_DB;
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE account_recording_parts SET stored=0 WHERE blob_id=? AND part_index IN (SELECT value FROM json_each(?))
+      AND EXISTS (SELECT 1 FROM account_recordings WHERE blob_id=? AND status='uploading')`,
+      )
+      .bind(row.blob_id, JSON.stringify(lost), row.blob_id),
+    db
+      .prepare("UPDATE account_recordings SET updated_at=? WHERE blob_id=? AND status='uploading'")
+      .bind(Date.now(), row.blob_id),
+  ]);
+  return true;
 }
 
 async function complete(env, row, ids) {
@@ -206,7 +243,7 @@ async function complete(env, row, ids) {
     .prepare("SELECT COUNT(*) AS n FROM account_recording_parts WHERE blob_id=? AND stored=1")
     .bind(row.blob_id)
     .first();
-  if (saved.n !== parts(row)) return error("missing_parts", 409);
+  if (saved.n !== parts(row) || (await lostParts(env, row))) return error("missing_parts", 409);
   const digest = createHash("sha256");
   for await (const bytes of audioParts(env.ACCOUNT_AUDIO, row)) digest.update(bytes);
   if (digest.digest("hex") !== row.sha256) return error("digest_mismatch", 409);
@@ -222,13 +259,32 @@ async function complete(env, row, ids) {
   return current ? json(view(current)) : error("not_found", 404);
 }
 
+const discarded = () => new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
+
+// Only the owner may end a recording the service stopped on; nothing else disposes of a paid result.
+async function discard(db, row) {
+  const ended = await db
+    .prepare(
+      `UPDATE account_recordings SET status='disposing',transcript=NULL,claim=NULL,updated_at=?
+    WHERE blob_id=? AND status IN ('review','failed') AND ${liveMeeting} RETURNING blob_id`,
+    )
+    .bind(Date.now(), row.blob_id)
+    .first();
+  return ended ? discarded() : error("recording_active", 409);
+}
+
 export async function handleRecording(request, env, userId, meetingId, recordingId, tail) {
   const ids = [userId, meetingId, recordingId];
   if (!tail && request.method === "PUT") return initialize(request, env.ACCOUNT_DB, ids);
   const row = await find(env.ACCOUNT_DB, ids);
-  if (!row) return error("not_found", 404);
-  if (!tail && request.method === "GET") return json(view(row));
   const part = /^parts\/(0|[1-9]\d{0,3})$/.exec(tail);
+  if (!row) {
+    if (!tail && request.method === "DELETE" && (await isDisposing(env.ACCOUNT_DB, ids))) return discarded();
+    const write = (part && request.method === "PUT") || (tail === "complete" && request.method === "POST");
+    return write && (await isDisposing(env.ACCOUNT_DB, ids)) ? error("upload_disposing", 503) : error("not_found", 404);
+  }
+  if (!tail && request.method === "GET") return json(view(row));
+  if (!tail && request.method === "DELETE") return discard(env.ACCOUNT_DB, row);
   if (part && request.method === "PUT") return putPart(request, env, row, Number(part[1]));
   if (tail === "complete" && request.method === "POST") return complete(env, row, ids);
   return error("not_found", 404);
@@ -353,10 +409,13 @@ function speechmaticsText(data) {
       .map((item) => {
         const first = item.alternatives?.[0];
         const punctuation = item.type === "punctuation";
-        if (!punctuation && (!first?.speaker || first.speaker === "UU")) throw new Error("missing_speaker");
+        const speaker =
+          typeof first?.speaker === "string" && first.speaker && first.speaker !== "UU"
+            ? first.speaker
+            : undefined;
         return {
           text: first?.content,
-          speaker: first?.speaker,
+          speaker,
           start: item.start_time,
           end: item.end_time,
           punctuation,
@@ -383,16 +442,20 @@ function failure(response, polling) {
   return { status: "failed", detail: "provider_rejected" };
 }
 
+const providerReference = (value) => (typeof value === "string" && value && value.length <= 200 ? value : undefined);
+
 async function publishedTranscript(response, provider) {
+  // An unpublishable result keeps the provider reference, so the paid job stays traceable.
+  const header = provider === "deepgram" ? providerReference(response.headers.get("dg-request-id")) : undefined;
   try {
     const data = await jsonBody(response, 12 * MiB);
     if (provider === "speechmatics") return resultText(speechmaticsText(data));
     const result = resultText(deepgramText(data));
-    const requestId = data.metadata?.request_id;
-    if (typeof requestId === "string" && requestId.length <= 200) result.job = requestId;
+    const requestId = providerReference(data.metadata?.request_id) ?? header;
+    if (requestId) result.job = requestId;
     return result;
   } catch {
-    return { status: "review", detail: "transcript_unreadable_or_oversize" };
+    return { status: "review", detail: "transcript_unreadable_or_oversize", job: header };
   }
 }
 
@@ -486,12 +549,18 @@ async function disposeOne(env, now) {
     )
     .bind(now - STALE_UPLOAD)
     .first();
-  if (!row) return;
+  if (!row) return false;
   await env.ACCOUNT_AUDIO.delete(Array.from({ length: parts(row) }, (_, i) => key(row.blob_id, i)));
   await db
     .prepare("DELETE FROM account_recordings WHERE blob_id=? AND status='disposing'")
     .bind(row.blob_id)
     .run();
+  return true;
+}
+
+// Run after a delete is acknowledged. The cron remains the fallback for anything left or failed.
+export async function disposeRemoved(env, { now = Date.now, limit = 16 } = {}) {
+  for (let i = 0; i < limit && (await disposeOne(env, now())); i++);
 }
 
 // A scheduled invocation consumes at most one job. Calls can overlap: the conditional claim is persisted before POST.
@@ -509,25 +578,32 @@ export async function processPending(
     )
     .bind(now)
     .run();
-  const row = await db
-    .prepare(
-      `SELECT * FROM account_recordings WHERE status IN ('queued','processing')
-    AND next_at<=? AND ${liveMeeting} ORDER BY next_at,updated_at,blob_id LIMIT 1`,
-    )
-    .bind(now)
-    .first();
-  if (!row) return;
-  const localProcessor = row.status === "queued" ? selectLocalProcessor?.(row) : undefined;
-  if (!localProcessor && !ready(env, row)) {
+  let row = null;
+  let localProcessor;
+  for (let skipped = 0; skipped < 16; skipped++) {
+    const candidate = await db
+      .prepare(
+        `SELECT * FROM account_recordings WHERE status IN ('queued','processing')
+      AND next_at<=? AND ${liveMeeting} ORDER BY next_at,updated_at,blob_id LIMIT 1`,
+      )
+      .bind(now)
+      .first();
+    if (!candidate) return;
+    const local = candidate.status === "queued" ? selectLocalProcessor?.(candidate) : undefined;
+    if (local || ready(env, candidate)) {
+      row = candidate;
+      localProcessor = local;
+      break;
+    }
     await db
       .prepare(
         `UPDATE account_recordings SET detail='provider_unconfigured',next_at=?
       WHERE blob_id=? AND status=? AND next_at=?`,
       )
-      .bind(now + MINUTE, row.blob_id, row.status, row.next_at)
+      .bind(now + MINUTE, candidate.blob_id, candidate.status, candidate.next_at)
       .run();
-    return;
   }
+  if (!row) return;
   const polling = row.status === "processing";
   const claim = crypto.randomUUID();
   const leased = await db

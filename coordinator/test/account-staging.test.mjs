@@ -30,8 +30,11 @@ test("hosted QA story exercises the actual staging entrypoint, shared fixture re
     readCode: email => env.ACCOUNT_DB.prepare("DELETE FROM staging_qa_mailbox WHERE email=? AND expires_at>unixepoch()*1000 RETURNING code").bind(email).first("code"),
     waitForCron: () => Promise.all(background),
   });
-  assert.equal(background.length, 2);
+  // Two completions start the fixture processor; the cleanup delete starts R2 disposal without the cron.
+  assert.equal(background.length, 3);
   await Promise.all(background);
+  assert.equal(env.ACCOUNT_AUDIO.objects.size, 0);
+  assert.equal(await env.ACCOUNT_DB.prepare("SELECT count(*) AS n FROM account_recordings").first("n"), 0);
   assert.equal(await env.ACCOUNT_DB.prepare("SELECT count(*) AS n FROM staging_qa_mailbox").first("n"), 0);
   assert.equal(await env.ACCOUNT_DB.prepare("SELECT count(*) AS n FROM account_sessions").first("n"), 0);
   await staging.scheduled({}, env);
@@ -73,4 +76,32 @@ test("staging never mocks unrecognized audio and rehashes the stored tone before
   await staging.scheduled({}, env);
   assert.equal((await known()).detail, "staging_fixture_mismatch");
   assert.equal((await known()).transcript, null);
+});
+
+test("unrecognized queued recordings do not starve a newly completed staging test tone", async t => {
+  const env = setup(t);
+  const user = randomUUID(), meeting = randomUUID();
+  await env.ACCOUNT_DB.prepare("INSERT INTO account_meetings VALUES (?,?,'Fixture','a','b',1,0,'initial')").bind(user, meeting).run();
+  async function queue(bytes) {
+    const recording = randomUUID();
+    const call = (method, tail, data) => handleRecording(new Request("https://fixture.test", {
+      method, body: data instanceof Uint8Array ? data : JSON.stringify(data),
+    }), env, user, meeting, recording, tail);
+    const spec = {
+      consent: true, mimeType: "audio/mp4", provider: "deepgram",
+      size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    assert.equal((await call("PUT", "", spec)).status, 200);
+    assert.equal((await call("PUT", "parts/0", bytes)).status, 200);
+    assert.equal((await (await call("POST", "complete", {})).json()).status, "queued");
+    return () => call("GET", "").then(result => result.json());
+  }
+  const changed = Buffer.from(tone);
+  changed[0] ^= 1;
+  const blocked = await queue(changed);
+  const eligible = await queue(tone);
+  await staging.scheduled({}, env);
+  assert.equal((await blocked()).detail, "provider_unconfigured");
+  assert.equal((await eligible()).status, "completed");
+  assert.equal((await eligible()).detail, "staging_synthetic_fixture");
 });

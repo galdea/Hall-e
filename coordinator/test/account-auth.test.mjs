@@ -227,3 +227,16 @@ test('staging Google proof and explicit linking require the signed, verified tes
   assert.equal((await f.googleLogin({ email: 'new-address@example.test' })).status, 403);
   assert.equal((await f.googleLogin()).result.userId, a.userId);
 });
+
+test('staging email/start applies rate limiting uniformly before tester allowlist short-circuit', async t => {
+  const f = setup(t);
+  f.env.ACCOUNT_STAGING_TESTER_EMAILS = 'ana@example.test';
+  for (let n = 0; n < 5; n++) {
+    const res = await f.call('email/start', { email: 'outsider@example.test' });
+    assert.equal(res.status, 200);
+  }
+  const throttled = await f.call('email/start', { email: 'outsider@example.test' });
+  assert.equal(throttled.status, 429);
+  assert.equal(f.mail.length, 0);
+  assert.equal(await f.db.prepare('SELECT COUNT(*) AS n FROM account_auth_challenges').first('n'), 0);
+});
