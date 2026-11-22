@@ -2,8 +2,17 @@ import Foundation
 
 /// Well-known on-disk locations for Hall-e, all under Application Support.
 enum AppPaths {
-    static let isStaging = Bundle.main.bundleIdentifier == "cl.gabriel.hall-e.staging"
-    static let bundleID = isStaging ? "cl.gabriel.hall-e.staging" : "cl.gabriel.hall-e"
+    static let productionBundleID = "cl.gabriel.hall-e"
+    static let stagingBundleID = "cl.gabriel.hall-e.staging"
+    static let isStaging = isStaging(bundleIdentifier: Bundle.main.bundleIdentifier)
+    static let bundleID = bundleID(isStaging: isStaging)
+
+    /// Pure seams so staging/production isolation is testable without a staging bundle.
+    static func isStaging(bundleIdentifier: String?) -> Bool { bundleIdentifier == stagingBundleID }
+    static func bundleID(isStaging: Bool) -> String { isStaging ? stagingBundleID : productionBundleID }
+    static func appSupportDirectory(base: URL, isStaging: Bool) -> URL {
+        base.appendingPathComponent(isStaging ? "Hall-e Staging" : "Hall-e", isDirectory: true)
+    }
 
     /// User Application Support/Hall-e (container-resolved by App Sandbox).
     static var appSupport: URL {
@@ -17,7 +26,7 @@ enum AppPaths {
         }
         #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent(isStaging ? "Hall-e Staging" : "Hall-e", isDirectory: true)
+        let dir = appSupportDirectory(base: base, isStaging: isStaging)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         return dir

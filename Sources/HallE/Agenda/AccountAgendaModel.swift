@@ -312,6 +312,17 @@ final class AccountAgendaModel {
         try await synchronize(force: true)
     }
 
+    /// Ends a recording the service stopped on (`review` or `failed`). Only the owner can do this.
+    func discardRecording(meetingId: String, recording: AccountRecording, from expected: AccountConnection) async throws {
+        guard account == expected else { throw AccountAgendaError.session }
+        guard recording.canDiscard else { throw AccountAgendaError.response(409, "recording_active") }
+        _ = try await api(expected.origin).request(
+            "DELETE", "meetings/\(meetingId)/recordings/\(recording.id)",
+            token: expected.credentials.token
+        )
+        try await synchronize(force: true)
+    }
+
     func enqueue(_ meeting: AccountMeeting) throws {
         var next = cache
         try next.enqueue(meeting)
@@ -340,6 +351,16 @@ final class AccountAgendaModel {
         var next = cache
         next.pending.removeAll { $0.id == mutation.id && $0.conflict }
         try update(next)
+    }
+
+    func conflict(for mutation: AgendaMutation) -> AgendaConflict { cache.conflict(for: mutation) }
+
+    func saveAsNewMeeting(_ mutation: AgendaMutation) throws {
+        var next = cache
+        try next.saveAsNew(mutation)
+        try update(next)
+        message = PublicUICopy.text("Saved on this Mac as a new meeting. Waiting to sync.",
+                                    "Guardada en este Mac como una reunión nueva. Pendiente de sincronización.")
     }
 
     func synchronize(force: Bool = false) async throws {

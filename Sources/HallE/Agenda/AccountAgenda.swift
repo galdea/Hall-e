@@ -26,6 +26,9 @@ struct AccountRecording: Codable, Equatable, Identifiable {
     var status: String
     var transcript: String?
     var source: String? = nil
+
+    /// The service stopped on this recording, so the owner may discard it.
+    var canDiscard: Bool { status == "review" || status == "failed" }
 }
 
 struct AccountMeeting: Codable, Equatable, Identifiable {
@@ -87,6 +90,34 @@ struct AgendaMutation: Codable, Identifiable {
     }
 }
 
+/// A parked change beside the server's current copy of the same meeting.
+struct AgendaConflict: Equatable {
+    enum ServerState: Equatable {
+        /// The server still has a live copy, possibly changed by another device.
+        case live(AccountMeeting)
+        /// Another device deleted the meeting; the tombstone is kept for reference.
+        case deleted(AccountMeeting)
+        /// The server never accepted this meeting (for example a rejected new meeting).
+        case missing
+    }
+
+    let local: AccountMeeting
+    let server: ServerState
+
+    init(local: AccountMeeting, server: AccountMeeting?) {
+        self.local = local
+        if let server { self.server = server.deleted ? .deleted(server) : .live(server) }
+        else { self.server = .missing }
+    }
+
+    /// The pending change itself was a delete.
+    var localDeletes: Bool { local.deleted }
+    /// Rebase the change onto the server's current revision.
+    var canReapply: Bool { if case .live = server { return true } else { return false } }
+    /// Only an edit can become a new meeting: a pending delete must never resurrect the meeting.
+    var canSaveAsNew: Bool { !canReapply && !localDeletes }
+}
+
 struct AccountCalendarCache: Codable {
     var meetings: [AccountMeeting] = []
     var pending: [AgendaMutation] = []
@@ -143,6 +174,31 @@ struct AccountCalendarCache: Codable {
         pending[index] = .init(meeting: revised, projectChanged: edit.projectChanged)
     }
 
+    /// What the conflict banner shows and offers for a parked change.
+    func conflict(for edit: AgendaMutation) -> AgendaConflict {
+        AgendaConflict(local: edit.meeting, server: meetings.first { $0.id == edit.meeting.id })
+    }
+
+    /// Keeps a parked change whose server copy is gone by saving it as a brand-new meeting.
+    /// The new meeting has a fresh ID and revision 0 so it cannot resurrect or overwrite the
+    /// deleted one; the conflicted change is discarded in the same step.
+    @discardableResult
+    mutating func saveAsNew(_ edit: AgendaMutation, id: String = UUID().uuidString.lowercased()) throws -> AccountMeeting {
+        guard let index = pending.firstIndex(where: { $0.id == edit.id && $0.conflict }),
+              conflict(for: pending[index]).canSaveAsNew,
+              !meetings.contains(where: { $0.id == id }), !pending.contains(where: { $0.meeting.id == id }) else {
+            throw AccountAgendaError.pending
+        }
+        let local = pending[index].meeting
+        let copy = AccountMeeting(id: id, title: local.title, startAt: local.startAt, endAt: local.endAt,
+                                  revision: 0, deleted: false, recordings: [], project: local.project)
+        var next = self
+        next.pending.remove(at: index)
+        try next.enqueue(copy)
+        self = next
+        return copy
+    }
+
     mutating func acknowledge(_ mutation: AgendaMutation, result: AccountMeeting) {
         version = nil
         meetings.removeAll { $0.id == result.id }
@@ -194,6 +250,7 @@ enum AccountAgendaError: LocalizedError {
         case .session: return PublicUICopy.text("Sign in again to sync this account.", "Vuelve a iniciar sesión para sincronizar esta cuenta.")
         case .response(let status, let code):
             if code == "link_required" { return PublicUICopy.text("Sign in with the original method, then link this one.", "Inicia sesión con el método original y después vincula este.") }
+            if code == "recording_active" { return PublicUICopy.text("This recording is still being processed and cannot be discarded. Sync and try again later.", "Esta grabación aún se está procesando y no se puede descartar. Sincroniza e inténtalo más tarde.") }
             return PublicUICopy.text("The account service returned HTTP \(status) (\(code)).", "El servicio de cuentas devolvió HTTP \(status) (\(code)).")
         case .invalidResponse: return PublicUICopy.text("Unexpected response from the account service.", "Respuesta inesperada del servicio de cuentas.")
         case .browser: return PublicUICopy.text("Google sign-in could not open or timed out.", "No se pudo abrir Google o venció el plazo.")
