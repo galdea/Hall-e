@@ -19,12 +19,23 @@ class MeetingAlertReceiver : BroadcastReceiver() {
         val now = System.currentTimeMillis()
         val store = LocalStore(context)
         if (BuildConfig.DEBUG && store.previewActive) return
-        val repository = CalendarRepository(context, store)
-        if (!repository.hasPermission()) return
-        val current = repository.events(begin, maxOf(end, now + 1L)).firstOrNull { it.occurrenceId == occurrence }
-        if (!ReminderPlanner.shouldDeliver(current, occurrence, now)) return
-        val meeting = current ?: return
         val isSnooze = intent.getBooleanExtra(EXTRA_SNOOZE, false)
+        val localMeetingId = intent.getStringExtra(EXTRA_LOCAL_MEETING_ID)
+        val meeting = if (localMeetingId != null) {
+            if (isSnooze) return
+            val current = ReminderPlanner.localScheduledDrafts(listOfNotNull(MobileMeetingStore(context).find(localMeetingId))).firstOrNull()
+                ?: return
+            if (current.occurrenceId != occurrence || current.beginMillis != begin || current.endMillis != end ||
+                !ReminderPlanner.shouldDeliver(current, occurrence, now)) return
+            current
+        } else {
+            if (store.occurrenceHidden(occurrence)) return
+            val repository = CalendarRepository(context, store)
+            if (!repository.hasPermission()) return
+            val current = repository.events(begin, maxOf(end, now + 1L)).firstOrNull { it.occurrenceId == occurrence }
+            if (!ReminderPlanner.shouldDeliver(current, occurrence, now)) return
+            current ?: return
+        }
         val deliveryKey = if (isSnooze) "$occurrence#snooze#${intent.getLongExtra(EXTRA_SNOOZE_FIRE_AT, 0)}" else occurrence
         createChannel(context)
         val notificationManager = NotificationManagerCompat.from(context)
@@ -43,22 +54,24 @@ class MeetingAlertReceiver : BroadcastReceiver() {
             .putExtra(EXTRA_URL, meeting.meetingUrl)
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java)
             .setAction(Intent.ACTION_VIEW)
-            .setData(Uri.parse("halle://open/${intent.getStringExtra(EXTRA_OCCURRENCE)}"))
+            .setData(Uri.parse("halle://open/${Uri.encode(occurrence)}"))
             .putExtras(freshIntent), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("Coming up · ${meeting.title}")
-            .setContentText("Your calendar reminder is ready.")
+            .setContentTitle("Próxima reunión · ${meeting.title}")
+            .setContentText(if (localMeetingId == null) "Tu recordatorio de calendario está listo." else "Tu reunión local está por comenzar.")
             .setStyle(NotificationCompat.BigTextStyle().bigText(meeting.title))
             .setContentIntent(open).setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH)
-        val snooze = PendingIntent.getBroadcast(context, 0, Intent(context, SnoozeReceiver::class.java)
-            .setData(Uri.parse("halle://snooze/${Uri.encode(intent.getStringExtra(EXTRA_OCCURRENCE).orEmpty())}"))
-            .putExtras(freshIntent), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        builder.addAction(android.R.drawable.ic_media_pause, "Snooze 5 min", snooze)
+        if (localMeetingId == null) {
+            val snooze = PendingIntent.getBroadcast(context, 0, Intent(context, SnoozeReceiver::class.java)
+                .setData(Uri.parse("halle://snooze/${Uri.encode(occurrence)}"))
+                .putExtras(freshIntent), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            builder.addAction(android.R.drawable.ic_media_pause, "Posponer 5 min", snooze)
+        }
         meeting.meetingUrl?.let { url ->
             val join = PendingIntent.getActivity(context, 1, Intent(Intent.ACTION_VIEW, Uri.parse(url)),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(android.R.drawable.ic_menu_view, "Join", join)
+            builder.addAction(android.R.drawable.ic_menu_view, "Unirse", join)
         }
         try {
             notificationManager.notify(occurrence.hashCode(), builder.build())
@@ -85,6 +98,7 @@ class MeetingAlertReceiver : BroadcastReceiver() {
         const val EXTRA_URL = "meetingUrl"
         const val EXTRA_SNOOZE = "snoozeDelivery"
         const val EXTRA_SNOOZE_FIRE_AT = "snoozeFireAt"
+        const val EXTRA_LOCAL_MEETING_ID = "localMeetingId"
     }
 }
 

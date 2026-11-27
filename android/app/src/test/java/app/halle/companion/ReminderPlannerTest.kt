@@ -79,4 +79,44 @@ class ReminderPlannerTest {
         val tomorrow = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         assertTrue(ReminderPlanner.forLocalDate(listOf(event(4, tomorrow)), date, zone).isEmpty())
     }
+
+    @Test fun localFutureScheduledDraftsAreIncludedWithoutDuplicatingCalendarDrafts() {
+        val begin = 3_600_000L
+        val base = MobileMeeting(
+            id = "local-draft-id", title = "Local review", projectName = null, createdAtMs = 1,
+            scheduledStartAtMs = begin, scheduledEndAtMs = begin + 3_600_000L,
+            sourceEventKey = null, sharedSessionId = null, status = MobileMeetingStatus.DRAFT,
+            audioFileName = null, recordingStartedAtMs = null, recordingStartedElapsedMs = null,
+            durationMs = 0, error = null,
+        )
+        val linkedCalendarDraft = base.copy(id = "linked", sourceEventKey = "1:9:3600000")
+        val trashed = base.copy(id = "trashed", trashedAtMs = 10)
+        val recording = base.copy(id = "active", status = MobileMeetingStatus.RECORDING)
+
+        val local = ReminderPlanner.localScheduledDrafts(listOf(base, linkedCalendarDraft, trashed, recording))
+        assertEquals(1, local.size)
+        assertEquals("local:local-draft-id", local.single().occurrenceId)
+        assertEquals("local-draft-id", local.single().localMeetingId)
+        assertTrue(ReminderPlanner.excludeCalendarDuplicates(local, listOf(event(1, begin, begin + 3_600_000L).copy(title = " LOCAL REVIEW "))).isEmpty())
+        assertEquals(local, ReminderPlanner.excludeCalendarDuplicates(local, listOf(event(1, begin + 1, begin + 3_600_000L))))
+        assertEquals(10, ReminderPlanner.DEFAULT_ALERT_MINUTES)
+    }
+
+    @Test fun staleOrMissingRecordingNotificationStopIdsCannotStopCurrentCapture() {
+        assertTrue(notificationStopTargetsActiveRecording("recording-1", "recording-1"))
+        assertFalse(notificationStopTargetsActiveRecording("recording-1", "recording-2"))
+        assertFalse(notificationStopTargetsActiveRecording(null, "recording-2"))
+    }
+
+    @Test fun spanishMorningSummaryNamesTheNextMeetingWithA24HourTime() {
+        val zone = ZoneOffset.UTC
+        val nine = 9 * 3_600_000L
+        assertEquals("Tu agenda de hoy está despejada. Guarda un poco de espacio para ti.", ReminderPlanner.summaryEs(emptyList(), 0, zone))
+        assertEquals("Hoy tienes 1 reunión. Próxima: Meeting 1 a las 09:00.",
+            ReminderPlanner.summaryEs(listOf(event(1, nine)), 0, zone))
+        assertEquals("Hoy tienes 2 reuniones. Próxima: Meeting 2 a las 14:00.",
+            ReminderPlanner.summaryEs(listOf(event(1, nine), event(2, 14 * 3_600_000L)), nine + 3_600_000L, zone))
+        assertEquals("Hoy tienes 1 reunión. Ya terminaste por hoy.",
+            ReminderPlanner.summaryEs(listOf(event(1, nine)), nine + 3_600_000L, zone))
+    }
 }

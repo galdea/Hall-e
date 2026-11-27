@@ -62,6 +62,26 @@ internal fun personalDeleteMessage(title: String, hasAudio: Boolean, sharedSessi
         else " The shared meeting stays on your paired devices.")
 }
 
+/** Órbita (Spanish) title for the same confirmation; a draft is a meeting saved without recording. */
+internal fun personalDeleteTitleEs(status: MobileMeetingStatus): String =
+    if (status == MobileMeetingStatus.DRAFT) "¿Eliminar esta reunión?" else "¿Eliminar esta grabación?"
+
+/** Órbita (Spanish) wording of [personalDeleteMessage]; the same facts, in the same order. */
+internal fun personalDeleteMessageEs(title: String, hasAudio: Boolean, sharedSession: Boolean): String = buildString {
+    append(if (hasAudio) "Se eliminarán de este teléfono «$title» y su archivo de audio. No se puede deshacer."
+        else "Se eliminará «$title» de este teléfono. No se puede deshacer.")
+    if (hasAudio) append(" Las copias que ya compartiste con otras apps no se modifican.")
+    if (sharedSession) append(if (hasAudio) " La reunión compartida sigue en tus dispositivos vinculados; nunca recibieron este audio."
+        else " La reunión compartida sigue en tus dispositivos vinculados.")
+}
+
+/** Órbita (Spanish) result after a confirmed delete. */
+internal fun personalDeletedMessageEs(status: MobileMeetingStatus, deleted: Boolean): String = when {
+    !deleted -> "No se pudo eliminar. Detén la grabación primero y revisa el espacio disponible."
+    status == MobileMeetingStatus.DRAFT -> "Reunión eliminada de este teléfono."
+    else -> "Grabación eliminada de este teléfono."
+}
+
 /** Confirmation text for deleting an interrupted or failed phone recording of an account meeting. */
 internal fun accountDeleteMessage(queued: Boolean, uploaded: Boolean): String = buildString {
     append("This recording and its audio file will be removed from this phone. This cannot be undone.")
@@ -130,19 +150,32 @@ internal fun Activity.microphoneNeedsSettings(askedBefore: Boolean): Boolean = s
     rationaleAfterDenial = shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO),
 )
 
+/** Wording of the microphone settings dialog: English for the native screens, Spanish for Órbita. */
+internal data class MicrophoneSettingsCopy(val title: String, val message: String, val dismiss: String, val open: String, val fallback: String) {
+    companion object {
+        val ENGLISH = MicrophoneSettingsCopy("Allow microphone access",
+            "Android will not ask again for the microphone. To record with this phone, open Hall-e’s settings, " +
+                "tap Permissions › Microphone and choose “Allow only while using the app”.",
+            "Not now", "Open settings", "Open Android Settings › Apps › Hall-e to allow the microphone.")
+        val SPANISH = MicrophoneSettingsCopy("Permite el acceso al micrófono",
+            "Android ya no volverá a preguntar por el micrófono. Para grabar con este teléfono, abre los ajustes de Hall-e, " +
+                "toca Permisos › Micrófono y elige «Permitir solo mientras se usa la app».",
+            "Ahora no", "Abrir ajustes", "Abre Ajustes de Android › Apps › Hall-e para permitir el micrófono.")
+    }
+}
+
 /** Explains how to allow the microphone once Android will no longer ask, with a shortcut to this app's settings. */
-internal fun Activity.showMicrophoneSettingsDialog() {
+internal fun Activity.showMicrophoneSettingsDialog(copy: MicrophoneSettingsCopy = MicrophoneSettingsCopy.ENGLISH) {
     if (isFinishing || isDestroyed) return
-    AlertDialog.Builder(this).setTitle("Allow microphone access")
-        .setMessage("Android will not ask again for the microphone. To record with this phone, open Hall-e’s settings, " +
-            "tap Permissions › Microphone and choose “Allow only while using the app”.")
-        .setNegativeButton("Not now", null)
-        .setPositiveButton("Open settings") { _, _ -> openAppSettings() }
+    AlertDialog.Builder(this).setTitle(copy.title)
+        .setMessage(copy.message)
+        .setNegativeButton(copy.dismiss, null)
+        .setPositiveButton(copy.open) { _, _ -> openAppSettings(copy.fallback) }
         .show()
 }
 
-internal fun Activity.openAppSettings() {
+internal fun Activity.openAppSettings(fallback: String = MicrophoneSettingsCopy.ENGLISH.fallback) {
     runCatching {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
-    }.onFailure { Toast.makeText(this, "Open Android Settings › Apps › Hall-e to allow the microphone.", Toast.LENGTH_LONG).show() }
+    }.onFailure { Toast.makeText(this, fallback, Toast.LENGTH_LONG).show() }
 }

@@ -8,4 +8,15 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
+    <!-- Órbita: dark shell for the WebView home and the pairing screen. Native account screens keep AppTheme. -->
+    <style name="OrbitaTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#74E5C5</item>
+        <item name="android:windowBackground">#080E10</item>
+        <item name="android:navigationBarColor">#080E10</item>
+        <item name="android:statusBarColor">#080E10</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
 </resources>

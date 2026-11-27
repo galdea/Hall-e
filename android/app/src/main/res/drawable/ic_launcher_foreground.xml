@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Fit the complete 1147:1372 robot inside the adaptive icon's 72dp safe circle. -->
+    <item
+        android:width="42dp"
+        android:height="50.25dp"
+        android:gravity="center"
+        android:drawable="@drawable/hall_e_launcher_full" />
+</layer-list>

@@ -7,7 +7,7 @@ class LocalStore(context: Context) {
     private val prefs = context.getSharedPreferences("halle-local", Context.MODE_PRIVATE)
 
     var alertMinutes: Int
-        get() = prefs.getInt("alertMinutes", 5)
+        get() = prefs.getInt("alertMinutes", ReminderPlanner.DEFAULT_ALERT_MINUTES)
         set(value) { prefs.edit().putInt("alertMinutes", value.coerceIn(0, 1440)).apply() }
     var morningSummaryEnabled: Boolean
         get() = prefs.getBoolean("morningSummaryEnabled", true)
@@ -69,6 +69,12 @@ class LocalStore(context: Context) {
         return clean
     }
     fun noteFor(eventKey: String): String = prefs.getString("note:$eventKey", "").orEmpty()
+    fun hiddenOccurrences(): Set<String> = prefs.getStringSet("hiddenOccurrences", emptySet()).orEmpty()
+    fun occurrenceHidden(occurrenceId: String): Boolean = occurrenceId in hiddenOccurrences()
+    fun hideOccurrence(occurrenceId: String, hidden: Boolean): Boolean = synchronized(deliveryLock) {
+        val next = if (hidden) hiddenOccurrences() + occurrenceId else hiddenOccurrences() - occurrenceId
+        prefs.edit().putStringSet("hiddenOccurrences", next).commit()
+    }
     fun saveNote(eventKey: String, markdown: String) {
         prefs.edit().putString("note:$eventKey", markdown.take(20_000)).apply()
     }

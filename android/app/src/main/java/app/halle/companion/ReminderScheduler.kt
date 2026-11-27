@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import androidx.core.app.NotificationManagerCompat
 
 object ReminderScheduler {
     fun refresh(context: Context) {
@@ -15,14 +16,25 @@ object ReminderScheduler {
             store.scheduledOccurrenceIds = emptySet()
             return
         }
-        val repository = CalendarRepository(context, store)
-        if (!repository.hasPermission()) {
+        val notifications = NotificationManagerCompat.from(context)
+        val notificationChannelDisabled = Build.VERSION.SDK_INT >= 26 &&
+            context.getSystemService(android.app.NotificationManager::class.java)
+                ?.getNotificationChannel(MeetingAlertReceiver.CHANNEL_ID)?.importance == android.app.NotificationManager.IMPORTANCE_NONE
+        if (!notifications.areNotificationsEnabled() || notificationChannelDisabled) {
             store.scheduledOccurrenceIds.forEach { cancel(context, it) }
             store.scheduledOccurrenceIds = emptySet()
             return
         }
+        val repository = CalendarRepository(context, store)
         val now = System.currentTimeMillis()
-        val events = repository.events(now, now + 30L * 24 * 60 * 60 * 1000)
+        val calendarEvents = if (repository.hasPermission()) {
+            repository.events(now, now + 30L * 24 * 60 * 60 * 1000)
+                .filterNot { store.occurrenceHidden(it.occurrenceId) }
+        } else emptyList()
+        val localEvents = ReminderPlanner.excludeCalendarDuplicates(
+            ReminderPlanner.localScheduledDrafts(MobileMeetingStore(context).list()), calendarEvents,
+        )
+        val events = calendarEvents + localEvents
         val planned = ReminderPlanner.eligible(events, store.alertMinutes, now, store.deliveredOccurrenceIds)
         val nextIds = planned.map { it.first.occurrenceId }.toSet()
         (store.scheduledOccurrenceIds - nextIds).forEach { cancel(context, it) }
@@ -56,6 +68,7 @@ object ReminderScheduler {
             .putExtra(MeetingAlertReceiver.EXTRA_OCCURRENCE, event.occurrenceId)
             .putExtra(MeetingAlertReceiver.EXTRA_EVENT, event.eventId)
             .putExtra(MeetingAlertReceiver.EXTRA_CALENDAR, event.calendarId)
+            .putExtra(MeetingAlertReceiver.EXTRA_LOCAL_MEETING_ID, event.localMeetingId)
             .putExtra(MeetingAlertReceiver.EXTRA_BEGIN, event.beginMillis)
             .putExtra(MeetingAlertReceiver.EXTRA_END, event.endMillis)
             .putExtra(MeetingAlertReceiver.EXTRA_TITLE, event.title)
@@ -66,6 +79,7 @@ object ReminderScheduler {
         if (BuildConfig.DEBUG && LocalStore(context).previewActive) return false
         val begin = intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0)
         val occurrence = intent.getStringExtra(MeetingAlertReceiver.EXTRA_OCCURRENCE) ?: return false
+        if (LocalStore(context).occurrenceHidden(occurrence)) return false
         val repository = CalendarRepository(context, LocalStore(context))
         if (!repository.hasPermission()) return false
         val end = intent.getLongExtra(MeetingAlertReceiver.EXTRA_END, 0)
