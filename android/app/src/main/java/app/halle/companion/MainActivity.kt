@@ -2,952 +2,761 @@ package app.halle.companion
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlarmManager
-import android.app.DatePickerDialog
-import android.app.Dialog
-import android.app.TimePickerDialog
+import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.CalendarContract
 import android.provider.Settings
-import android.text.InputType
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.CheckBox
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.EditText
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import android.widget.FrameLayout
 import android.widget.Toast
-import android.media.MediaPlayer
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.util.Calendar
-import java.util.Locale
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executors
 
+/**
+ * Órbita home: the packaged Imba renderer in a locked-down WebView. Microphone, calendar, files, accounts and
+ * credentials stay native. Every store or file read/write a bridge action triggers runs on [io]; the UI thread
+ * only shows dialogs, starts activities and pushes snapshots into the page.
+ */
 class MainActivity : Activity() {
+    private lateinit var web: WebView
     private lateinit var store: LocalStore
-    private lateinit var repository: CalendarRepository
-    private lateinit var root: LinearLayout
-    private var selectedDate = LocalDate.now()
-    private var eventsForDay: List<MeetingOccurrence> = emptyList()
-    private var morningSummary: String? = null
-    private var previewMode = false
-    private lateinit var meetingStore: MobileMeetingStore
-    private var pendingRecordingId: String? = null
+    private lateinit var meetings: MobileMeetingStore
+    private lateinit var calendar: CalendarRepository
+    private val handler = Handler(Looper.getMainLooper())
+    private val io = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "halle-orbita-io") }
+    private var foreground = false
+    private var ready = false
+    private var preview = false
+    private var reminderRegistered = false
+    private var previousBrightness: Float? = null
+    private var player: MediaPlayer? = null
     private var micAskedBefore = false
-    private var mediaPlayer: MediaPlayer? = null
-    private var playingMeetingId: String? = null
-    private var pendingJoinUrl: String? = null
-    private var recordingElapsedView: TextView? = null
-    private val sharedRecordingExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "halle-shared-recording").apply { isDaemon = true }
+    private var pollGeneration = 0
+
+    // Written on the UI thread, read by snapshots built on io.
+    @Volatile private var pendingStartId: String? = null
+    @Volatile private var paired = false
+    @Volatile private var calendarEvents: List<MeetingOccurrence> = emptyList()
+    @Volatile private var rangeDate: LocalDate = LocalDate.now()
+    @Volatile private var activeStatus: MobileMeetingStatus? = null
+
+    // Recording startup (UI thread only).
+    private var pendingStartAt = 0L
+    private var serviceRequested = false
+    private var leaseAcquiring = false
+    private var heldLease: SharedRecordingLease? = null
+    private var preparationHeld = false
+
+    // io thread only.
+    private var lastSnapshot = ""
+
+    private val resetReminder = Runnable {
+        previousBrightness?.let { old -> window.attributes = window.attributes.apply { screenBrightness = old } }
+        previousBrightness = null
+        if (ready) web.evaluateJavascript("document.documentElement.classList.remove('recording-reminder')", null)
     }
-    private val recordingTicker = Handler(Looper.getMainLooper())
-    private val tickRecording = object : Runnable {
-        override fun run() {
-            val active = meetingStore.activeRecording()
-            if (active == null) {
-                if (recordingElapsedView != null) render()
-                return
-            }
-            recordingElapsedView?.text = "${formatDuration(meetingStore.recordingElapsedMs(active.id) ?: 0)} · Phone microphone only. Other participants may not be captured; audio stays on this phone."
-            recordingTicker.postDelayed(this, 1000)
+    private val reminderReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != RecordingScreenReminder.ACTION_REMINDER || !foreground || preview ||
+                activeStatus != MobileMeetingStatus.RECORDING) return
+            if (previousBrightness == null) previousBrightness = window.attributes.screenBrightness
+            handler.removeCallbacks(resetReminder)
+            window.attributes = window.attributes.apply { screenBrightness = 1f }
+            if (ready) web.evaluateJavascript("window.hallEReminder?.()", null)
+            handler.postDelayed(resetReminder, RecordingScreenReminder.PULSE_DURATION_MS)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = Color.rgb(245, 247, 245)
-        window.navigationBarColor = Color.rgb(245, 247, 245)
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        store = LocalStore(this)
-        meetingStore = MobileMeetingStore(this)
-        meetingStore.recoverInterrupted()
-        repository = CalendarRepository(this, store)
-        updatePreviewMode(intent)
-        intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0).takeIf { it > 0 }?.let { begin ->
-            selectedDate = Instant.ofEpochMilli(begin).atZone(ZoneId.systemDefault()).toLocalDate()
+        window.statusBarColor = BACKGROUND; window.navigationBarColor = BACKGROUND
+        WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
+        preview = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_PREVIEW, false)
+        store = LocalStore(this); meetings = MobileMeetingStore(this); calendar = CalendarRepository(this, store)
+        if (BuildConfig.DEBUG) store.previewActive = preview
+        if (!preview) io.execute {
+            meetings.recoverInterrupted()
+            PermissionPrompts(this).asked(Manifest.permission.RECORD_AUDIO) // loads the prompt flags off the UI thread
+            // Órbita previews remembered the notification prompt separately; carry that answer over so it is asked once.
+            if (getSharedPreferences(LEGACY_ORBITA_PROMPTS, MODE_PRIVATE).getBoolean("notificationsAsked", false))
+                PermissionPrompts(this).markAsked(Manifest.permission.POST_NOTIFICATIONS)
         }
-        maybeCreateMorningSummary()
-        render()
-        handleRecordingIntent(intent)
+        web = WebView(this).apply { setBackgroundColor(BACKGROUND) }
+        web.settings.apply {
+            javaScriptEnabled = true; allowFileAccess = false; allowContentAccess = false; domStorageEnabled = false
+            setSupportMultipleWindows(false); javaScriptCanOpenWindowsAutomatically = false
+            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW; mediaPlaybackRequiresUserGesture = true
+            // Follow Android's font size setting like the native screens do.
+            textZoom = OrbitaBridgePolicy.textZoom(resources.configuration.fontScale)
+        }
+        web.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
+                val path = request.url.path.orEmpty()
+                val mime = when (path) { "/index.html" -> "text/html"; "/app.js" -> "application/javascript"; "/app.css" -> "text/css"; "/hall-e.webp", "/hall-e-heart.webp", "/hal.webp", "/wall-e.webp" -> "image/webp"; else -> null }
+                if (request.url.scheme != "https" || request.url.host != ASSET_HOST || request.method != "GET" || mime == null)
+                    return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                return WebResourceResponse(mime, "UTF-8", assets.open("orbita" + path))
+            }
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean = true
+            override fun onPageFinished(view: WebView?, url: String?) { if (url == ASSET_URL) { ready = true; publish(true) } }
+        }
+        // An explicit debug preview gets only the browser's synthetic local model.
+        if (!preview) web.addJavascriptInterface(Bridge(), "HallENative")
+        // WebView ignores padding for its document viewport; inset its parent instead.
+        val content = FrameLayout(this).apply {
+            setBackgroundColor(BACKGROUND)
+            addView(web, FrameLayout.LayoutParams(-1, -1))
+        }
+        setContentView(content)
+        ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()); val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom)); insets
+        }
+        ViewCompat.requestApplyInsets(content); web.loadUrl(ASSET_URL); consumeIntent(intent)
     }
 
     override fun onResume() {
-        super.onResume()
+        super.onResume(); foreground = true
+        if (preview) return
         // Finishes moving a deleted account's phone recordings into this library after an interruption.
-        AccountRecordingMoves.resumeAsync(this) { runOnUiThread { if (!isFinishing && !isDestroyed) render() } }
-        if (::store.isInitialized) {
-            if (!previewMode && pendingRecordingId == null) meetingStore.recoverInterrupted()
-            if (selectedDate == LocalDate.now() && !previewMode) maybeCreateMorningSummary()
-            refreshEvents()
-            if (!previewMode) ReminderScheduler.refresh(this)
-            render()
-        }
+        AccountRecordingMoves.resumeAsync(this) { runOnUiThread { if (!isFinishing && !isDestroyed) publish(true) } }
+        ContextCompat.registerReceiver(this, reminderReceiver, IntentFilter(RecordingScreenReminder.ACTION_REMINDER), ContextCompat.RECEIVER_NOT_EXPORTED)
+        reminderRegistered = true
+        refreshCalendar(); refreshReminders(); maybeShowMorningSummary()
+        pendingStartId?.let { if (!serviceRequested && !leaseAcquiring && microphoneGranted()) startCapture(it) }
+        pollGeneration++; handler.removeCallbacks(poll); handler.post(poll)
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        updatePreviewMode(intent)
-        val begin = intent.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0)
-        if (begin > 0) selectedDate = Instant.ofEpochMilli(begin).atZone(ZoneId.systemDefault()).toLocalDate()
-        refreshEvents()
-        if (!previewMode) ReminderScheduler.refresh(this)
-        render()
-        handleRecordingIntent(intent)
+    override fun onPause() {
+        foreground = false; pollGeneration++; handler.removeCallbacks(poll); handler.removeCallbacks(resetReminder); resetReminder.run()
+        if (reminderRegistered) { unregisterReceiver(reminderReceiver); reminderRegistered = false }
+        super.onPause()
     }
 
-    private fun maybeCreateMorningSummary() {
-        if (previewMode) return
-        if (!store.morningSummaryEnabled || !repository.hasPermission()) return
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        if (hour !in 4 until 12 || !store.morningSummaryFor(LocalDate.now())) return
-        val now = System.currentTimeMillis()
-        val start = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val end = LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val today = ReminderPlanner.forLocalDate(repository.events(start, end), LocalDate.now())
-        morningSummary = ReminderPlanner.summary(today, now)
-    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumeIntent(intent) }
 
-    private fun updatePreviewMode(intent: Intent) {
-        previewMode = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_PREVIEW, false)
-        if (BuildConfig.DEBUG) {
-            store.previewActive = previewMode
-            if (previewMode) ReminderScheduler.refresh(this)
-        }
-    }
-
-    private fun refreshEvents() {
-        if (previewMode) {
-            eventsForDay = previewMeetings()
-            return
-        }
-        if (!repository.hasPermission()) { eventsForDay = emptyList(); return }
-        runCatching {
-            val start = selectedDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            val end = selectedDate.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            eventsForDay = ReminderPlanner.forLocalDate(repository.events(start, end), selectedDate)
-        }.onFailure { eventsForDay = emptyList() }
-    }
-
-    private fun render() {
-        val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(Color.rgb(245, 247, 245)) }
-        ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(view.paddingLeft, systemBars.top, view.paddingRight, systemBars.bottom)
-            insets
-        }
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(28))
-        }
-        scroll.addView(root)
-        setContentView(scroll)
-        ViewCompat.requestApplyInsets(scroll)
-
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val icon = ImageView(this).apply { setImageResource(R.drawable.hall_e); contentDescription = "Hall-e" }
-        header.addView(icon, LinearLayout.LayoutParams(dp(44), dp(44)))
-        val titleStack = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
-        titleStack.addView(text("Hall-e", 25, Color.rgb(31, 50, 46), true))
-        titleStack.addView(text("A calmer way into your day", 13, Color.rgb(98, 116, 108)))
-        header.addView(titleStack, LinearLayout.LayoutParams(0, -2, 1f))
-        val settings = button("Settings") { showSettings() }
-        header.addView(settings)
-        root.addView(header)
-
-        root.addView(space(16))
-        if (!previewMode) {
-            root.addView(button("Account calendar") { startActivity(Intent(this, AccountCalendarActivity::class.java)
-                .putExtra(AccountCalendarActivity.EXTRA_DAY, selectedDate.toString())) })
-            meetingWorkspace()
-            root.addView(space(12))
-        }
-        if (previewMode) {
-            card(Color.rgb(229, 242, 236)) {
-                addView(text("Preview · synthetic meetings", 14, Color.rgb(27, 79, 63), true))
-                addView(text("Calendar access and meeting reminders are disabled. You can still send an explicit test notification. Preview projects and notes stay in the separate debug app.", 12, Color.rgb(52, 83, 71)))
+    private fun consumeIntent(source: Intent) {
+        if (preview) return
+        source.getStringExtra(EXTRA_START_RECORDING)?.let { id ->
+            source.removeExtra(EXTRA_START_RECORDING)
+            // A shared-session handoff only prompts; this user still chooses to record here.
+            background({ meetings.find(id) }) { meeting ->
+                if (meeting == null || meeting.status != MobileMeetingStatus.DRAFT) return@background
+                AlertDialog.Builder(this).setTitle("¿Grabar con este teléfono?")
+                    .setMessage("Hall-e graba solo con el micrófono de este teléfono. Puede que no capte a participantes remotos y grabar puede requerir el consentimiento de todos.")
+                    .setPositiveButton("Grabar") { _, _ -> requestCapture(meeting.id) }
+                    .setNegativeButton("Ahora no", null).show()
             }
-            root.addView(space(8))
-            agendaHeader()
-            eventsForDay.forEach { eventCard(it) }
-        } else if (!repository.hasPermission()) permissionCard() else {
-            if (morningSummary != null) {
-                card(Color.rgb(229, 242, 236)) {
-                    addView(text("A little morning overview", 16, Color.rgb(27, 79, 63), true))
-                    addView(text(morningSummary.orEmpty(), 14, Color.rgb(52, 83, 71)))
+        }
+        source.getLongExtra(MeetingAlertReceiver.EXTRA_BEGIN, 0).takeIf { it > 0 }?.let {
+            rangeDate = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate(); refreshCalendar()
+        }
+    }
+
+    inner class Bridge {
+        @JavascriptInterface fun dispatch(action: String, raw: String) {
+            if (!OrbitaBridgePolicy.accepts(action, raw)) return
+            val p = runCatching { JSONObject(raw) }.getOrNull() ?: return
+            runOnUiThread { if (!isFinishing && ready && !preview) runCatching { handle(action, p) }.onFailure { showError(it.message ?: GENERIC_ERROR) } }
+        }
+    }
+
+    private fun handle(action: String, p: JSONObject) {
+        if (OrbitaBridgePolicy.blockedInStaging(action, BuildConfig.STAGING)) { showError(OrbitaBridgePolicy.STAGING_PAIRING_NOTE); return }
+        when (action) {
+            "refresh" -> { publish(true); refreshCalendar() }
+            "range" -> { rangeDate = LocalDate.parse(p.getString("date")); refreshCalendar() }
+            "quickRecord" -> quickRecord()
+            "recordMeeting" -> recordMeeting(p.getString("id"))
+            "stop" -> background({ meetings.activeRecording()?.id }) { id ->
+                id?.let { MeetingRecordingService.requestStop(this, it, "user") }
+                handler.postDelayed({ publish(true) }, 500)
+            }
+            "updateMeeting" -> {
+                val id = p.getString("id"); val title = p.optString("title").trim(); val project = p.optString("project").trim().takeIf(String::isNotBlank)
+                background({
+                    val previous = meetings.find(id) ?: error("La reunión ya no está disponible.")
+                    if (title.isNotBlank() && title != previous.title) check(meetings.updateTitle(id, title)) { "No se pudo guardar el nombre." }
+                    if (project != previous.projectName) check(meetings.updateProject(id, project)) { "No se pudo guardar el proyecto." }
+                }) { publish(true); message("Detalles guardados.") }
+            }
+            "createProject" -> { val name = p.getString("name"); background({ check(store.addProject(name).isNotBlank()) }) { publish(true) } }
+            "schedule" -> {
+                val at = LocalDate.parse(p.getString("date")).atTime(LocalTime.parse(p.getString("time"))).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val title = p.optString("title").ifBlank { "Nueva reunión" }; val project = p.optString("project").takeIf(String::isNotBlank)
+                background({ meetings.createDraft(title, project, null, at, at + 3_600_000) }) { draft ->
+                    publish(true); refreshReminders(); maybeRequestNotifications(); shareDraftIfPaired(draft)
                 }
-                root.addView(space(12))
             }
-            agendaHeader()
-            if (eventsForDay.isEmpty()) {
-                card(Color.WHITE) {
-                    addView(text("Nothing on the calendar", 17, Color.rgb(45, 62, 56), true))
-                    addView(text("Your day has room to breathe. Add a calendar in Settings if something is missing.", 14, Color.rgb(102, 116, 109)))
+            "trash" -> {
+                val id = p.getString("id"); val external = p.optBoolean("calendar")
+                check(id != pendingStartId) { "Espera a que comience la grabación y luego detenla antes de eliminarla." }
+                background({ if (external) check(store.hideOccurrence(id.removePrefix("calendar:"), true)) else setLocalTrashed(id, true) }) {
+                    refreshReminders()
+                    result(JSONObject().put("trash", JSONObject().put("id", id).put("calendar", external))); publish(true)
                 }
-            } else eventsForDay.forEach { eventCard(it) }
-        }
-        root.addView(space(16))
-        readinessCard()
-        root.addView(space(10))
-        TextView(this).apply {
-            text = "Device calendars and local recordings stay on this phone. Open Account calendar to sync private meetings and choose which new recordings to transcribe."
-            textSize = 12f; setTextColor(Color.rgb(108, 122, 115)); gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-        }.also { root.addView(it) }
-    }
-
-    private fun permissionCard() {
-        card(Color.WHITE) {
-            addView(text("Bring your calendar into Hall-e", 19, Color.rgb(38, 58, 50), true))
-            addView(text("Hall-e reads selected calendars on this phone to show today’s agenda and schedule local reminders. Events stay on your device.", 14, Color.rgb(99, 114, 106)))
-            val grant = button("Choose calendar access") { requestCalendarPermission() }
-            addView(grant, LinearLayout.LayoutParams(-1, dp(46)))
-        }
-    }
-
-    private fun agendaHeader() {
-        val line = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; orientation = LinearLayout.HORIZONTAL }
-        line.addView(text(selectedDate.format(DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.getDefault())), 21,
-            Color.rgb(38, 58, 50), true), LinearLayout.LayoutParams(0, -2, 1f))
-        line.addView(button("‹") { selectedDate = selectedDate.minusDays(1); refreshEvents(); render() })
-        line.addView(button("Today") { selectedDate = LocalDate.now(); refreshEvents(); render() })
-        line.addView(button("›") { selectedDate = selectedDate.plusDays(1); refreshEvents(); render() })
-        root.addView(line)
-        root.addView(space(8))
-    }
-
-    private fun eventCard(event: MeetingOccurrence) {
-        card(Color.WHITE) {
-            val top = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
-            val times = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-            if (event.allDay) {
-                times.addView(text("ALL DAY", 12, Color.rgb(20, 125, 114), true))
-            } else {
-                times.addView(text(event.startsAt(), 12, Color.rgb(20, 125, 114), true))
-                times.addView(text("to ${event.endsAt()}", 11, Color.rgb(108, 121, 114)))
             }
-            top.addView(times, LinearLayout.LayoutParams(dp(112), -2))
-            val heading = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-            heading.addView(text(event.title, 17, Color.rgb(39, 55, 49), true))
-            heading.addView(text(event.calendarName + (event.location?.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""),
-                12, Color.rgb(108, 121, 114)))
-            store.projectFor(event.eventKey)?.let { heading.addView(text("Project · $it", 12, Color.rgb(20, 125, 114), true)) }
-            top.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(top)
-            val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            if (event.meetingUrl != null) actions.addView(button("Join") { chooseJoinMode(event) })
-            if (!previewMode) actions.addView(button("Open") { openCalendarEvent(event) })
-            actions.addView(button("Project") { chooseProject(event) })
-            actions.addView(button(if (store.noteFor(event.eventKey).isBlank()) "Note" else "Edit note") { editNote(event) })
-            if (store.noteFor(event.eventKey).isNotBlank()) actions.addView(button("Share") { shareNote(event) })
-            addView(actions)
-        }
-        root.addView(space(9))
-    }
-
-    private fun meetingWorkspace() {
-        val active = meetingStore.activeRecording()
-        card(if (active != null) Color.rgb(255, 241, 222) else Color.rgb(229, 242, 236)) {
-            addView(text("Meetings on this phone", 18, Color.rgb(31, 58, 48), true))
-            meetingStore.loadError?.let {
-                addView(text(it, 13, Color.rgb(153, 70, 53), true))
-            }
-            addView(text("Create a meeting without calendar access, then choose whether to record with this phone’s microphone.",
-                13, Color.rgb(76, 99, 87)))
-            if (BuildConfig.STAGING) {
-                // Pairing talks only to the production coordinator, so staging builds never offer it.
-                addView(text("Shared sessions are unavailable in staging builds because pairing uses the production coordinator.",
-                    12, Color.rgb(95, 111, 102)))
-            } else {
-                addView(button("Shared sessions") {
-                    startActivity(Intent(this@MainActivity, SharedSessionActivity::class.java))
-                }, LinearLayout.LayoutParams(-1, dp(44)))
-            }
-            addView(button("＋  New meeting") { showCreateMeeting() }, LinearLayout.LayoutParams(-1, dp(48)))
-            if (active != null) {
-                addView(space(7))
-                addView(text("Recording · ${active.title}", 15, Color.rgb(133, 73, 20), true))
-                recordingElapsedView = text("${formatDuration(meetingStore.recordingElapsedMs(active.id) ?: 0)} · Phone microphone only. Other participants may not be captured; audio stays on this phone.",
-                    12, Color.rgb(133, 73, 20)).also { addView(it) }
-                addView(button("Stop recording") { stopRecording() })
-                recordingTicker.removeCallbacks(tickRecording)
-                recordingTicker.postDelayed(tickRecording, 1000)
-            } else {
-                recordingTicker.removeCallbacks(tickRecording)
-                recordingElapsedView = null
-            }
-        }
-        meetingStore.list().forEach { meeting ->
-            card(Color.WHITE) {
-                addView(text(meeting.title, 16, Color.rgb(39, 55, 49), true))
-                val time = meeting.scheduledStartAtMs?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault())
-                    .format(DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a", Locale.getDefault())) }
-                addView(text(listOfNotNull(time, meeting.projectName?.let { "Project · $it" }, meetingStatus(meeting)).joinToString("  ·  "),
-                    12, Color.rgb(95, 111, 102)))
-                meeting.error?.let { addView(text(it, 12, Color.rgb(153, 70, 53))) }
-                val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                if (meeting.status == MobileMeetingStatus.DRAFT) {
-                    actions.addView(button("Record") { requestRecording(meeting.id) })
-                    actions.addView(button("Save without recording") { toast("Meeting saved on this phone.") })
+            "restore" -> {
+                val id = p.getString("id"); val external = p.optBoolean("calendar")
+                background({ if (external) check(store.hideOccurrence(id.removePrefix("calendar:"), false)) else setLocalTrashed(id, false) }) {
+                    refreshReminders(); publish(true)
                 }
-                val offered = personalRecordingActions(meeting.status, playable = meetingStore.playbackUri(meeting.id) != null,
-                    partialFile = meeting.status == MobileMeetingStatus.INTERRUPTED && meetingStore.sharePartialFileIntent(meeting.id) != null)
-                if (PhoneRecordingAction.PLAY in offered) {
-                    actions.addView(button(if (playingMeetingId == meeting.id) "Stop playback" else "Play") { togglePlayback(meeting) })
-                }
-                if (PhoneRecordingAction.SHARE_AUDIO in offered) actions.addView(button("Share audio") { shareRecording(meeting) })
-                if (PhoneRecordingAction.SHARE_PARTIAL_FILE in offered) {
-                    actions.addView(button("Share partial file…") { sharePartialRecordingFile(meeting) })
-                }
-                actions.addView(button("Project") { chooseMeetingProject(meeting) })
-                addView(actions)
-                if (PhoneRecordingAction.DELETE in offered) addView(button("Delete…") {
-                    confirmDeleteRecording(meeting, hasAudio = PhoneRecordingAction.PLAY in offered ||
-                        PhoneRecordingAction.SHARE_PARTIAL_FILE in offered)
-                })
             }
-        }
-    }
-
-    private fun showCreateMeeting(event: MeetingOccurrence? = null, shouldRecord: Boolean = false) {
-        if (previewMode) return
-        val now = System.currentTimeMillis()
-        val defaultStart = event?.beginMillis?.takeIf { it > now } ?: now + TimeUnit.MINUTES.toMillis(5)
-        val defaultEnd = event?.endMillis?.takeIf { it > defaultStart } ?: defaultStart + TimeUnit.MINUTES.toMillis(30)
-        var startAt = defaultStart
-        var endAt = defaultEnd
-        var project = event?.let { store.projectFor(it.eventKey) }
-        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
-        val titleInput = EditText(this).apply { hint = "Meeting title"; setSingleLine(true); setText(event?.title.orEmpty()) }
-        val dateButton = button("") {}
-        val startButton = button("") {}
-        val endButton = button("") {}
-        val projectButton = button("") {}
-        fun refreshLabels() {
-            val formatter = DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault())
-            dateButton.text = Instant.ofEpochMilli(startAt).atZone(ZoneId.systemDefault()).format(formatter)
-            startButton.text = "Starts · " + Instant.ofEpochMilli(startAt).atZone(ZoneId.systemDefault())
-                .format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
-            endButton.text = "Ends · " + Instant.ofEpochMilli(endAt).atZone(ZoneId.systemDefault())
-                .format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
-            projectButton.text = "Project · ${project ?: "None"}"
-        }
-        dateButton.setOnClickListener {
-            val date = Instant.ofEpochMilli(startAt).atZone(ZoneId.systemDefault()).toLocalDate()
-            DatePickerDialog(this, { _, year, month, day ->
-                val oldStart = Instant.ofEpochMilli(startAt).atZone(ZoneId.systemDefault())
-                val oldEnd = Instant.ofEpochMilli(endAt).atZone(ZoneId.systemDefault())
-                val nextDate = LocalDate.of(year, month + 1, day)
-                startAt = nextDate.atTime(oldStart.hour, oldStart.minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                endAt = nextDate.atTime(oldEnd.hour, oldEnd.minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                refreshLabels()
-            }, date.year, date.monthValue - 1, date.dayOfMonth).show()
-        }
-        startButton.setOnClickListener { pickMeetingTime(startAt) { value -> startAt = value; if (endAt < startAt) endAt = startAt + TimeUnit.MINUTES.toMillis(30); refreshLabels() } }
-        endButton.setOnClickListener { pickMeetingTime(endAt) { value -> endAt = maxOf(value, startAt); refreshLabels() } }
-        projectButton.setOnClickListener {
-            val projects = store.projects()
-            val choices = projects + listOf("+ New project", "None")
-            android.app.AlertDialog.Builder(this).setTitle("Choose project").setItems(choices.toTypedArray()) { _, index ->
-                when { index < projects.size -> project = projects[index]; index == projects.size -> createLocalProject { project = it }
-                    else -> project = null }
-                refreshLabels()
-            }.show()
-        }
-        fields.addView(titleInput); fields.addView(dateButton); fields.addView(startButton); fields.addView(endButton); fields.addView(projectButton)
-        refreshLabels()
-        val dialog = android.app.AlertDialog.Builder(this).setTitle("New meeting").setView(fields)
-            .setPositiveButton("Save and record", null)
-            .setNeutralButton("Save without recording", null)
-            .setNegativeButton("Cancel", null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val title = titleInput.text.toString().trim().ifBlank { event?.title.orEmpty() }
-                if (title.isBlank()) { titleInput.error = "Enter a meeting title"; return@setOnClickListener }
-                val meeting = runCatching {
-                    meetingStore.createDraft(title, project, event?.eventKey, startAt, endAt)
-                }.getOrElse {
-                    toast(it.message ?: "Could not save this meeting.")
-                    return@setOnClickListener
-                }
-                dialog.dismiss(); render()
-                pendingJoinUrl = if (shouldRecord) event?.meetingUrl else null
-                requestRecording(meeting.id)
+            "deleteMeeting" -> deleteMeeting(p.getString("id"))
+            "assignProject" -> {
+                val e = eventFor(p.getString("id")) ?: error("Actualiza el calendario y vuelve a intentarlo.")
+                val project = p.optString("project").trim().takeIf(String::isNotBlank)
+                background({ store.assignProject(e.eventKey, project) }) { publish(true); message("Proyecto guardado.") }
             }
-            dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val title = titleInput.text.toString().trim().ifBlank { event?.title.orEmpty() }
-                if (title.isBlank()) { titleInput.error = "Enter a meeting title"; return@setOnClickListener }
-                val meeting = runCatching {
-                    meetingStore.createDraft(title, project, event?.eventKey, startAt, endAt, null)
-                }.getOrElse {
-                    toast(it.message ?: "Could not save this meeting.")
-                    return@setOnClickListener
-                }
-                dialog.dismiss(); render()
-                shareSavedDraftIfPaired(meeting)
+            "openEvent" -> {
+                val e = eventFor(p.getString("id")) ?: error("Actualiza el calendario y vuelve a intentarlo.")
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.withAppendedPath(CalendarContract.Events.CONTENT_URI, e.eventId.toString()))
+                        .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, e.beginMillis).putExtra(CalendarContract.EXTRA_EVENT_END_TIME, e.endMillis))
+                }.onFailure { showError("No hay una app de calendario disponible.") }
             }
+            "testNotification" -> sendTestNotification()
+            "play" -> play(p.getString("id"))
+            "shareAudio" -> {
+                val id = p.getString("id")
+                background({ meetings.shareIntent(id) ?: meetings.sharePartialFileIntent(id) ?: error("El audio ya no está en este teléfono.") }) { share ->
+                    startActivity(Intent.createChooser(share, "Compartir audio"))
+                }
+            }
+            "join" -> {
+                val e = eventFor(p.getString("id")) ?: error("Actualiza el calendario y vuelve a intentarlo.")
+                val link = e.meetingUrl ?: error("Esta reunión no tiene enlace.")
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+            }
+            "note" -> editNote(p.getString("id"))
+            "scanQr" -> startActivityForResult(Intent(this, SharedSessionActivity::class.java)
+                .putExtra(SharedSessionActivity.EXTRA_SCAN_ON_LAUNCH, true), SHARED_SESSION_SCAN_REQUEST)
+            "pair" -> startActivity(Intent(this, SharedSessionActivity::class.java))
+            "accountCalendar" -> startActivity(Intent(this, AccountCalendarActivity::class.java)
+                .putExtra(AccountCalendarActivity.EXTRA_DAY, OrbitaBridgePolicy.accountCalendarDay(p.optString("date"), rangeDate)))
+            "calendarAccess" -> if (calendar.hasPermission()) chooseCalendars() else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), CALENDAR_PERMISSION)
+            "reminders" -> chooseReminders()
+            "notifications" -> maybeRequestNotifications(force = true)
+            "exactAlarms" -> startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
+            "trashList" -> showTrash()
         }
-        dialog.show()
     }
 
-    private fun pickMeetingTime(current: Long, onPicked: (Long) -> Unit) {
-        val time = Instant.ofEpochMilli(current).atZone(ZoneId.systemDefault())
-        TimePickerDialog(this, { _, hour, minute ->
-            onPicked(time.toLocalDate().atTime(hour, minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
-        }, time.hour, time.minute, false).show()
-    }
-
-    private fun createLocalProject(onCreated: (String) -> Unit) {
-        val input = EditText(this).apply { hint = "Project name"; setSingleLine(true) }
-        android.app.AlertDialog.Builder(this).setTitle("New local project").setView(input)
-            .setPositiveButton("Create") { _, _ -> store.addProject(input.text.toString()).takeIf(String::isNotBlank)?.let(onCreated) }
-            .setNegativeButton("Cancel", null).show()
-    }
-
-    private fun shareSavedDraftIfPaired(meeting: MobileMeeting) {
-        val client = SharedSessionClient(this)
-        if (!client.paired()) return
-        sharedRecordingExecutor.execute {
-            val result = runCatching { client.createSession(meeting) }
+    /** Runs store/file work on [io], then [ui] on the UI thread; a failure shows its (Spanish) message. */
+    private fun <T> background(work: () -> T, onError: (Throwable) -> Unit = {}, ui: (T) -> Unit) {
+        io.execute {
+            val outcome = runCatching(work)
             runOnUiThread {
-                result.onSuccess { toast("Meeting saved locally and shared with paired devices.") }
-                    .onFailure { toast("Meeting saved on this phone, but sharing failed: " + (it.message ?: "coordinator unavailable")) }
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                outcome.onSuccess { runCatching { ui(it) }.onFailure { showError(it.message ?: GENERIC_ERROR) } }
+                    .onFailure { onError(it); showError(it.message ?: GENERIC_ERROR) }
             }
         }
     }
 
-    private fun chooseJoinMode(event: MeetingOccurrence) {
-        android.app.AlertDialog.Builder(this).setTitle("Join ${event.title}")
-            .setItems(arrayOf("Join and record with this phone", "Join without recording")) { _, which ->
-                if (which == 0) showCreateMeeting(event, shouldRecord = true) else event.meetingUrl?.let(::openMeeting)
-            }.setNegativeButton("Cancel", null).show()
+    // --- Recording -------------------------------------------------------------------------------------------
+
+    private fun quickRecord() {
+        if (preview || !foreground) return
+        if (pendingStartId != null) { showError(BUSY); publish(true); return }
+        background({
+            if (meetings.activeRecording() != null || SharedSessionClient.recordingPreparationActive()) null
+            else meetings.createDraft("Reunión instantánea", null, null, System.currentTimeMillis(), null)
+        }) { draft -> if (draft == null) { showError(BUSY); publish(true) } else requestCapture(draft.id) }
     }
 
-    private fun requestRecording(id: String) {
-        if (previewMode) return
-        if (meetingStore.activeRecording() != null) { toast("Stop the active recording before starting another."); return }
-        android.app.AlertDialog.Builder(this).setTitle("Record with this phone?")
-            .setMessage("Hall-e records audio from this phone’s microphone only. It may not capture remote participants, and other audio apps may affect recording quality. Recording can require everyone’s consent.")
-            .setPositiveButton("Continue") { _, _ ->
-                // Notifications are asked once alongside the microphone; recording starts whatever that answer is.
-                val request = prepareRecordingPermissions()
-                if (request.permissions.isNotEmpty()) {
-                    pendingRecordingId = id
-                    micAskedBefore = request.microphoneAskedBefore
-                    ActivityCompat.requestPermissions(this, request.permissions, REQUEST_MICROPHONE)
-                } else startRecording(id)
-            }.setNegativeButton(if (pendingJoinUrl != null) "Join without recording" else "Not now") { _, _ ->
-                pendingJoinUrl?.let(::openMeeting)
-                pendingJoinUrl = null
-            }.show()
+    private fun recordMeeting(id: String) {
+        if (preview || !foreground) return
+        if (pendingStartId != null) { showError(BUSY); publish(true); return }
+        val event = if (id.startsWith("calendar:")) calendarEvents.find { "calendar:" + it.occurrenceId == id }
+            ?: error("Actualiza el calendario y vuelve a intentarlo.") else null
+        background({
+            if (meetings.activeRecording() != null || SharedSessionClient.recordingPreparationActive()) return@background null
+            if (event != null) meetings.createDraft(event.title, store.projectFor(event.eventKey), event.occurrenceId, event.beginMillis, event.endMillis).id
+            else {
+                val m = meetings.find(id) ?: error("La reunión ya no está disponible.")
+                check(m.trashedAtMs == null) { "La reunión está en la papelera." }
+                check(m.status == MobileMeetingStatus.DRAFT) { "Esta reunión ya tiene una grabación." }
+                id
+            }
+        }) { draftId -> if (draftId == null) { showError(BUSY); publish(true) } else requestCapture(draftId) }
     }
 
-    private fun startRecording(id: String) {
-        pendingRecordingId = null
-        if (meetingStore.find(id) == null) {
-            toast("Could not start recording. Check microphone access and available storage.")
-            return
-        }
+    /** One request asks for the microphone and, once, notifications; recording starts whatever the notification answer. */
+    private fun requestCapture(id: String) {
+        if (preview || !foreground) return
+        pendingStartId = id; pendingStartAt = SystemClock.elapsedRealtime(); serviceRequested = false
+        val request = prepareRecordingPermissions()
+        if (request.permissions.isNotEmpty()) {
+            micAskedBefore = request.microphoneAskedBefore
+            requestPermissions(request.permissions, MIC_PERMISSION)
+        } else startCapture(id)
+        publish(true)
+    }
+
+    /** Paired phones claim the workspace's exclusive recording lease first, as the native home screen did. */
+    private fun startCapture(id: String) {
+        if (preview || !foreground || serviceRequested || leaseAcquiring) return
         val client = SharedSessionClient(this)
-        if (!client.paired()) {
-            startLocalRecording(id, null)
-            return
-        }
-        if (!SharedSessionClient.beginRecordingPreparation()) {
-            toast("A shared recording is already being prepared on this phone.")
-            return
-        }
-        pendingRecordingId = id
-        render()
-        sharedRecordingExecutor.execute {
-            val result = runCatching {
-                val meeting = meetingStore.find(id) ?: error("Meeting not found.")
-                val state = client.state()
+        leaseAcquiring = true
+        background({
+            // Staging never reaches the production pairing coordinator.
+            if (BuildConfig.STAGING || !client.paired()) return@background null
+            check(SharedSessionClient.beginRecordingPreparation()) { "Ya se está preparando una grabación compartida en este teléfono." }
+            runCatching {
+                val meeting = meetings.find(id) ?: error("La reunión ya no está disponible.")
                 val sessionId = meeting.sharedSessionId ?: meeting.id
-                if (state.sessions.none { it.id == sessionId }) client.createSession(meeting)
+                if (client.state().sessions.none { it.id == sessionId }) client.createSession(meeting)
                 client.claimRecordingLease(sessionId)
+            }.getOrElse { SharedSessionClient.finishRecordingPreparation(); throw it }
+        }, onError = {
+            leaseAcquiring = false
+            if (pendingStartId == id) { pendingStartId = null; publish(true) }
+        }) { lease ->
+            leaseAcquiring = false
+            if (lease != null) { preparationHeld = true; heldLease = lease }
+            if (!foreground || pendingStartId != id) {
+                releaseStartup(cancelled = true)
+                if (lease != null) showError("La grabación no comenzó porque Hall-e dejó de estar en primer plano.")
+                return@background
             }
-            runOnUiThread {
-                pendingRecordingId = null
-                result.onSuccess { lease ->
-                    if (isFinishing || isDestroyed || !hasWindowFocus()) {
-                        SharedSessionClient.finishRecordingPreparation()
-                        sharedRecordingExecutor.execute {
-                            runCatching { SharedSessionClient(this).finalizeSegmentAndRelease(lease, "interrupted") }
-                        }
-                        toast("Recording was not started because Hall-e left the foreground.")
-                    } else startLocalRecording(id, lease)
-                }
-                    .onFailure { error ->
-                        SharedSessionClient.finishRecordingPreparation()
-                        toast(error.message ?: "Could not get the shared recording lease.")
-                        render()
-                    }
+            startService(id, lease)
+        }
+    }
+
+    private fun startService(id: String, lease: SharedRecordingLease?) {
+        serviceRequested = true; pendingStartAt = SystemClock.elapsedRealtime()
+        val deadline = lease?.let { LeaseDeadline(it.localDeadlineElapsedMs) }
+        background({ MeetingRecordingService.start(this, id, deadline?.let { guard -> { guard.isValid() } }, lease) }) { started ->
+            if (!started) {
+                // The service never took the lease, so it is finalized here.
+                serviceRequested = false
+                releaseStartup(cancelled = true)
+                pendingStartId = null
+                showError("No se pudo iniciar el micrófono. La reunión está guardada.")
+                publish(true)
             }
         }
     }
 
-    private fun handleRecordingIntent(source: Intent?) {
-        if (previewMode) return
-        val id = source?.getStringExtra(EXTRA_START_RECORDING) ?: return
-        source.removeExtra(EXTRA_START_RECORDING)
-        if (meetingStore.find(id) != null) requestRecording(id)
+    /** Ends lease preparation; a lease that never reached a running recorder is finalized as interrupted. */
+    private fun releaseStartup(cancelled: Boolean) {
+        val lease = heldLease
+        if (preparationHeld) SharedSessionClient.finishRecordingPreparation()
+        preparationHeld = false; heldLease = null
+        if (cancelled && lease != null) {
+            if (serviceRequested) lease.cancellationRequested.set(true)
+            else io.execute { runCatching { SharedSessionClient(this).finalizeSegmentAndRelease(lease, "interrupted") } }
+        }
     }
 
-    private fun startLocalRecording(id: String, sharedLease: SharedRecordingLease?) {
-        val deadline = sharedLease?.let { LeaseDeadline(it.localDeadlineElapsedMs) }
-        val started = MeetingRecordingService.start(
-            this, id, deadline?.let { guard -> { guard.isValid() } }, sharedLease,
-        )
-        if (!started) {
-            if (sharedLease != null) SharedSessionClient.finishRecordingPreparation()
-            if (sharedLease != null) sharedRecordingExecutor.execute {
-                runCatching { SharedSessionClient(this).finalizeSegmentAndRelease(sharedLease, "interrupted") }
-            }
-            toast("Could not start recording. Check microphone access and available storage.")
-        } else {
-            sharedRecordingExecutor.execute {
-                val deadline = android.os.SystemClock.elapsedRealtime() + 3_000L
-                var recording = false
-                while (android.os.SystemClock.elapsedRealtime() < deadline) {
-                    val status = meetingStore.find(id)?.status
-                    if (status == MobileMeetingStatus.RECORDING) { recording = true; break }
-                    if (status == MobileMeetingStatus.FAILED || status == MobileMeetingStatus.INTERRUPTED) break
-                    Thread.sleep(100)
-                }
+    private fun checkStartup(id: String, status: MobileMeetingStatus?) {
+        if (pendingStartId != id || leaseAcquiring) return
+        if (status == MobileMeetingStatus.RECORDING) { pendingStartId = null; serviceRequested = false; releaseStartup(cancelled = false); return }
+        if (!serviceRequested) return
+        if (status == MobileMeetingStatus.FAILED || status == MobileMeetingStatus.INTERRUPTED ||
+            SystemClock.elapsedRealtime() - pendingStartAt > STARTUP_TIMEOUT_MS) {
+            releaseStartup(cancelled = true)
+            MeetingRecordingService.requestStop(this, id, "startup-timeout")
+            pendingStartId = null; serviceRequested = false
+            showError("Android no confirmó el inicio del micrófono. La captura se detuvo de forma segura.")
+        }
+    }
+
+    private fun microphoneGranted() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private val poll = object : Runnable {
+        override fun run() {
+            if (!foreground) return
+            val generation = pollGeneration
+            val pending = pendingStartId
+            io.execute {
+                val active = runCatching { meetings.activeRecording() }.getOrNull()
+                val pendingStatus = pending?.let { runCatching { meetings.find(it)?.status }.getOrNull() }
                 runOnUiThread {
-                    if (sharedLease != null) SharedSessionClient.finishRecordingPreparation()
-                    val foreground = !isFinishing && !isDestroyed && hasWindowFocus()
-                    if (recording && foreground) {
-                        toast(if (sharedLease == null) "Recording with this phone’s microphone. Other participants may not be captured."
-                            else "Shared recording is active on this phone only. Other participants may not be captured.")
-                        pendingJoinUrl?.let(::openMeeting)
-                        pendingJoinUrl = null
-                    } else {
-                        if (started) {
-                            sharedLease?.cancellationRequested?.set(true)
-                            MeetingRecordingService.requestStop(this, id,
-                                if (!foreground) "activity-backgrounded" else "startup-ack-timeout")
-                        }
-                        pendingJoinUrl = null
-                        toast(if (!foreground) "Recording stopped because Hall-e left the foreground."
-                            else "Android could not confirm microphone startup. The recording was safely stopped.")
-                    }
-                    render()
+                    if (generation != pollGeneration || !foreground || isFinishing) return@runOnUiThread
+                    activeStatus = active?.status
+                    pending?.let { checkStartup(it, pendingStatus) }
+                    if (active?.status == MobileMeetingStatus.RECORDING) maybeRequestNotifications()
+                    publish()
+                    handler.postDelayed(this, if (active != null || pendingStartId != null) 250 else 1500)
                 }
             }
         }
-        render()
     }
 
-    private fun stopRecording() {
-        MeetingRecordingService.stop(this)
-        recordingTicker.removeCallbacks(tickRecording)
-        render()
+    // --- Library ---------------------------------------------------------------------------------------------
+
+    private class DeleteCandidate(val meeting: MobileMeeting, val actions: List<PhoneRecordingAction>)
+
+    private fun deleteCandidate(id: String): DeleteCandidate {
+        val meeting = meetings.find(id) ?: error("La reunión ya no está disponible.")
+        return DeleteCandidate(meeting, actionsFor(meeting))
     }
 
-    private fun togglePlayback(meeting: MobileMeeting) {
-        if (playingMeetingId == meeting.id) {
-            mediaPlayer?.release(); mediaPlayer = null; playingMeetingId = null; render(); return
+    /** Permanent delete from this phone, under [PhoneRecordingPolicy]: never while recording, drafts included. */
+    private fun deleteMeeting(id: String, confirmed: Boolean = true) {
+        if (id == pendingStartId) { showError("Espera a que comience la grabación y luego detenla antes de eliminarla."); return }
+        background({ deleteCandidate(id) }) { candidate ->
+            check(PhoneRecordingAction.DELETE in candidate.actions) { "Detén la grabación antes de eliminarla." }
+            if (!confirmed) { confirmDelete(candidate); return@background }
+            performDelete(candidate.meeting)
         }
-        mediaPlayer?.release(); mediaPlayer = null; playingMeetingId = null
-        val uri = meetingStore.playbackUri(meeting.id) ?: run { toast("Recording file is unavailable."); return }
-        runCatching {
-            MediaPlayer().apply {
+    }
+
+    private fun confirmDelete(candidate: DeleteCandidate) {
+        val m = candidate.meeting
+        AlertDialog.Builder(this).setTitle(personalDeleteTitleEs(m.status))
+            .setMessage(personalDeleteMessageEs(m.title, hasAudio(candidate.actions), sharedSession = m.sharedSessionId != null))
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Eliminar") { _, _ -> performDelete(m) }.show()
+    }
+
+    private fun performDelete(m: MobileMeeting) {
+        if (player != null && playingId == m.id) { player?.release(); player = null; playingId = null }
+        background({ meetings.deleteRecording(m.id) }) { deleted ->
+            if (deleted) result(JSONObject().put("deleted", JSONObject().put("id", m.id)))
+            message(personalDeletedMessageEs(m.status, deleted))
+            refreshReminders(); publish(true)
+        }
+    }
+
+    private fun hasAudio(actions: List<PhoneRecordingAction>) =
+        PhoneRecordingAction.PLAY in actions || PhoneRecordingAction.SHARE_PARTIAL_FILE in actions
+
+    private fun actionsFor(m: MobileMeeting): List<PhoneRecordingAction> {
+        val directory = File(filesDir, MobileMeetingStore.RECORDINGS_DIRECTORY)
+        val finalAudio = m.audioFileName == "${m.id}.m4a" && File(directory, "${m.id}.m4a").let { it.isFile && it.length() > 0 }
+        val partialAudio = m.audioFileName == "${m.id}.m4a.partial" && File(directory, "${m.id}.m4a.partial").let { it.isFile && it.length() > 0 }
+        return OrbitaBridgePolicy.recordingActions(m.status, finalAudio, partialAudio)
+    }
+
+    private var playingId: String? = null
+    private fun play(id: String) {
+        player?.release(); player = null; playingId = null
+        background({ meetings.playbackUri(id) ?: error("El audio ya no está en este teléfono.") }) { uri ->
+            player = MediaPlayer().apply {
                 setDataSource(this@MainActivity, uri)
-                setOnCompletionListener { it.release(); if (playingMeetingId == meeting.id) { playingMeetingId = null; mediaPlayer = null; render() } }
-                prepare(); start()
+                setOnPreparedListener { it.start() }
+                setOnCompletionListener { it.release(); if (player === it) { player = null; playingId = null } }
+                prepareAsync()
             }
-        }.onSuccess { mediaPlayer = it; playingMeetingId = meeting.id; render() }
-            .onFailure { toast("Could not play this recording.") }
+            playingId = id
+        }
     }
 
-    private fun shareRecording(meeting: MobileMeeting) {
-        val intent = meetingStore.shareIntent(meeting.id) ?: run { toast("Recording file is unavailable."); return }
-        startActivity(Intent.createChooser(intent, "Share ${meeting.title}"))
-    }
-
-    private fun sharePartialRecordingFile(meeting: MobileMeeting) {
-        val intent = meetingStore.sharePartialFileIntent(meeting.id)
-            ?: run { toast("Partial recording file is unavailable."); return }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Share partial recording file?")
-            .setMessage("This file was interrupted before recording completed. Its audio format may be incomplete or unplayable. Hall-e will share the original file only after you choose a destination.")
-            .setPositiveButton("Choose destination") { _, _ ->
-                startActivity(Intent.createChooser(intent, "Share partial file · ${meeting.title}"))
+    private fun setLocalTrashed(id: String, hidden: Boolean) {
+        val meeting = meetings.find(id) ?: error("La reunión ya no está disponible.")
+        check(if (hidden) meetings.trash(id) else meetings.restore(id)) { "No se pudo actualizar la reunión." }
+        meeting.sourceEventKey?.let { key ->
+            if (!store.hideOccurrence(key, hidden)) {
+                if (hidden) meetings.restore(id) else meetings.trash(id)
+                error("No se pudo actualizar el calendario local. Vuelve a intentarlo.")
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
     }
 
-    private fun confirmDeleteRecording(meeting: MobileMeeting, hasAudio: Boolean) {
-        android.app.AlertDialog.Builder(this)
-            .setTitle(if (meeting.status == MobileMeetingStatus.DRAFT) "Delete this meeting?" else "Delete this recording?")
-            .setMessage(personalDeleteMessage(meeting.title, hasAudio, sharedSession = meeting.sharedSessionId != null))
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Delete") { _, _ ->
-                if (playingMeetingId == meeting.id) { mediaPlayer?.release(); mediaPlayer = null; playingMeetingId = null }
-                val noun = if (meeting.status == MobileMeetingStatus.DRAFT) "Meeting" else "Recording"
-                toast(if (meetingStore.deleteRecording(meeting.id)) "$noun deleted from this phone."
-                    else "Could not delete the recording. Stop it first and check available storage.")
-                render()
+    private class TrashEntry(val label: String, val meeting: MobileMeeting?, val calendarId: String?, val actions: List<PhoneRecordingAction>)
+
+    private fun showTrash() {
+        val events = calendarEvents
+        background({
+            val all = meetings.list(includeTrashed = true)
+            val linked = all.mapNotNull { it.sourceEventKey }.toSet()
+            all.filter { it.trashedAtMs != null }.map { TrashEntry(it.title, it, null, actionsFor(it)) } +
+                store.hiddenOccurrences().filterNot { it in linked }.map { occurrence ->
+                    TrashEntry(events.find { it.occurrenceId == occurrence }?.title ?: "Evento del calendario", null, occurrence, emptyList())
+                }
+        }) { entries ->
+            if (entries.isEmpty()) { message("La papelera está vacía."); return@background }
+            AlertDialog.Builder(this).setTitle("Papelera").setItems(entries.map { it.label }.toTypedArray()) { _, index ->
+                val entry = entries[index]
+                val builder = AlertDialog.Builder(this).setTitle(entry.label)
+                    .setMessage(if (entry.meeting != null) "Restaura la reunión o elimínala de este teléfono." else "El evento sigue en tu calendario; solo se ocultó en Hall-e.")
+                    .setPositiveButton("Restaurar") { _, _ -> restoreEntry(entry) }
+                    .setNegativeButton("Cerrar", null)
+                if (entry.meeting != null && PhoneRecordingAction.DELETE in entry.actions)
+                    builder.setNeutralButton("Eliminar…") { _, _ -> confirmDelete(DeleteCandidate(entry.meeting, entry.actions)) }
+                builder.show()
+            }.setNegativeButton("Cerrar", null).show()
+        }
+    }
+
+    private fun restoreEntry(entry: TrashEntry) {
+        background({
+            entry.meeting?.let { setLocalTrashed(it.id, false) } ?: check(store.hideOccurrence(entry.calendarId!!, false))
+        }) { refreshReminders(); publish(true); message("Reunión restaurada.") }
+    }
+
+    // --- Snapshot --------------------------------------------------------------------------------------------
+
+    private fun publish(force: Boolean = false) {
+        if (preview || !ready || !::web.isInitialized || isFinishing) return
+        val events = calendarEvents; val preparing = pendingStartId != null; val linked = paired
+        io.execute {
+            val body = runCatching { snapshot(events, preparing, linked) }.getOrNull() ?: return@execute
+            if (!force && body == lastSnapshot) return@execute
+            lastSnapshot = body
+            runOnUiThread { if (ready && !isFinishing) web.evaluateJavascript("window.hallEReceive && window.hallEReceive($body)", null) }
+        }
+    }
+
+    /** Runs on [io]. */
+    private fun snapshot(events: List<MeetingOccurrence>, preparing: Boolean, linked: Boolean): String {
+        val all = meetings.list(); val active = all.firstOrNull { isRecordingInProgress(it.status) }; val array = JSONArray()
+        all.forEach { array.put(meetingJSON(it)) }; val localOccurrences = all.mapNotNull { it.sourceEventKey }.toSet()
+        events.filterNot { store.occurrenceHidden(it.occurrenceId) || it.occurrenceId in localOccurrences }.forEach { e ->
+            array.put(JSONObject().put("id", "calendar:" + e.occurrenceId).put("calendar", true).put("title", e.title).put("project", store.projectFor(e.eventKey) ?: "")
+                .put("date", Instant.ofEpochMilli(e.beginMillis).atZone(if (e.allDay) ZoneOffset.UTC else ZoneId.systemDefault()).toLocalDate().toString())
+                .put("time", if (e.allDay) "Todo el día" else time(e.beginMillis)).put("startAtMs", e.beginMillis).put("status", "DRAFT")
+                .put("hasMeetingUrl", e.meetingUrl != null).put("actions", JSONArray()))
+        }
+        return JSONObject().put("meetings", array).put("projects", JSONArray((store.projects() + all.mapNotNull { it.projectName }).distinct().sorted()))
+            .put("active", active?.let(::meetingJSON) ?: JSONObject.NULL).put("preparing", preparing).put("paired", linked)
+            .put("staging", BuildConfig.STAGING)
+            .put("notificationsAllowed", NotificationManagerCompat.from(this).areNotificationsEnabled()).put("calendarPermission", calendar.hasPermission())
+            .put("today", LocalDate.now().toString()).put("preview", preview).put("error", meetings.loadError ?: JSONObject.NULL)
+            .put("reminderMinutes", store.alertMinutes).toString()
+    }
+
+    private fun meetingJSON(m: MobileMeeting): JSONObject {
+        val actions = actionsFor(m)
+        return JSONObject().put("id", m.id).put("title", m.title).put("project", m.projectName ?: "")
+            .put("date", Instant.ofEpochMilli(m.scheduledStartAtMs ?: m.createdAtMs).atZone(ZoneId.systemDefault()).toLocalDate().toString())
+            .put("time", time(m.scheduledStartAtMs ?: m.createdAtMs)).put("startAtMs", m.scheduledStartAtMs ?: m.createdAtMs)
+            .put("status", m.status.name)
+            .put("elapsedMs", if (m.status == MobileMeetingStatus.RECORDING && m.recordingStartedElapsedMs != null)
+                (SystemClock.elapsedRealtime() - m.recordingStartedElapsedMs).coerceAtLeast(0) else m.durationMs)
+            .put("hasAudio", PhoneRecordingAction.PLAY in actions)
+            .put("actions", JSONArray(actions.map { it.name }))
+            .put("shared", m.sharedSessionId != null)
+            .put("trashedAtMs", m.trashedAtMs ?: JSONObject.NULL).put("error", m.error ?: JSONObject.NULL)
+            .apply {
+                if (PhoneRecordingAction.DELETE in actions) {
+                    put("deleteTitle", personalDeleteTitleEs(m.status))
+                    put("deleteMessage", personalDeleteMessageEs(m.title, hasAudio(actions), sharedSession = m.sharedSessionId != null))
+                }
             }
-            .show()
     }
 
-    private fun chooseMeetingProject(meeting: MobileMeeting) {
-        val projects = store.projects()
-        val choices = projects + listOf("+ New project", "Unclassified")
-        android.app.AlertDialog.Builder(this).setTitle("Project for ${meeting.title}").setItems(choices.toTypedArray()) { _, index ->
-            when {
-                index < projects.size -> updateMeetingProject(meeting, projects[index])
-                index == projects.size -> createLocalProject { updateMeetingProject(meeting, it) }
-                else -> updateMeetingProject(meeting, null)
-            }
-        }.setNegativeButton("Cancel", null).show()
+    private fun time(ms: Long) = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
+    private fun result(value: JSONObject) { if (ready) web.evaluateJavascript("window.hallEResult && window.hallEResult($value)", null) }
+    private fun showError(value: String) = result(JSONObject().put("error", value))
+    private fun message(value: String) { result(JSONObject().put("message", value)); Toast.makeText(this, value, Toast.LENGTH_SHORT).show() }
+
+    // --- Calendar, notes, reminders ----------------------------------------------------------------------------
+
+    private fun refreshCalendar() {
+        if (preview) return
+        val date = rangeDate
+        io.execute {
+            val linked = runCatching { SharedSessionClient(this).paired() }.getOrDefault(false)
+            val events = if (calendar.hasPermission()) runCatching {
+                val zone = ZoneId.systemDefault()
+                val start = date.withDayOfMonth(1).minusDays(7).atStartOfDay(zone).toInstant().toEpochMilli()
+                val end = date.withDayOfMonth(1).plusMonths(1).plusDays(7).atStartOfDay(zone).toInstant().toEpochMilli()
+                val selected = calendar.events(start, end)
+                val today = LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
+                if (today in start until end) selected
+                else (selected + calendar.events(today, LocalDate.now().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli())).distinctBy { it.occurrenceId }
+            }.getOrDefault(emptyList()) else emptyList()
+            runOnUiThread { if (date == rangeDate && !isFinishing) { paired = linked; calendarEvents = events; publish(true) } }
+        }
     }
 
-    private fun updateMeetingProject(meeting: MobileMeeting, projectName: String?) {
-        val client = SharedSessionClient(this)
-        val sessionId = meeting.sharedSessionId
-        if (sessionId == null || !client.paired()) {
-            meetingStore.updateProject(meeting.id, projectName)
-            render()
+    private fun eventFor(id: String): MeetingOccurrence? {
+        val events = calendarEvents
+        val source = if (id.startsWith("calendar:")) id.removePrefix("calendar:") else return null
+        return events.firstOrNull { it.occurrenceId == source || it.eventKey == source }
+    }
+
+    private fun editNote(id: String) {
+        val events = calendarEvents
+        background({
+            val source = if (id.startsWith("calendar:")) id.removePrefix("calendar:") else meetings.find(id)?.sourceEventKey
+            val key = events.firstOrNull { it.occurrenceId == source || it.eventKey == source }?.eventKey ?: "mobile:$id"
+            key to store.noteFor(key)
+        }) { (key, note) ->
+            val input = EditText(this).apply { setText(note); minLines = 5; textSize = 16f; setPadding(24, 16, 24, 16); gravity = android.view.Gravity.TOP }
+            AlertDialog.Builder(this).setTitle("Nota local").setView(input)
+                .setPositiveButton("Guardar") { _, _ -> val text = input.text.toString(); background({ store.saveNote(key, text) }) { message("Nota guardada en este teléfono.") } }
+                .setNeutralButton("Compartir") { _, _ -> startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/markdown"; putExtra(Intent.EXTRA_TEXT, input.text.toString()) }, "Compartir nota")) }
+                .setNegativeButton("Cancelar", null).show()
+        }
+    }
+
+    private fun refreshReminders() { if (!preview) io.execute { runCatching { ReminderScheduler.refresh(this) } } }
+
+    /** Shown once per morning (04:00–12:00) on opening, when calendar access is available and the overview is on. */
+    private fun maybeShowMorningSummary() {
+        if (preview || LocalTime.now().hour !in 4 until 12) return
+        background({
+            if (!store.morningSummaryEnabled || !calendar.hasPermission() || !store.morningSummaryFor(LocalDate.now())) return@background null
+            val zone = ZoneId.systemDefault()
+            val start = LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
+            val end = LocalDate.now().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            ReminderPlanner.summaryEs(ReminderPlanner.forLocalDate(calendar.events(start, end), LocalDate.now()), System.currentTimeMillis())
+        }) { summary -> summary?.let(::message) }
+    }
+
+    private fun chooseCalendars() {
+        background({ calendar.calendars() to store.selectedCalendarIds.toMutableSet() }) { (values, selected) ->
+            AlertDialog.Builder(this).setTitle("Calendarios").setMultiChoiceItems(values.map { it.name }.toTypedArray(), values.map { it.id in selected }.toBooleanArray()) { _, index, checked -> if (checked) selected.add(values[index].id) else selected.remove(values[index].id) }
+                .setPositiveButton("Guardar") { _, _ -> background({ store.selectedCalendarIds = selected }) { refreshCalendar(); refreshReminders(); maybeRequestNotifications() } }
+                .setNegativeButton("Cancelar", null).show()
+        }
+    }
+
+    private fun maybeRequestNotifications(force: Boolean = false) {
+        if (preview || !foreground) return
+        val enabled = NotificationManagerCompat.from(this).areNotificationsEnabled()
+        if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            if (force && !enabled) startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
             return
         }
-        sharedRecordingExecutor.execute {
-            val result = runCatching {
-                val current = client.state().sessions.firstOrNull { it.id == sessionId }
-                    ?: error("The shared meeting is unavailable. Refresh shared sessions before changing its project.")
-                check(!current.decryptionFailed) { "The shared meeting could not be decrypted; its project was not changed." }
-                client.updateSessionProject(sessionId, projectName, current.revision)
-            }
-            runOnUiThread {
-                result.onSuccess { toast("Project updated for the shared meeting.") }
-                    .onFailure { toast(it.message ?: "Could not update the shared meeting project.") }
-                render()
-            }
+        val prompts = PermissionPrompts(this)
+        val asked = prompts.asked(Manifest.permission.POST_NOTIFICATIONS)
+        if (!force && !shouldRequestNotificationPermission(Build.VERSION.SDK_INT, granted = false, askedBefore = asked)) return
+        if (force && asked && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)); return
+        }
+        prompts.markAsked(Manifest.permission.POST_NOTIFICATIONS)
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION)
+    }
+
+    private fun chooseReminders() {
+        val values = intArrayOf(0, 1, 5, 10, 15, 30)
+        background({ store.alertMinutes to store.morningSummaryEnabled }) { (minutes, morning) ->
+            val labels = values.map { if (it == 0) "Al comenzar" else if (it == 1) "1 minuto antes" else "$it minutos antes" } + "Personalizado…"
+            AlertDialog.Builder(this).setTitle("Avisar antes de la reunión").setSingleChoiceItems(labels.toTypedArray(), values.indexOf(minutes).takeIf { it >= 0 } ?: values.size) { dialog, index ->
+                dialog.dismiss()
+                if (index < values.size) background({ store.alertMinutes = values[index] }) { refreshReminders(); publish(true); maybeRequestNotifications() }
+                else chooseCustomReminder(minutes)
+            }.setNeutralButton(if (morning) "Desactivar resumen matinal" else "Activar resumen matinal") { _, _ ->
+                background({ store.morningSummaryEnabled = !morning }) { refreshReminders() }
+            }.setNegativeButton("Cancelar", null).show()
         }
     }
 
-    private fun meetingStatus(meeting: MobileMeeting): String = when (meeting.status) {
-        MobileMeetingStatus.DRAFT -> "Saved without recording"
-        MobileMeetingStatus.STARTING -> "Starting recording"
-        MobileMeetingStatus.RECORDING -> "Recording · ${formatDuration(meetingStore.recordingElapsedMs(meeting.id) ?: 0)}"
-        MobileMeetingStatus.RECORDED -> "Recorded · ${formatDuration(meeting.durationMs)}"
-        MobileMeetingStatus.INTERRUPTED -> "Interrupted · ${formatDuration(meeting.durationMs)}"
-        MobileMeetingStatus.FAILED -> "Recording failed"
+    private fun chooseCustomReminder(current: Int) {
+        val input = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; hint = "Minutos antes (1–1440)"; setText(current.toString()) }
+        AlertDialog.Builder(this).setTitle("Aviso personalizado").setView(input)
+            .setPositiveButton("Guardar") { _, _ ->
+                val value = input.text.toString().toIntOrNull()
+                if (value == null || value !in 1..1440) showError("Elige entre 1 y 1440 minutos.")
+                else background({ store.alertMinutes = value }) { refreshReminders(); publish(true); maybeRequestNotifications() }
+            }.setNegativeButton("Cancelar", null).show()
     }
 
-    private fun formatDuration(ms: Long): String {
-        val seconds = (ms.coerceAtLeast(0) / 1000)
-        return "%d:%02d".format(Locale.getDefault(), seconds / 60, seconds % 60)
-    }
-
-    private fun readinessCard() {
-        card(Color.rgb(236, 240, 237)) {
-            addView(text("Reminders & privacy", 16, Color.rgb(40, 58, 50), true))
-            addView(text("${alertDescription(store.alertMinutes)} · Morning overview ${if (store.morningSummaryEnabled) "on" else "off"}",
-                13, Color.rgb(93, 109, 101)))
-            if (store.morningSummaryEnabled) addView(text(
-                "Morning overview appears on the first app open from 04:00 until noon local time. Android may not open Hall-e before you unlock or launch it.",
-                12, Color.rgb(93, 109, 101)))
-            val notifications = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            val alarmManager = getSystemService(AlarmManager::class.java)
-            val exact = Build.VERSION.SDK_INT < 31 || alarmManager?.canScheduleExactAlarms() == true
-            val status = "Notifications ${if (notifications) "ready" else "need permission"} · Exact alarms ${if (exact) "ready" else "need Settings access"}"
-            addView(text(status, 12, if (notifications && exact) Color.rgb(42, 106, 75) else Color.rgb(153, 97, 32)))
-            val controls = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-            controls.addView(button("Reminder settings") { showSettings() })
-            if (!notifications) controls.addView(button("Allow notifications") { requestNotificationPermission() })
-            if (!exact) controls.addView(button("Exact alarm access") { openExactAlarmSettings() })
-            addView(controls)
-        }
-    }
-
-    private fun showSettings() {
-        val items = mutableListOf<String>()
-        val actions = mutableListOf<() -> Unit>()
-        if (!previewMode) {
-            items += "Choose calendars"
-            actions += { chooseCalendars() }
-        }
-        items += "Reminder timing"; actions += { chooseReminderTiming() }
-        items += "Notification permission"; actions += { requestNotificationPermission() }
-        items += "Exact alarm access"; actions += { openExactAlarmSettings() }
-        items += "Morning overview: ${if (store.morningSummaryEnabled) "On" else "Off"}"
-        actions += { store.morningSummaryEnabled = !store.morningSummaryEnabled; render() }
-        items += "Send a test notification"; actions += { sendTestNotification() }
-        android.app.AlertDialog.Builder(this).setTitle("Hall-e settings")
-            .setItems(items.toTypedArray()) { _, which -> actions.getOrNull(which)?.invoke() }
-            .setNegativeButton("Done", null).show()
-    }
-
+    /** Confirms Android can show Hall-e's reminders, using the same channel as real meeting reminders. */
     private fun sendTestNotification() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestNotificationPermission()
-            return
+            maybeRequestNotifications(force = true); return
         }
         val managerCompat = NotificationManagerCompat.from(this)
-        if (!managerCompat.areNotificationsEnabled()) {
-            toast("Notifications are disabled for Hall-e in Android Settings.")
-            return
-        }
-        if (Build.VERSION.SDK_INT >= 26) {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(NotificationChannel(MeetingAlertReceiver.CHANNEL_ID,
-                "Meeting reminders", NotificationManager.IMPORTANCE_HIGH)
-                .apply { description = "Local reminders for selected calendar meetings" })
-            if (manager?.getNotificationChannel(MeetingAlertReceiver.CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) {
-                toast("Meeting reminders are turned off in Android Settings.")
-                return
-            }
+        if (!managerCompat.areNotificationsEnabled()) { showError("Las notificaciones de Hall-e están desactivadas en Ajustes de Android."); return }
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(NotificationChannel(MeetingAlertReceiver.CHANNEL_ID, "Meeting reminders", NotificationManager.IMPORTANCE_HIGH)
+            .apply { description = "Local reminders for selected calendar meetings" })
+        if (manager?.getNotificationChannel(MeetingAlertReceiver.CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) {
+            showError("Los recordatorios de reuniones están desactivados en Ajustes de Android."); return
         }
         runCatching {
             managerCompat.notify(TEST_NOTIFICATION_ID, NotificationCompat.Builder(this, MeetingAlertReceiver.CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-                .setContentTitle("Hall-e test notification")
-                .setContentText("If you can see this, Hall-e can post a notification.")
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .build())
-        }.onSuccess { toast("Test notification sent.") }
-            .onFailure { toast("Could not send a notification. Check Hall-e's notification settings.") }
+                .setContentTitle("Notificación de prueba de Hall-e")
+                .setContentText("Si ves esto, Hall-e puede mostrar recordatorios.")
+                .setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH).build())
+        }.onSuccess { message("Notificación de prueba enviada.") }
+            .onFailure { showError("No se pudo enviar la notificación. Revisa los ajustes de notificaciones de Hall-e.") }
     }
 
-    private fun chooseCalendars() {
-        if (previewMode) return
-        if (!repository.hasPermission()) { requestCalendarPermission(); return }
-        val choices = repository.calendars()
-        if (choices.isEmpty()) { toast("No calendars are available on this device."); return }
-        val selected = store.selectedCalendarIds.toMutableSet()
-        val checks = choices.map { it.id in selected }.toBooleanArray()
-        val labels = choices.map { "${it.name}\n${it.account}" }.toTypedArray()
-        android.app.AlertDialog.Builder(this).setTitle("Calendars to show")
-            .setMultiChoiceItems(labels, checks) { _, index, checked ->
-                if (checked) selected += choices[index].id else selected -= choices[index].id
-            }.setPositiveButton("Save") { _, _ ->
-                store.selectedCalendarIds = selected
-                refreshEvents(); ReminderScheduler.refresh(this); render()
-            }.setNegativeButton("Cancel", null).show()
-    }
-
-    private fun chooseReminderTiming() {
-        val options = listOf(0, 1, 5, 10, 15, 30)
-        val labels = options.map {
-            when (it) {
-                0 -> "At meeting start"
-                1 -> "1 minute before"
-                else -> "$it minutes before"
-            }
-        }.toMutableList().apply { add("Custom…") }
-        android.app.AlertDialog.Builder(this).setTitle("Meeting reminder")
-            .setSingleChoiceItems(labels.toTypedArray(), options.indexOf(store.alertMinutes).takeIf { it >= 0 } ?: 6) { dialog, index ->
-                if (index < options.size) {
-                    store.alertMinutes = options[index]
-                    dialog.dismiss(); if (!previewMode) ReminderScheduler.refresh(this); render()
-                } else {
-                    dialog.dismiss(); chooseCustomReminder()
-                }
-            }.setNegativeButton("Cancel", null).show()
-    }
-
-    private fun chooseCustomReminder() {
-        val input = EditText(this).apply { inputType = InputType.TYPE_CLASS_NUMBER; hint = "Minutes before (1–1440)"; setText(store.alertMinutes.toString()) }
-        android.app.AlertDialog.Builder(this).setTitle("Custom reminder").setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val value = input.text.toString().toIntOrNull()
-                if (value == null || value !in 1..1440) toast("Choose between 1 and 1440 minutes.")
-                else { store.alertMinutes = value; if (!previewMode) ReminderScheduler.refresh(this); render() }
-            }.setNegativeButton("Cancel", null).show()
-    }
-
-    private fun chooseProject(event: MeetingOccurrence) {
-        val projects = store.projects().toMutableList()
-        val choices = projects + listOf("+ New project", "Unclassified")
-        android.app.AlertDialog.Builder(this).setTitle("Project for this meeting")
-            .setItems(choices.toTypedArray()) { _, index ->
-                when {
-                    index < projects.size -> store.assignProject(event.eventKey, projects[index])
-                    index == projects.size -> createProject(event)
-                    else -> store.assignProject(event.eventKey, null)
-                }
-                render()
-            }.setNegativeButton("Cancel", null).show()
-    }
-
-    private fun createProject(event: MeetingOccurrence) {
-        val input = EditText(this).apply { hint = "Project name"; setSingleLine(true) }
-        android.app.AlertDialog.Builder(this).setTitle("New local project").setView(input)
-            .setPositiveButton("Create and assign") { _, _ ->
-                val name = store.addProject(input.text.toString())
-                if (name.isNotEmpty()) store.assignProject(event.eventKey, name)
-                render()
-            }.setNegativeButton("Cancel", null).show()
-    }
-
-    private fun editNote(event: MeetingOccurrence) {
-        val input = EditText(this).apply {
-            hint = "A few useful notes…"; gravity = Gravity.TOP; minLines = 5
-            setText(store.noteFor(event.eventKey))
-        }
-        android.app.AlertDialog.Builder(this).setTitle("Local meeting note").setView(input)
-            .setPositiveButton("Save") { _, _ -> store.saveNote(event.eventKey, input.text.toString()); render() }
-            .setNeutralButton("Share Markdown") { _, _ ->
-                store.saveNote(event.eventKey, input.text.toString()); shareNote(event)
-            }.setNegativeButton("Cancel", null).show()
-    }
-
-    private fun shareNote(event: MeetingOccurrence) {
-        val project = store.projectFor(event.eventKey)
-        val content = buildString {
-            appendLine("# ${event.title}")
-            appendLine()
-            appendLine("- Date: ${Instant.ofEpochMilli(event.beginMillis).atZone(ZoneId.systemDefault())}")
-            appendLine("- Calendar: ${event.calendarName}")
-            if (project != null) appendLine("- Project: $project")
-            appendLine()
-            appendLine(store.noteFor(event.eventKey))
-        }
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "text/markdown"; putExtra(Intent.EXTRA_SUBJECT, event.title); putExtra(Intent.EXTRA_TEXT, content)
-        }, "Share meeting note"))
-    }
-
-    private fun openMeeting(url: String) {
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            .onFailure { toast("No browser is available to open this meeting.") }
-    }
-
-    private fun openCalendarEvent(event: MeetingOccurrence) {
-        val intent = Intent(Intent.ACTION_VIEW, ContentUrisCompat.eventUri(event.eventId))
-            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, event.beginMillis)
-            .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, event.endMillis)
-        runCatching { startActivity(intent) }.onFailure { toast("No calendar app is available.") }
-    }
-
-    private fun requestCalendarPermission() {
-        if (previewMode) return
-        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_CALENDAR), REQUEST_CALENDAR)
-    }
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            PermissionPrompts(this).markAsked(Manifest.permission.POST_NOTIFICATIONS)
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
-        } else toast("Notifications are controlled in Android Settings.")
-    }
-    private fun openExactAlarmSettings() {
-        if (Build.VERSION.SDK_INT >= 31) runCatching {
-            startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                Uri.parse("package:$packageName")))
-        }.onFailure { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+    /** A meeting scheduled on a paired phone is offered to the shared workspace, as the native home screen did. */
+    private fun shareDraftIfPaired(meeting: MobileMeeting) {
+        if (BuildConfig.STAGING) return
+        val client = SharedSessionClient(this)
+        background({
+            if (!client.paired()) null
+            else runCatching { client.createSession(meeting) }.fold({ "Reunión guardada y compartida con tus dispositivos vinculados." },
+                { "La reunión quedó guardada en este teléfono, pero no se pudo compartir." })
+        }) { outcome -> outcome?.let(::message) }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        refreshEvents()
-        if (!previewMode && requestCode == REQUEST_CALENDAR && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            repository.calendars()
-            maybeCreateMorningSummary()
-        }
-        if (!previewMode && requestCode == REQUEST_MICROPHONE) {
-            val id = pendingRecordingId
-            val microphone = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-            if (microphone && id != null) startRecording(id)
+        if (requestCode == MIC_PERMISSION) {
+            if (Manifest.permission.POST_NOTIFICATIONS in permissions) refreshReminders()
+            val id = pendingStartId
+            if (microphoneGranted() && id != null) startCapture(id)
             else {
-                pendingRecordingId = null
-                pendingJoinUrl?.let(::openMeeting)
-                pendingJoinUrl = null
-                toast("Microphone access was not granted. The meeting was saved without recording.")
+                pendingStartId = null
+                showError("No se concedió acceso al micrófono. La reunión quedó guardada sin grabar.")
                 // An empty result means the request was cancelled, not denied.
-                if (!microphone && grantResults.isNotEmpty() && Manifest.permission.RECORD_AUDIO in permissions &&
-                    microphoneNeedsSettings(micAskedBefore)) showMicrophoneSettingsDialog()
-                render()
+                if (grantResults.isNotEmpty() && Manifest.permission.RECORD_AUDIO in permissions && microphoneNeedsSettings(micAskedBefore))
+                    showMicrophoneSettingsDialog(MicrophoneSettingsCopy.SPANISH)
             }
         }
-        if (!previewMode) ReminderScheduler.refresh(this)
-        render()
+        if (requestCode == NOTIFICATION_PERMISSION) refreshReminders()
+        if (requestCode == CALENDAR_PERMISSION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { refreshCalendar(); refreshReminders(); chooseCalendars() }
+        publish(true)
     }
-
-    private fun previewMeetings(): List<MeetingOccurrence> {
-        val zone = ZoneId.systemDefault()
-        fun at(hour: Int, minute: Int): Long = selectedDate.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
-        val dayKey = selectedDate.toEpochDay() * 10
-        return listOf(
-            MeetingOccurrence(-1, -(dayKey + 1), at(9, 30), at(10, 0), "Design review", "Room 3", false,
-                false, false, null, "Preview calendar"),
-            MeetingOccurrence(-1, -(dayKey + 2), at(13, 0), at(13, 45), "Project planning", null, false,
-                false, false, null, "Preview calendar"),
-            MeetingOccurrence(-1, -(dayKey + 3), at(15, 30), at(16, 0), "Weekly check-in", null, false,
-                false, false, null, "Preview calendar"),
-        )
-    }
-
-    private fun alertDescription(minutes: Int): String = if (minutes == 0) "At start" else "$minutes min before"
-    private fun button(label: String, action: () -> Unit): Button = Button(this).apply {
-        text = label; textSize = 12f; isAllCaps = false; setTextColor(Color.rgb(32, 92, 79)); setOnClickListener { action() }
-    }
-    private fun text(value: String, size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
-        text = value; textSize = size.toFloat(); setTextColor(color)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(3), dp(4), dp(3))
-    }
-    private fun space(height: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
-    private fun card(color: Int, content: LinearLayout.() -> Unit) {
-        val view = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(15), dp(14), dp(15), dp(12))
-            background = GradientDrawable().apply { setColor(color); cornerRadius = dp(16).toFloat() }
-            content()
-        }
-        root.addView(view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
-    }
-    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
-        recordingTicker.removeCallbacks(tickRecording)
-        mediaPlayer?.release(); mediaPlayer = null; playingMeetingId = null
-        super.onDestroy()
+        ready = false; handler.removeCallbacksAndMessages(null)
+        if (preparationHeld) releaseStartup(cancelled = true)
+        io.shutdown(); player?.release(); player = null
+        web.removeJavascriptInterface("HallENative"); web.destroy(); super.onDestroy()
     }
 
     companion object {
         const val EXTRA_PREVIEW = "HALLE_PREVIEW"
         const val EXTRA_START_RECORDING = "HALLE_START_RECORDING"
-        private const val REQUEST_CALENDAR = 11
-        private const val REQUEST_NOTIFICATIONS = 12
-        private const val REQUEST_MICROPHONE = 13
+        private const val SHARED_SESSION_SCAN_REQUEST = 24
+        private const val LEGACY_ORBITA_PROMPTS = "ui-permission-prompts"
+        private const val ASSET_HOST = "appassets.androidplatform.net"
+        private const val ASSET_URL = "https://appassets.androidplatform.net/index.html"
+        private const val MIC_PERMISSION = 21
+        private const val CALENDAR_PERMISSION = 22
+        private const val NOTIFICATION_PERMISSION = 23
+        private const val STARTUP_TIMEOUT_MS = 8_000L
         private const val TEST_NOTIFICATION_ID = 0x4841
+        private const val BUSY = "Ya hay una grabación en curso o preparándose."
+        private const val GENERIC_ERROR = "No se pudo completar la acción."
+        private val BACKGROUND = Color.rgb(8, 14, 16)
     }
-}
-
-private object ContentUrisCompat {
-    fun eventUri(id: Long): Uri = Uri.withAppendedPath(CalendarContract.Events.CONTENT_URI, id.toString())
 }

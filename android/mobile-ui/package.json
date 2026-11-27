@@ -1,0 +1,16 @@
+{
+  "name": "hall-e-orbita-mobile",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "verify-assets": "node verify-assets.mjs"
+  },
+  "devDependencies": {
+    "imba": "2.0.0-alpha.253"
+  },
+  "engines": {
+    "node": "22.22.1"
+  }
+}

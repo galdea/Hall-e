@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="mechanism" viewBox="0 0 1000 620" fill="none" aria-hidden="true"><defs>
+            <radialGradient id="metal"><stop stop-color="#293a3c" /><stop offset=".62" stop-color="#101c1f" /><stop offset=".88" stop-color="#1f3034" /><stop offset="1" stop-color="#090f11" /></radialGradient>
+            <linearGradient id="bevel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#516467" /><stop offset=".28" stop-color="#17292b" /><stop offset=".52" stop-color="#708081" /><stop offset=".7" stop-color="#142629" /><stop offset="1" stop-color="#3b4b4d" /></linearGradient>
+            <radialGradient id="glass" cx=".38" cy=".26" r=".8"><stop stop-color="#174d4c" /><stop offset=".6" stop-color="#092226" /><stop offset="1" stop-color="#061114" /></radialGradient>
+            <radialGradient id="tealGlow"><stop stop-color="#56e8cb" stop-opacity=".22" /><stop offset=".6" stop-color="#56e8cb" stop-opacity=".04" /><stop offset="1" stop-color="#56e8cb" stop-opacity="0" /></radialGradient>
+            <clipPath id="portraitWindow"><circle r="151" /></clipPath>
+            <linearGradient id="signal"><stop stop-color="#d5a769" stop-opacity="0" /><stop offset=".24" stop-color="#d5a769" /><stop offset=".5" stop-color="#64dec7" /><stop offset=".76" stop-color="#d66554" /><stop offset="1" stop-color="#d66554" stop-opacity="0" /></linearGradient>
+            <path id="topOrbit" d="M 244 282 A 256 256 0 0 1 756 282" />
+            <path id="bottomOrbit" d="M 257 320 A 248 248 0 0 0 743 320" />
+            <g id="fastener"><circle r="4" fill="#243638" stroke="#657072" stroke-width=".7" /><path d="m-1.5-1.5 3 3" stroke="#070e11" stroke-width="1.1" /></g>
+            <g id="indexMark"><path d="M0-215v12" stroke="#80928f" stroke-width="1" /><path d="m22.5-213.8-1 8" stroke="#415552" stroke-width="1" /></g>
+          </defs>
+
+          <g transform="translate(500 282)"><g class="core-mark"><image class="character-art hall-e-art" data-character-art="" href="/hall-e.webp" x="-180" y="-172" width="360" height="360" preserveAspectRatio="xMidYMid meet" />
+                </g><g class="heart-flight">
+              <image class="character-art wall-e-art" data-character-art="" href="/wall-e.webp" x="-153" y="-169" width="306" height="306" preserveAspectRatio="xMidYMid meet" />
+              <text y="159" class="source-caption" text-anchor="middle" fill="#e0b77b">WALL-E / HEART</text>
+            </g>
+            <g class="mind-flight">
+              <image class="character-art hal-art" data-character-art="" href="/hal.webp" x="-153" y="-169" width="306" height="306" preserveAspectRatio="xMidYMid meet" />
+              <text y="159" class="source-caption" text-anchor="middle" fill="#e78d7b">HAL 9000 / MIND</text>
+            </g>
+            <g class="assembly-parts" />
+          </g><g class="assembly-status" fill="#8cae9e"><text x="500" y="580" text-anchor="middle" class="core-caption">HEART + MIND</text></g>
+          </svg>

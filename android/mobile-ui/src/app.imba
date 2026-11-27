@@ -1,0 +1,325 @@
+import * as model from './model.mjs'
+import {ui,data} from './model.mjs'
+import {mountIntro} from './intro.mjs'
+
+tag halle-intro
+	prop active
+	prop engaged
+	def mount
+		self.stopIntro = mountIntro(self)
+	def unmount
+		if self.stopIntro
+			self.stopIntro!
+	<self data-active=active data-engaged=engaged>
+
+
+tag halle-meetings
+	prop items
+	<self>
+		if !items.length
+			<p.empty> 'Tu día tiene espacio. Graba una idea cuando aparezca.'
+		for item in items
+			<article.meeting key=item.id>
+				<time> item.time
+				<div.meeting-body>
+					<button.meeting-title @click=model.openMeeting(item)> item.title
+					<p.project-label> item.project || 'Sin proyecto'
+					<p.meeting-status data-recording=(item.status == 'RECORDING')> model.statusText(item)
+				<button.trash-button aria-label="Eliminar {item.title}" disabled=(item.status == 'RECORDING' || item.status == 'STARTING') @click=model.askDelete(item)> '×'
+
+tag halle-project-picker
+	prop pending
+	<self>
+		<label.field>
+			<span> 'Proyecto'
+			<select bind=ui.project disabled=pending @change=model.selectProject>
+				<option value=''> 'Sin proyecto'
+				for project in data.projects
+					<option value=project> project
+		<button.text-button disabled=pending @click=(ui.newProject = true)> '+ Nuevo proyecto'
+
+tag halle-app
+	def go page
+		model.navigate(page)
+		if page == 'calendar'
+			model.requestRange!
+	def dayLabel key
+		model.parseDate(key).getDate!
+	def prettyDate
+		model.parseDate(ui.date).toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})
+	def monthLabel
+		model.parseDate(ui.date).toLocaleDateString('es-CL',{month:'long',year:'numeric'})
+	def cancelDelete
+		ui.pendingDelete = null
+	def dismiss
+		ui.message = ''
+	def back
+		model.navigate(ui.returnPage)
+	def linkMac
+		if data.paired
+			model.send('pair')
+		else
+			model.send('scanQr')
+	def showProject
+		ui.newProject = true
+	def cancelProject
+		ui.newProject = false
+	def calendar
+		ui.date = data.today
+		go('calendar')
+		model.requestRange!
+
+	<self data-recording=model.recording!>
+		if data.preview
+			<p.preview-label> 'Vista de prueba · datos de ejemplo'
+		if data.error
+			<p.error role='alert'> data.error
+		<main>
+			if ui.page == 'home' || ui.page == 'record'
+				<section.orbit-hero data-idle-home=(ui.page == 'home' && !data.active && !ui.starting) data-capturing=(data.active || ui.starting)>
+					<p.eyebrow> data.today && model.parseDate(data.today).toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})
+					<h1> 'Deja fluir las ideas.'
+					<halle-intro active=model.recording! engaged=(data.active != null || ui.starting)>
+					<div.capture-readout>
+						if data.active || ui.starting
+							<span.capture-clock role='timer' aria-label='Duración de la grabación'> if data.active then model.duration(data.active.elapsedMs) else '00:00'
+							<span.capture-state role='status'> if model.recording! then 'Grabando' else 'Activando micrófono…'
+						elif ui.page == 'record' && model.chosen!
+							<span.capture-state> 'Grabación guardada'
+						else
+							<span.capture-state> 'Tu voz aquí, guardada en este teléfono.'
+					if data.active
+						<button.hero-record.tech-record data-active=model.recording! disabled=!model.recording! @click=model.stop!>
+							<span.record-glyph aria-hidden='true'>
+							<span> 'Terminar grabación'
+							<span.record-channel aria-hidden='true'> 'REC'
+					else
+						<button.hero-record.tech-record aria-label='Grabar ahora' disabled=ui.starting @click=model.quickRecord!>
+							<span.record-glyph aria-hidden='true'>
+							<span> if ui.starting then 'Activando…' else 'Grabar'
+							<span.record-channel aria-hidden='true'> 'MIC'
+					<div.project-bay data-open=((ui.page == 'record' || data.active != null) && (model.chosen! != null || ui.starting))>
+						if (ui.page == 'record' || data.active) && (model.chosen! || ui.starting)
+							<div.record-project>
+								<halle-project-picker pending=!model.chosen!>
+				if ui.page == 'record' || data.active
+					if model.chosen!
+						if model.chosen!.error
+							<p.error role='alert'> model.chosen!.error
+						if !data.active
+							<div.notice role='status'>
+								<strong> model.statusText(model.chosen!)
+								<p> 'El audio queda guardado en este teléfono hasta que tú lo elimines.'
+				else
+					<section.today-section>
+						<div.section-heading>
+							<h2> 'Reuniones de hoy'
+							<button.text-button @click=calendar> 'Ver calendario →'
+						<halle-meetings items=model.meetingsFor(data.today)>
+			elif ui.page == 'calendar'
+				<p.eyebrow> 'Tu tiempo'
+				<h1> 'Calendario'
+				<div.segmented aria-label='Vista del calendario'>
+					<button aria-pressed=(ui.calendarView == 'month') @click=model.setView('month')> 'Mes'
+					<button aria-pressed=(ui.calendarView == 'week') @click=model.setView('week')> 'Semana'
+				<div.calendar-toolbar>
+					<button aria-label='Período anterior' @click=model.movePeriod(-1)> '‹'
+					<h2> monthLabel!
+					<button aria-label='Período siguiente' @click=model.movePeriod(1)> '›'
+				<div.calendar-grid data-view=ui.calendarView>
+					for label in ['L','M','M','J','V','S','D']
+						<span.day-label> label
+					for key in (ui.calendarView == 'month' ? model.daysOfMonth(ui.date) : model.weekDates(ui.date))
+						if key
+							<button.calendar-day data-selected=(key == ui.date) data-events=(model.meetingsFor(key).length > 0) aria-label=model.nice(key) aria-pressed=(key == ui.date) @click=model.selectDate(key)> dayLabel(key)
+						else
+							<span>
+				<div.section-heading>
+					<h2> model.nice(ui.date)
+					<button.icon-button aria-label='Crear reunión' @click=model.beginSchedule!> '+'
+				<halle-meetings items=model.meetingsFor(ui.date)>
+				if model.accountCalendarAvailable!
+					<button.secondary @click=model.openAccountCalendar!> 'Agenda privada'
+			elif ui.page == 'detail'
+				if model.chosen!
+					<button.text-button @click=back> '← Volver'
+					<p.eyebrow> model.nice(model.chosen!.date)
+					<h1> model.chosen!.title
+					<p.hero-caption> model.chosen!.project || 'Sin proyecto'
+					<div.notice role='status'> model.statusText(model.chosen!)
+					if model.chosen!.error
+						<p.error role='alert'> model.chosen!.error
+					if model.chosen!.status == 'DRAFT'
+						<button.primary @click=model.recordExisting!> 'Grabar esta reunión'
+					if model.chosen!.hasMeetingUrl
+						<button.secondary @click=model.send('join',{id:ui.detailId})> 'Abrir llamada'
+					<button.secondary @click=model.send('note',{id:ui.detailId})> 'Nota local'
+					if model.chosen!.calendar
+						<halle-project-picker>
+						<button.secondary @click=model.saveEventProject!> 'Guardar proyecto'
+						<button.secondary @click=model.send('openEvent',{id:ui.detailId})> 'Abrir en Calendario'
+					else
+						<label.field>
+							<span> 'Nombre'
+							<input type='text' maxlength='160' bind=ui.title>
+						<halle-project-picker>
+						<button.secondary @click=model.saveDetails!> 'Guardar detalles'
+					if model.can(model.chosen!,'PLAY')
+						<button.secondary @click=model.send('play',{id:ui.detailId})> 'Escuchar audio'
+					if model.can(model.chosen!,'SHARE_AUDIO')
+						<button.secondary @click=model.send('shareAudio',{id:ui.detailId})> 'Compartir audio'
+					if model.can(model.chosen!,'SHARE_PARTIAL_FILE')
+						<button.secondary @click=model.send('shareAudio',{id:ui.detailId})> 'Compartir archivo parcial'
+					<button.danger-quiet @click=model.askDelete(model.chosen!)> 'Mover a la papelera'
+					if model.can(model.chosen!,'DELETE')
+						<button.danger-quiet @click=model.askRemove(model.chosen!)> 'Eliminar del teléfono…'
+			elif ui.page == 'schedule'
+				<button.text-button @click=go('calendar')> '← Calendario'
+				<p.eyebrow> 'Nueva reunión'
+				<h1> 'Hazle espacio.'
+				<label.field>
+					<span> 'Nombre · opcional'
+					<input type='text' maxlength='160' placeholder='Nueva reunión' bind=ui.title>
+				<halle-project-picker>
+				<div.form-row>
+					<label.field>
+						<span> 'Fecha'
+						<input type='date' bind=ui.scheduledDate required>
+					<label.field>
+						<span> 'Hora'
+						<input type='time' bind=ui.scheduledTime required>
+				<button.primary @click=model.schedule!> 'Crear reunión'
+			elif ui.page == 'projects'
+				<p.eyebrow> 'Todo en su lugar'
+				<h1> 'Proyectos'
+				<p.hero-caption> 'Cada conversación en su contexto.'
+				for project in data.projects
+					<div.project-row>
+						<span> project
+						<span.muted> "{data.meetings.filter(do(m) m.project == project).length} reuniones"
+				<button.secondary @click=showProject> '+ Nuevo proyecto'
+			elif ui.page == 'settings'
+				<header.settings-header>
+					<p.eyebrow> 'A tu manera'
+					<h1> 'Ajustes'
+					<p> 'Tu teléfono y tu Mac, en sintonía.'
+				<section.link-deck aria-label='Conexión con tu Mac'>
+					<div.link-deck-top>
+						<span.device-orbit aria-hidden='true'>
+							<span.device-screen>
+						<span.link-status data-linked=data.paired> if !model.pairingAvailable! then 'No disponible' elif data.paired then 'Vinculado' else 'Por vincular'
+					if model.pairingAvailable!
+						<h2> if data.paired then 'Tu Mac, vinculado.' else 'Todo empieza con un QR.'
+						<p> if data.paired then 'Tus reuniones compartidas viajan cifradas entre tus dispositivos.' else 'Abre Hall-e en tu Mac y escanea su código con este teléfono.'
+						<button.link-action @click=linkMac>
+							<span> if data.paired then 'Ver dispositivos' else 'Escanear QR del Mac'
+							<span aria-hidden='true'> '↗'
+					else
+						<h2> 'Vinculación no disponible'
+						<p.staging-note role='note'> 'Vincular dispositivos no está disponible en esta versión de staging porque usa el servicio de vinculación de producción.'
+				<section.settings-group aria-labelledby='agenda-settings'>
+					<h2#agenda-settings> 'Agenda y avisos'
+					<div.settings-surface>
+						<button.setting-item @click=model.send('calendarAccess')>
+							<span.setting-symbol aria-hidden='true'> '▦'
+							<span.setting-copy>
+								<strong> 'Calendarios'
+								<span> if data.calendarPermission then 'Elegir qué calendarios aparecen' else 'Conecta tu agenda de este teléfono'
+							<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('reminders')>
+							<span.setting-symbol aria-hidden='true'> '◷'
+							<span.setting-copy>
+								<strong> 'Antes de cada reunión'
+								<span> if data.reminderMinutes > 0 then "Avisar {data.reminderMinutes} minutos antes" else 'Sin aviso previo'
+							<span.setting-chevron aria-hidden='true'> '›'
+						if !data.notificationsAllowed
+							<button.setting-item @click=model.send('notifications')>
+								<span.setting-symbol aria-hidden='true'> '◉'
+								<span.setting-copy>
+									<strong> 'Activar notificaciones'
+									<span> 'Recibe avisos y controla la grabación'
+								<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('testNotification')>
+							<span.setting-symbol aria-hidden='true'> '◌'
+							<span.setting-copy>
+								<strong> 'Probar notificación'
+								<span> 'Comprueba que los avisos llegan a este teléfono'
+							<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('exactAlarms')>
+							<span.setting-symbol aria-hidden='true'> '⊙'
+							<span.setting-copy>
+								<strong> 'Precisión de los avisos'
+								<span> 'Revisar el permiso de Android'
+							<span.setting-chevron aria-hidden='true'> '›'
+				<section.settings-group aria-labelledby='recording-settings'>
+					<h2#recording-settings> 'Tus grabaciones'
+					<div.settings-surface>
+						if model.accountCalendarAvailable!
+							<button.setting-item @click=model.openAccountCalendar!>
+								<span.setting-symbol aria-hidden='true'> '◈'
+								<span.setting-copy>
+									<strong> 'Agenda privada'
+									<span> 'Reuniones y transcripciones de tu cuenta'
+								<span.setting-chevron aria-hidden='true'> '›'
+						<button.setting-item @click=model.send('trashList')>
+							<span.setting-symbol aria-hidden='true'> '⌑'
+							<span.setting-copy>
+								<strong> 'Papelera'
+								<span> 'Recupera reuniones que hayas eliminado'
+							<span.setting-chevron aria-hidden='true'> '›'
+				<details.privacy-details>
+					<summary> 'Tu voz se queda contigo'
+					<p> 'Las grabaciones quedan en este teléfono hasta que tú las elimines. Vincular dispositivos comparte detalles cifrados de las reuniones, nunca el audio.'
+					<p> 'En Agenda privada eliges qué grabaciones nuevas de tu cuenta se transcriben. Cada grabación empieza en este teléfono; para cambiar de dispositivo durante una sesión compartida, abre Dispositivos vinculados.'
+
+		if ui.deleted.length
+			<div.undo-bar role='status'>
+				<span> 'Reunión en la papelera'
+				<button @click=model.undo!> 'Deshacer'
+		if ui.message
+			<div.message role='status'>
+				<span> ui.message
+				<button aria-label='Cerrar aviso' @click=dismiss> '×'
+		<nav.bottom-nav aria-label='Navegación principal'>
+			<button data-selected=(ui.page == 'home' || ui.page == 'record') @click=go('home')>
+				<span.nav-icon aria-hidden='true'> '⌂'
+				<span> 'Inicio'
+			<button data-selected=(ui.page == 'calendar') @click=go('calendar')>
+				<span.nav-icon aria-hidden='true'> '▦'
+				<span> 'Calendario'
+			<button data-selected=(ui.page == 'projects') @click=go('projects')>
+				<span.nav-icon aria-hidden='true'> '◇'
+				<span> 'Proyectos'
+			<button data-selected=(ui.page == 'settings') @click=go('settings')>
+				<span.nav-icon aria-hidden='true'> '☷'
+				<span> 'Ajustes'
+		if ui.pendingDelete
+			<div.modal-backdrop>
+				<section.dialog role='dialog' aria-modal='true' aria-label='Eliminar reunión'>
+					<h2> '¿Mover a la papelera?'
+					<p> ui.pendingDelete.title
+					<p.muted> 'Se oculta en este teléfono. Conservamos sus archivos para que puedas restaurarla. El evento del calendario original no se elimina.'
+					<button.danger @click=model.deleteMeeting!> 'Mover a la papelera'
+					<button.secondary @click=cancelDelete> 'Conservar reunión'
+		if ui.pendingRemove
+			<div.modal-backdrop>
+				<section.dialog role='dialog' aria-modal='true' aria-label='Eliminar del teléfono'>
+					<h2> ui.pendingRemove.deleteTitle || '¿Eliminar del teléfono?'
+					<p.muted> ui.pendingRemove.deleteMessage || ui.pendingRemove.title
+					<button.danger @click=model.removeMeeting!> 'Eliminar'
+					<button.secondary @click=(ui.pendingRemove = null)> 'Cancelar'
+		if ui.newProject
+			<div.modal-backdrop>
+				<section.dialog role='dialog' aria-modal='true' aria-label='Nuevo proyecto'>
+					<h2> 'Nuevo proyecto'
+					<label.field>
+						<span> 'Nombre del proyecto'
+						<input type='text' maxlength='80' bind=ui.projectName>
+					<button.primary @click=model.createProject!> 'Crear proyecto'
+					<button.secondary @click=cancelProject> 'Cancelar'
+
+const app = <halle-app>
+imba.mount app, document.getElementById('app')
+model.connect do
+	app.commit!
+model.start!
