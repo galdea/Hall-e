@@ -2,6 +2,7 @@ package app.halle.companion
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
@@ -11,11 +12,16 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.google.zxing.integration.android.IntentIntegrator
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /** Visible, user-driven pairing and metadata sharing controls. No background path starts capture. */
 class SharedSessionActivity : Activity() {
+    companion object {
+        const val EXTRA_SCAN_ON_LAUNCH = "app.halle.companion.EXTRA_SCAN_QR_ON_LAUNCH"
+    }
+
     private lateinit var client: SharedSessionClient
     private lateinit var content: LinearLayout
     private lateinit var inviteInput: EditText
@@ -52,6 +58,12 @@ class SharedSessionActivity : Activity() {
         if (BuildConfig.STAGING) { finish(); return }
         client = SharedSessionClient(this)
         render()
+        val scanRequested = intent.getBooleanExtra(EXTRA_SCAN_ON_LAUNCH, false)
+        intent.removeExtra(EXTRA_SCAN_ON_LAUNCH)
+        if (savedInstanceState == null && scanRequested &&
+            callingActivity == ComponentName(this, MainActivity::class.java)) {
+            mainHandler.post { if (!closed) scanPairingCode() }
+        }
         if (client.paired()) mainHandler.post(poll)
     }
 
@@ -63,7 +75,7 @@ class SharedSessionActivity : Activity() {
     }
 
     private fun render() {
-        val scroll = ScrollView(this).apply { setBackgroundColor(0xfff5f7f5.toInt()) }
+        val scroll = ScrollView(this).apply { setBackgroundColor(0xff080e10.toInt()) }
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(24), dp(20), dp(28))
@@ -78,6 +90,8 @@ class SharedSessionActivity : Activity() {
         content.addView(space(14))
 
         if (!client.paired()) {
+            content.addView(button("Escanear QR de un Mac") { scanPairingCode() })
+            content.addView(space(8))
             content.addView(button("Create shared workspace") {
                 runNetwork({ client.createWorkspace(android.os.Build.MODEL ?: "Android device") }) { link ->
                     showInvitation(link)
@@ -97,12 +111,13 @@ class SharedSessionActivity : Activity() {
             content.addView(inviteInput)
             content.addView(button("Review invitation") { reviewInvitation() })
             content.addView(space(8))
-            content.addView(label("Joining requires an explicit confirmation. Use the invitation only with a workspace you trust.", 12, 0xff65776f.toInt()))
+            content.addView(label("An unpaired phone joins when you scan a valid QR. Pasted invitations are reviewed before joining. Use invitations only from a workspace you trust.", 12, 0xff65776f.toInt()))
             return
         }
 
         val state = lastState
         content.addView(label("This device is paired", 17, 0xff286b4d.toInt(), true))
+        content.addView(button("Escanear QR para cambiar de espacio") { scanPairingCode() })
         content.addView(button("Refresh shared workspace") {
             runNetwork({ client.state() }) { lastState = it; render() }
         })
@@ -246,6 +261,80 @@ class SharedSessionActivity : Activity() {
             }.setNegativeButton("Cancel", null).show()
     }
 
+    private fun scanPairingCode() {
+        if (busy) return
+        val options = IntentIntegrator(this)
+            .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+            .setPrompt("Escanea el QR de invitación de Hall-e en tu Mac")
+            .setBeepEnabled(false)
+            .setBarcodeImageEnabled(false)
+            // The manifest owns portrait orientation. ZXing must not lock the
+            // device's previous display rotation over that explicit choice.
+            .setOrientationLocked(false)
+        options.initiateScan()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data) ?: return
+        val scanned = result.contents ?: run {
+            toast("Se canceló el escaneo. No se cambió la vinculación.")
+            return
+        }
+        val parsed = runCatching { client.parsePairingInput(scanned) }.getOrElse {
+            toast("El QR no es una invitación de Hall-e válida para este servicio.")
+            return
+        }
+        val storedCredentialsExist = hasStoredCredentials()
+        if (client.paired() || storedCredentialsExist) {
+            val previousWorkspace = client.currentWorkspaceId()
+            val target = parsed.workspaceId
+            AlertDialog.Builder(this)
+                .setTitle("¿Cambiar la vinculación de este teléfono?")
+                .setMessage(if (previousWorkspace != null) {
+                    "Se vinculará con el espacio $target. La vinculación guardada con $previousWorkspace se reemplazará solo si la nueva invitación se acepta."
+                } else {
+                    "Hay credenciales guardadas que no se pueden verificar. Si la invitación se acepta, se reemplazarán por las del espacio $target."
+                })
+                .setPositiveButton("Vincular") { _, _ -> joinScannedInvitation(scanned) }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        } else {
+            // Scanning an invite on an unpaired phone is the user's explicit instruction to link it.
+            joinScannedInvitation(scanned)
+        }
+    }
+
+    private fun joinScannedInvitation(invitation: String) {
+        if (busy) {
+            mainHandler.postDelayed({ if (!closed) joinScannedInvitation(invitation) }, 400L)
+            return
+        }
+        runNetwork(
+            operation = { client.joinWorkspace(invitation, android.os.Build.MODEL ?: "Teléfono Android") },
+            onSuccess = {
+                lastState = null
+                render()
+                toast("Teléfono vinculado al espacio compartido.")
+                refreshStateAndPoll()
+            },
+            errorMessage = ::pairingFailureMessage,
+        )
+    }
+
+    private fun pairingFailureMessage(error: Throwable): String = when {
+        error is WorkspaceChangeBlockedException -> error.message ?: "Termina la grabación antes de cambiar de espacio."
+        error is SharedCoordinatorException && error.code in setOf("invite_invalid", "invite_expired") ->
+            "La invitación venció o ya se usó. Pide un QR nuevo en tu Mac."
+        error is SharedCoordinatorException && error.code == "rate_limited" ->
+            "Demasiados intentos. Espera un momento y vuelve a escanear."
+        else -> "No se pudo vincular el teléfono. Revisa la conexión y vuelve a intentarlo."
+    }
+
+    private fun hasStoredCredentials(): Boolean = getSharedPreferences("shared-session-credentials", MODE_PRIVATE)
+        .contains("credentials")
+
     private fun showInvitation(link: String) {
         AlertDialog.Builder(this).setTitle("Workspace invitation")
             .setMessage("This single-use invitation contains workspace access and its encryption key. Share it only with a device you trust.\n\n" + link)
@@ -291,6 +380,7 @@ class SharedSessionActivity : Activity() {
     private fun <T> runNetwork(
         operation: () -> T,
         onFailure: ((Throwable) -> Unit)? = null,
+        errorMessage: (Throwable) -> String = { it.message ?: "Could not reach the shared-session coordinator." },
         onSuccess: (T) -> Unit,
     ) {
         if (busy) return
@@ -301,9 +391,9 @@ class SharedSessionActivity : Activity() {
             mainHandler.post {
                 if (closed) return@post
                 busy = false
-                result.onSuccess(onSuccess).onFailure {
-                    toast(it.message ?: "Could not reach the shared-session coordinator.")
-                    onFailure?.invoke(it)
+                result.onSuccess(onSuccess).onFailure { error ->
+                    toast(errorMessage(error))
+                    onFailure?.invoke(error)
                 }
                 setControlsEnabled(true)
             }
@@ -337,7 +427,7 @@ class SharedSessionActivity : Activity() {
     private fun label(value: String, size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
         text = value
         textSize = size.toFloat()
-        setTextColor(color)
+        setTextColor(if (size >= 17 || bold) 0xffe4e9d9.toInt() else 0xffa4b7b1.toInt())
         if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
         setPadding(dp(2), dp(6), dp(2), dp(6))
     }

@@ -10,7 +10,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Color
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -27,13 +29,14 @@ class MeetingRecordingService : Service() {
     private var meetingId: String? = null
     private var accountScope: String? = null
     private var partialFile: File? = null
-    private var startedElapsedMs: Long = 0
+    private var startedElapsedMs: Long? = null
     private var audioCallback: android.media.AudioManager.AudioRecordingCallback? = null
     private var leaseGuard: (() -> Boolean)? = null
     private var sharedLease: SharedRecordingLease? = null
     private var sharedLeaseClient: SharedSessionClient? = null
     private var sharedLeaseDeadline: LeaseDeadline? = null
     private var sharedLeaseRenewal: AutoCloseable? = null
+    private var screenReminder: RecordingScreenReminder? = null
     private val handler = Handler(Looper.getMainLooper())
 
     private val leasePoll = object : Runnable {
@@ -52,7 +55,7 @@ class MeetingRecordingService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 val requestedId = intent.getStringExtra(EXTRA_MEETING_ID)
-                if (requestedId == null || meetingId == requestedId) {
+                if (notificationStopTargetsActiveRecording(requestedId, meetingId)) {
                     val reason = intent.getStringExtra("stopReason")
                     finishRecording(when (reason) {
                         null, "user" -> null
@@ -101,7 +104,8 @@ class MeetingRecordingService : Service() {
         accountScope = scope
         meetingId = id
         partialFile = output
-        startedElapsedMs = SystemClock.elapsedRealtime()
+        // Set once the microphone has actually started; a capture that never started has no duration.
+        startedElapsedMs = null
         sharedLease = assignedLease
         leaseGuard = suppliedGuard
         if (assignedLease != null) {
@@ -162,11 +166,15 @@ class MeetingRecordingService : Service() {
                 return false
             }
             media.start()
-            if (!store.markRecordingStarted(id)) {
+            val captureStartedElapsedMs = SystemClock.elapsedRealtime()
+            val captureStartedAtMs = System.currentTimeMillis()
+            if (!store.markRecordingStarted(id, captureStartedAtMs, captureStartedElapsedMs)) {
                 finishRecording("The recording could not be confirmed in local storage.")
                 return false
             }
+            startedElapsedMs = captureStartedElapsedMs
             registerSilenceMonitor(media)
+            screenReminder = runCatching { RecordingScreenReminder(this, handler).also { it.start() } }.getOrNull()
             if (assignedLease != null) {
                 sharedLeaseRenewal = sharedLeaseClient?.renewWhileRecording(
                     assignedLease, sharedLeaseDeadline!!,
@@ -179,6 +187,8 @@ class MeetingRecordingService : Service() {
             if (leaseGuard != null) handler.postDelayed(leasePoll, LEASE_POLL_MS)
             return true
         } catch (failure: Exception) {
+            screenReminder?.stop()
+            screenReminder = null
             releaseRecorder()
             store.failRecording(id, "Could not start microphone recording: ${failure.javaClass.simpleName}.")
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -215,7 +225,9 @@ class MeetingRecordingService : Service() {
     private fun finishRecording(interruption: String?) {
         val id = meetingId ?: run { stopSelf(); return }
         val output = partialFile
-        val elapsed = (SystemClock.elapsedRealtime() - startedElapsedMs).coerceAtLeast(0)
+        val elapsed = startedElapsedMs?.let { (SystemClock.elapsedRealtime() - it).coerceAtLeast(0) } ?: 0L
+        screenReminder?.stop()
+        screenReminder = null
         handler.removeCallbacks(leasePoll)
         sharedLeaseRenewal?.close()
         sharedLeaseRenewal = null
@@ -258,6 +270,7 @@ class MeetingRecordingService : Service() {
         }
         meetingId = null
         partialFile = null
+        startedElapsedMs = null
         sharedLease = null
         sharedLeaseClient = null
         sharedLeaseDeadline = null
@@ -284,27 +297,35 @@ class MeetingRecordingService : Service() {
     }
 
     private fun notification(title: String): Notification {
+        val targetMeetingId = requireNotNull(meetingId) { "Cannot publish a recording notification without its meeting ID." }
+        // A per-recording Stop intent, so a stale notification can never stop a later recording.
         val stopIntent = Intent(this, MeetingRecordingService::class.java).setAction(ACTION_STOP)
-            .putExtra(EXTRA_MEETING_ID, meetingId)
-        val stopAction = PendingIntent.getService(this, NOTIFICATION_ID, stopIntent,
+            .setData(Uri.parse("halle://recording/stop/${Uri.encode(targetMeetingId)}"))
+            .putExtra(EXTRA_MEETING_ID, targetMeetingId)
+        val stopAction = PendingIntent.getService(this, targetMeetingId.hashCode(), stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("Recording · $title")
-            .setContentText("Tap Stop to finish and save this recording on this phone.")
+            .setContentTitle("Grabando · $title")
+            .setContentText("La grabación está activa en este teléfono. Toca Terminar grabación para detenerla.")
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setColor(Color.RED)
+            .setColorized(true)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopAction)
+            .addAction(android.R.drawable.ic_media_pause, "Terminar grabación", stopAction)
             .build()
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Meeting recording", NotificationManager.IMPORTANCE_LOW)
-                    .apply { description = "Shows when Hall-e is recording audio on this device." },
+                NotificationChannel(CHANNEL_ID, "Grabación de reuniones", NotificationManager.IMPORTANCE_LOW)
+                    .apply {
+                        description = "Indica cuándo Hall-e está grabando audio en este teléfono."
+                        setShowBadge(true)
+                    },
             )
         }
     }
@@ -314,6 +335,8 @@ class MeetingRecordingService : Service() {
             finishRecording("Android stopped the recording service. The saved audio may be incomplete.")
         } else {
             handler.removeCallbacks(leasePoll)
+            screenReminder?.stop()
+            screenReminder = null
             unregisterSilenceMonitor()
             releaseRecorder()
         }
@@ -380,3 +403,7 @@ class MeetingRecordingService : Service() {
         }
     }
 }
+
+/** A notification Stop only stops the recording it was posted for; a missing or stale ID stops nothing. */
+internal fun notificationStopTargetsActiveRecording(requestedId: String?, activeId: String?): Boolean =
+    !requestedId.isNullOrBlank() && requestedId == activeId

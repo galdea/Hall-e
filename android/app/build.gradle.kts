@@ -37,8 +37,9 @@ android {
         manifestPlaceholders["exportPairing"] = (!staging).toString()
         minSdk = 31
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.0"
+        // Above Órbita's 0.3.0/code 4 preview so this build installs over it without clearing app data.
+        versionCode = 6
+        versionName = "0.4.0"
         buildConfigField("boolean", "STAGING", staging.toString())
         buildConfigField("String", "ACCOUNT_ORIGIN", "\"$packagedAccountOrigin\"")
         testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
@@ -109,6 +110,8 @@ if (staging) {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
+    // QR scanning for pairing invitations (Órbita "Escanear QR del Mac").
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

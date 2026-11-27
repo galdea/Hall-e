@@ -72,6 +72,30 @@ class PhoneRecordingPolicyTest {
         assertTrue(accountDeleteMessage(queued = false, uploaded = true).contains("uploaded to your account is not affected"))
     }
 
+    @Test fun orbitaSpanishDeleteConfirmationStatesTheSameFacts() {
+        assertEquals("¿Eliminar esta reunión?", personalDeleteTitleEs(DRAFT))
+        for (status in listOf(RECORDED, INTERRUPTED, FAILED)) assertEquals("¿Eliminar esta grabación?", personalDeleteTitleEs(status))
+        val local = personalDeleteMessageEs("Revisión", hasAudio = true, sharedSession = false)
+        assertTrue(local.startsWith("Se eliminarán de este teléfono «Revisión» y su archivo de audio. No se puede deshacer."))
+        assertTrue(local.contains("otras apps no se modifican"))
+        assertFalse(local.contains("vinculados"))
+        assertFalse(local.contains("Mac"))
+        val draft = personalDeleteMessageEs("Planificación", hasAudio = false, sharedSession = true)
+        assertEquals("Se eliminará «Planificación» de este teléfono. No se puede deshacer. " +
+            "La reunión compartida sigue en tus dispositivos vinculados.", draft)
+        val pairedLocal = personalDeleteMessageEs("Revisión", hasAudio = true, sharedSession = true)
+        assertTrue(pairedLocal.endsWith("nunca recibieron este audio."))
+        assertEquals("Reunión eliminada de este teléfono.", personalDeletedMessageEs(DRAFT, deleted = true))
+        assertEquals("Grabación eliminada de este teléfono.", personalDeletedMessageEs(INTERRUPTED, deleted = true))
+        assertTrue(personalDeletedMessageEs(RECORDED, deleted = false).startsWith("No se pudo eliminar"))
+    }
+
+    @Test fun microphoneSettingsCopyIsAvailableInBothLanguages() {
+        assertEquals("Open settings", MicrophoneSettingsCopy.ENGLISH.open)
+        assertEquals("Abrir ajustes", MicrophoneSettingsCopy.SPANISH.open)
+        assertTrue(MicrophoneSettingsCopy.SPANISH.message.contains("Permisos › Micrófono"))
+    }
+
     @Test fun settingsDialogOnlyWhenAndroidWillNotAskAgain() {
         // Second denial ("don't ask again"), or a request Android answered without a dialog.
         assertTrue(shouldOfferPermissionSettings(granted = false, askedBefore = true, rationaleAfterDenial = false))

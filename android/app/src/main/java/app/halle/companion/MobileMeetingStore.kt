@@ -27,6 +27,8 @@ data class MobileMeeting(
     val recordingStartedElapsedMs: Long?,
     val durationMs: Long,
     val error: String?,
+    /** Órbita trash: hidden from lists and reminders, files kept, restorable. */
+    val trashedAtMs: Long? = null,
 )
 
 /** Local-only meeting metadata and app-private recording files. */
@@ -36,7 +38,36 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
     private var writableMetadata = true
     var loadError: String? = null
         private set
-    fun list(): List<MobileMeeting> = synchronized(lock) { readAll().map { it.meeting } }
+    fun list(includeTrashed: Boolean = false): List<MobileMeeting> = synchronized(lock) {
+        readAll().map { it.meeting }.filter { includeTrashed || it.trashedAtMs == null }
+    }
+
+    /** Hides a meeting and keeps its files. A recording in progress must be stopped first. */
+    fun trash(id: String): Boolean = synchronized(lock) {
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.id == id }
+        if (index < 0) return@synchronized false
+        val stored = values[index]
+        if (isRecordingInProgress(stored.meeting.status)) return@synchronized false
+        if (stored.meeting.trashedAtMs != null) return@synchronized true
+        values[index] = stored.copy(meeting = stored.meeting.copy(trashedAtMs = System.currentTimeMillis()))
+        writeAll(values)
+    }
+
+    fun restore(id: String): Boolean = synchronized(lock) {
+        val values = readAll().toMutableList()
+        val index = values.indexOfFirst { it.meeting.id == id }
+        if (index < 0) return@synchronized false
+        if (values[index].meeting.trashedAtMs == null) return@synchronized true
+        values[index] = values[index].copy(meeting = values[index].meeting.copy(trashedAtMs = null))
+        writeAll(values)
+    }
+
+    fun updateTitle(id: String, title: String): Boolean {
+        val cleanTitle = title.trim().take(MAX_TITLE_LENGTH)
+        if (cleanTitle.isEmpty()) return false
+        return update(id) { it.copy(meeting = it.meeting.copy(title = cleanTitle)) }
+    }
 
     fun createDraft(
         title: String,
@@ -175,38 +206,56 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         }
     }
 
-    internal fun claimRecording(id: String): File? = synchronized(lock) {
-        val values = readAll().toMutableList()
-        val index = values.indexOfFirst { it.meeting.id == id }
-        if (index < 0) return@synchronized null
-        val current = values[index]
-        if (current.meeting.status != MobileMeetingStatus.DRAFT) return@synchronized null
-        if (values.any {
-                it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING
-            }) return@synchronized null
-        val directory = recordingDirectory()
-        if (!directory.exists() && !directory.mkdirs()) return@synchronized null
-        val partialName = "$id.m4a.partial"
-        val partial = File(directory, partialName)
-        if (partial.exists() && !partial.delete()) return@synchronized null
-        values[index] = current.copy(meeting = current.meeting.copy(
-            status = MobileMeetingStatus.STARTING,
-            audioFileName = partialName,
-            recordingStartedAtMs = System.currentTimeMillis(),
-            recordingStartedElapsedMs = SystemClock.elapsedRealtime(),
-            durationMs = 0,
-            error = null,
-        ), ownerToken = processToken)
-        if (!writeAll(values)) {
-            partial.delete()
-            return@synchronized null
+    internal fun claimRecording(id: String): File? {
+        // Holds off a QR workspace replacement while this recording is being claimed.
+        val sessionClient = SharedSessionClient(context)
+        if (!sessionClient.beginWorkspaceOperation()) return null
+        try {
+            return synchronized(lock) {
+                val values = readAll().toMutableList()
+                val index = values.indexOfFirst { it.meeting.id == id }
+                if (index < 0) return@synchronized null
+                val current = values[index]
+                if (current.meeting.status != MobileMeetingStatus.DRAFT || current.meeting.trashedAtMs != null) return@synchronized null
+                if (values.any {
+                        it.meeting.status == MobileMeetingStatus.STARTING || it.meeting.status == MobileMeetingStatus.RECORDING
+                    }) return@synchronized null
+                val directory = recordingDirectory()
+                if (!directory.exists() && !directory.mkdirs()) return@synchronized null
+                val partialName = "$id.m4a.partial"
+                val partial = File(directory, partialName)
+                if (partial.exists() && !partial.delete()) return@synchronized null
+                values[index] = current.copy(meeting = current.meeting.copy(
+                    status = MobileMeetingStatus.STARTING,
+                    audioFileName = partialName,
+                    recordingStartedAtMs = System.currentTimeMillis(),
+                    recordingStartedElapsedMs = SystemClock.elapsedRealtime(),
+                    durationMs = 0,
+                    error = null,
+                ), ownerToken = processToken)
+                if (!writeAll(values)) {
+                    partial.delete()
+                    return@synchronized null
+                }
+                partial
+            }
+        } finally {
+            sessionClient.finishWorkspaceOperation()
         }
-        partial
     }
 
-    internal fun markRecordingStarted(id: String): Boolean = update(id) { stored ->
+    /** Records when the microphone actually started, so the displayed timer matches the captured audio. */
+    internal fun markRecordingStarted(
+        id: String,
+        captureStartedAtMs: Long = System.currentTimeMillis(),
+        captureStartedElapsedMs: Long = SystemClock.elapsedRealtime(),
+    ): Boolean = update(id) { stored ->
         if (stored.meeting.status != MobileMeetingStatus.STARTING || stored.ownerToken != processToken) stored
-        else stored.copy(meeting = stored.meeting.copy(status = MobileMeetingStatus.RECORDING))
+        else stored.copy(meeting = stored.meeting.copy(
+            status = MobileMeetingStatus.RECORDING,
+            recordingStartedAtMs = captureStartedAtMs,
+            recordingStartedElapsedMs = captureStartedElapsedMs,
+        ))
     }
 
     internal fun completeRecording(id: String, partial: File, durationMs: Long): Boolean = synchronized(lock) {
@@ -383,7 +432,8 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
                         recordingStartedAtMs = json.optNullableLong("recordingStartedAtMs"),
                         recordingStartedElapsedMs = json.optNullableLong("recordingStartedElapsedMs"),
                         durationMs = json.optLong("durationMs").coerceAtLeast(0), error = json.optNullableString("error"),
-                    ), json.optNullableString("ownerToken")))
+                        trashedAtMs = json.optNullableLong("trashedAtMs"),
+                    ), json.optNullableString("ownerToken"), preservedMeetingFields(json)))
                 }
             }
         }.getOrElse { markMetadataUnreadable(); emptyList() }
@@ -399,7 +449,7 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         val array = JSONArray()
         values.forEach { stored ->
             val m = stored.meeting
-            array.put(JSONObject().apply {
+            array.put(JSONObject(stored.preserved.toString()).apply {
                 put("id", m.id); put("title", m.title); putNullable("projectName", m.projectName)
                 put("createdAtMs", m.createdAtMs); putNullable("scheduledStartAtMs", m.scheduledStartAtMs)
                 putNullable("scheduledEndAtMs", m.scheduledEndAtMs); putNullable("sourceEventKey", m.sourceEventKey)
@@ -408,6 +458,7 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
                 putNullable("recordingStartedAtMs", m.recordingStartedAtMs)
                 putNullable("recordingStartedElapsedMs", m.recordingStartedElapsedMs)
                 put("durationMs", m.durationMs); putNullable("error", m.error)
+                putNullable("trashedAtMs", m.trashedAtMs)
                 putNullable("ownerToken", stored.ownerToken)
             })
         }
@@ -415,7 +466,10 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
             .putString(KEY_MEETINGS, array.toString()).commit()
     }
 
-    private data class StoredMeeting(val meeting: MobileMeeting, val ownerToken: String?)
+    // Fields written by other builds (for example Órbita's phone-to-Mac transfer state) are kept verbatim,
+    // so installing this build over one of them never drops data it does not understand.
+    private data class StoredMeeting(val meeting: MobileMeeting, val ownerToken: String?, val preserved: JSONObject = JSONObject())
+
 
     private fun JSONObject.optNullableString(key: String): String? = if (isNull(key) || !has(key)) null else optString(key).takeIf(String::isNotBlank)
     private fun JSONObject.optNullableLong(key: String): Long? = if (isNull(key) || !has(key)) null else optLong(key)
@@ -466,4 +520,15 @@ internal fun recoverRecording(meeting: MobileMeeting, owner: String?, currentPro
     return meeting.copy(status = MobileMeetingStatus.INTERRUPTED,
         audioFileName = if (finalized) finalName else meeting.audioFileName,
         error = "Recording was interrupted. The audio file may be incomplete.")
+}
+
+private val KNOWN_MEETING_FIELDS = setOf(
+    "id", "title", "projectName", "createdAtMs", "scheduledStartAtMs", "scheduledEndAtMs", "sourceEventKey",
+    "sharedSessionId", "status", "audioFileName", "recordingStartedAtMs", "recordingStartedElapsedMs", "durationMs",
+    "error", "trashedAtMs", "ownerToken",
+)
+
+/** The stored fields this build does not interpret, kept verbatim so an upgrade never drops another build's data. */
+internal fun preservedMeetingFields(json: JSONObject): JSONObject = JSONObject().also { kept ->
+    json.keys().forEach { key -> if (key !in KNOWN_MEETING_FIELDS) kept.put(key, json.get(key)) }
 }
