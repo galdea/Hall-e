@@ -21,8 +21,8 @@ class PhoneRecordingPolicyTest {
         // Stop first: nothing, and certainly not Delete, while the recorder may still be writing.
         assertEquals(emptyList<PhoneRecordingAction>(), personalRecordingActions(STARTING, playable = false, partialFile = false))
         assertEquals(emptyList<PhoneRecordingAction>(), personalRecordingActions(RECORDING, playable = true, partialFile = true))
-        // Drafts keep Record / Save without recording; they hold no audio to delete.
-        assertEquals(emptyList<PhoneRecordingAction>(), personalRecordingActions(DRAFT, playable = false, partialFile = false))
+        // A meeting saved without recording can be deleted too, so a mistaken meeting never stays stuck on the phone.
+        assertEquals(listOf(DELETE), personalRecordingActions(DRAFT, playable = false, partialFile = false))
     }
 
     @Test fun interruptedAccountRecordingIsNeverADeadEnd() {
@@ -63,6 +63,9 @@ class PhoneRecordingPolicyTest {
         val noAudio = personalDeleteMessage("Failed take", hasAudio = false, sharedSession = false)
         assertFalse(noAudio.contains("audio file"))
         assertFalse(noAudio.contains("other apps"))
+        val pairedDraft = personalDeleteMessage("Planning", hasAudio = false, sharedSession = true)
+        assertTrue(pairedDraft.endsWith("The shared meeting stays on your paired devices."))
+        assertFalse(pairedDraft.contains("audio"))
 
         assertFalse(accountDeleteMessage(queued = false, uploaded = false).contains("upload"))
         assertTrue(accountDeleteMessage(queued = true, uploaded = false).contains("pending upload is cancelled"))

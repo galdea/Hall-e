@@ -22,15 +22,15 @@ internal fun canDeleteRecording(status: MobileMeetingStatus) = !isRecordingInPro
 
 /**
  * Home-screen library ("Meetings on this phone"). [playable] means [MobileMeetingStore.playbackUri] resolved a finalized
- * `.m4a`; [partialFile] means only the raw `.m4a.partial` of an interrupted recorder exists. Drafts have no recording
- * and keep their Record / Save actions, so they are not offered Delete here.
+ * `.m4a`; [partialFile] means only the raw `.m4a.partial` of an interrupted recorder exists. A draft (saved without
+ * recording) keeps its Record action and can also be deleted, so a mistaken meeting is never stuck on the phone.
  */
 internal fun personalRecordingActions(status: MobileMeetingStatus, playable: Boolean, partialFile: Boolean): List<PhoneRecordingAction> =
     buildList {
         val finished = status == MobileMeetingStatus.RECORDED || status == MobileMeetingStatus.INTERRUPTED
         if (finished && playable) { add(PhoneRecordingAction.PLAY); add(PhoneRecordingAction.SHARE_AUDIO) }
         if (status == MobileMeetingStatus.INTERRUPTED && partialFile) add(PhoneRecordingAction.SHARE_PARTIAL_FILE)
-        if (finished || status == MobileMeetingStatus.FAILED) add(PhoneRecordingAction.DELETE)
+        if (finished || status == MobileMeetingStatus.FAILED || status == MobileMeetingStatus.DRAFT) add(PhoneRecordingAction.DELETE)
     }
 
 /**
@@ -53,12 +53,13 @@ internal fun accountRecordingActions(
     if (status == MobileMeetingStatus.INTERRUPTED || status == MobileMeetingStatus.FAILED) add(PhoneRecordingAction.DELETE)
 }
 
-/** Confirmation text for deleting a recording from the home-screen library. */
+/** Confirmation text for deleting a recording, or a meeting saved without one, from the home-screen library. */
 internal fun personalDeleteMessage(title: String, hasAudio: Boolean, sharedSession: Boolean): String = buildString {
     append(if (hasAudio) "“$title” and its audio file will be removed from this phone. This cannot be undone."
         else "“$title” will be removed from this phone. This cannot be undone.")
     if (hasAudio) append(" Copies you already shared with other apps are not affected.")
-    if (sharedSession) append(" The shared meeting stays on your paired devices; they never received this audio.")
+    if (sharedSession) append(if (hasAudio) " The shared meeting stays on your paired devices; they never received this audio."
+        else " The shared meeting stays on your paired devices.")
 }
 
 /** Confirmation text for deleting an interrupted or failed phone recording of an account meeting. */

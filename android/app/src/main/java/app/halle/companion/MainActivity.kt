@@ -610,12 +610,13 @@ class MainActivity : Activity() {
 
     private fun confirmDeleteRecording(meeting: MobileMeeting, hasAudio: Boolean) {
         android.app.AlertDialog.Builder(this)
-            .setTitle("Delete this recording?")
+            .setTitle(if (meeting.status == MobileMeetingStatus.DRAFT) "Delete this meeting?" else "Delete this recording?")
             .setMessage(personalDeleteMessage(meeting.title, hasAudio, sharedSession = meeting.sharedSessionId != null))
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 if (playingMeetingId == meeting.id) { mediaPlayer?.release(); mediaPlayer = null; playingMeetingId = null }
-                toast(if (meetingStore.deleteRecording(meeting.id)) "Recording deleted from this phone."
+                val noun = if (meeting.status == MobileMeetingStatus.DRAFT) "Meeting" else "Recording"
+                toast(if (meetingStore.deleteRecording(meeting.id)) "$noun deleted from this phone."
                     else "Could not delete the recording. Stop it first and check available storage.")
                 render()
             }
