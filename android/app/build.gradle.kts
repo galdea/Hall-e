@@ -38,7 +38,7 @@ android {
         minSdk = 31
         targetSdk = 36
         // Above Órbita's 0.3.0/code 4 preview so this build installs over it without clearing app data.
-        versionCode = 5
+        versionCode = 6
         versionName = "0.4.0"
         buildConfigField("boolean", "STAGING", staging.toString())
         buildConfigField("String", "ACCOUNT_ORIGIN", "\"$packagedAccountOrigin\"")

@@ -433,7 +433,7 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
                         recordingStartedElapsedMs = json.optNullableLong("recordingStartedElapsedMs"),
                         durationMs = json.optLong("durationMs").coerceAtLeast(0), error = json.optNullableString("error"),
                         trashedAtMs = json.optNullableLong("trashedAtMs"),
-                    ), json.optNullableString("ownerToken")))
+                    ), json.optNullableString("ownerToken"), preservedMeetingFields(json)))
                 }
             }
         }.getOrElse { markMetadataUnreadable(); emptyList() }
@@ -449,7 +449,7 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
         val array = JSONArray()
         values.forEach { stored ->
             val m = stored.meeting
-            array.put(JSONObject().apply {
+            array.put(JSONObject(stored.preserved.toString()).apply {
                 put("id", m.id); put("title", m.title); putNullable("projectName", m.projectName)
                 put("createdAtMs", m.createdAtMs); putNullable("scheduledStartAtMs", m.scheduledStartAtMs)
                 putNullable("scheduledEndAtMs", m.scheduledEndAtMs); putNullable("sourceEventKey", m.sourceEventKey)
@@ -466,7 +466,10 @@ class MobileMeetingStore(private val context: Context, private val accountScope:
             .putString(KEY_MEETINGS, array.toString()).commit()
     }
 
-    private data class StoredMeeting(val meeting: MobileMeeting, val ownerToken: String?)
+    // Fields written by other builds (for example Órbita's phone-to-Mac transfer state) are kept verbatim,
+    // so installing this build over one of them never drops data it does not understand.
+    private data class StoredMeeting(val meeting: MobileMeeting, val ownerToken: String?, val preserved: JSONObject = JSONObject())
+
 
     private fun JSONObject.optNullableString(key: String): String? = if (isNull(key) || !has(key)) null else optString(key).takeIf(String::isNotBlank)
     private fun JSONObject.optNullableLong(key: String): Long? = if (isNull(key) || !has(key)) null else optLong(key)
@@ -517,4 +520,15 @@ internal fun recoverRecording(meeting: MobileMeeting, owner: String?, currentPro
     return meeting.copy(status = MobileMeetingStatus.INTERRUPTED,
         audioFileName = if (finalized) finalName else meeting.audioFileName,
         error = "Recording was interrupted. The audio file may be incomplete.")
+}
+
+private val KNOWN_MEETING_FIELDS = setOf(
+    "id", "title", "projectName", "createdAtMs", "scheduledStartAtMs", "scheduledEndAtMs", "sourceEventKey",
+    "sharedSessionId", "status", "audioFileName", "recordingStartedAtMs", "recordingStartedElapsedMs", "durationMs",
+    "error", "trashedAtMs", "ownerToken",
+)
+
+/** The stored fields this build does not interpret, kept verbatim so an upgrade never drops another build's data. */
+internal fun preservedMeetingFields(json: JSONObject): JSONObject = JSONObject().also { kept ->
+    json.keys().forEach { key -> if (key !in KNOWN_MEETING_FIELDS) kept.put(key, json.get(key)) }
 }
